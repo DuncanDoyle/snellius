@@ -104,6 +104,7 @@ func (s *Store) refresh(sess *session, refreshToken string, done chan struct{}) 
 		sess.refreshToken = res.RefreshToken
 	}
 	if !now.Before(freshUntil(sess)) {
+		s.log.Warn("session refresh returned an expired ID token; the session ends", "session", sess.auditID)
 		s.end(context.Background(), sess, reasonRefresh)
 	}
 }

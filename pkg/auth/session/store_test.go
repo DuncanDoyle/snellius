@@ -1,9 +1,11 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -88,13 +90,23 @@ type fixture struct {
 	metrics    *obs.Registry
 	store      *Store
 	endSession string
+	logs       *syncBuf
 }
+
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
+func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
 
 func newFixture(t *testing.T, mod func(*Options)) *fixture {
 	t.Helper()
 	f := &fixture{t: t, clk: clocktesting.NewFakeClock(time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)), audit: &recordingAuditor{}, metrics: obs.NewRegistry()}
 	f.refresh = &fakeRefresher{result: func() oidc.Result { return f.result("oidc:ops") }}
-	o := Options{Clock: f.clk, Refresher: f.refresh, Audit: f.audit, Metrics: f.metrics, CookieSecure: true, ClientID: "snellius",
+	f.logs = &syncBuf{}
+	o := Options{Logger: slog.New(slog.NewTextHandler(f.logs, nil)), Clock: f.clk, Refresher: f.refresh, Audit: f.audit, Metrics: f.metrics, CookieSecure: true, ClientID: "snellius",
 		RedirectURL: testRedirect, EndSession: func() string { return f.endSession }}
 	if mod != nil {
 		mod(&o)

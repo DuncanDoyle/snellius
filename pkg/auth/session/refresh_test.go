@@ -99,6 +99,9 @@ func TestRefreshFailureEndsSession(t *testing.T) {
 			if g := f.gauge(); g != "0" {
 				t.Fatalf("gauge = %s", g)
 			}
+			if logs := f.logs.String(); !strings.Contains(logs, "the session ends") || strings.Contains(logs, testRefresh) || strings.Contains(logs, c.Value) {
+				t.Fatalf("logs = %s", logs)
+			}
 		})
 	}
 }
