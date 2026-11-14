@@ -133,14 +133,98 @@ Install surface (stated, per the team rule):
 
 ## Sub-phase 7.2 — Identity and sessions (data still gated)
 
-Tasks (briefed at 7.2 start):
-1. `pkg/auth/oidc`: discovery with issuer match and HTTPS endpoints; login transaction store (one-use, 10 min); PKCE S256; callback validation order (design §4.1); TokenReview with `audiences`; tests with an `httptest` issuer and a fake TokenReview server.
-2. `pkg/auth/session`: in-memory store with idle/absolute expiry, global bound 5,000, sweeper; refresh policy (design §4.4) with single-flight and logout-wins; cookie attributes; `POST /auth/logout` with `Origin` check; RP-initiated logout.
-3. Middleware: secure mode requires a session for `/api/`; `401 {"login": …}`; audit security records (login, logout, failure, expiry); `audit.RequestIDTrusting` with `--trusted-proxy-cidrs`.
-4. Configuration and readiness: OIDC flags validated at startup; discovery retried; a "sign-in configured" state feeds readiness and the UI's "Sign-in is not configured" page.
-5. Chart: `auth.oidc.*`, client secret file mount, `auth.session.*`, `auth.trustedProxyCIDRs`; secure mode fails rendering without `issuerURL`, `clientID` or `redirectURL`; ClusterRole gains `create tokenreviews` in secure mode.
-5. Web: 401 redirect, `retryEveryPoll` stops on 401, polling pauses on hidden tabs, sign-in states, user menu with Who am I and Sign out.
-6. `test/oidc-issuer`: test-only issuer (discovery, JWKS, authorize with a user picker, token with refresh), standard library crypto; kind API server structured authentication configuration; e2e sign-in with two users.
+The data gate from 7.1 stays closed. 7.2 adds identity: who is calling, proven by the cluster. New routes live under `/auth/` (outside `/api/`, so outside the gate).
+
+### Task 9: OIDC configuration and discovery
+
+**Files:** new `pkg/auth/oidc/config.go`, `discovery.go`; `pkg/cli/flags.go`, `pkg/app/app.go`; tests `pkg/auth/oidc/discovery_test.go`, `pkg/cli/flags_test.go`.
+
+**Interfaces:**
+- Flags (secure mode only; ignored with a warning in local mode): `--oidc-issuer-url`, `--oidc-client-id`, `--oidc-client-secret-file` (optional; public client when empty), `--oidc-redirect-url`, `--oidc-scopes` (default `openid,profile,email,groups,offline_access`).
+- `oidc.Config` and `func (c Config) Validate() error`: issuer and redirect URLs must be absolute `https` (the redirect may be `http://localhost…` or `http://127.0.0.1…` for testing); client ID required.
+- `oidc.Provider` with `Discover(ctx, *http.Client) (*Endpoints, error)`: reads `{issuer}/.well-known/openid-configuration`; its `issuer` must equal the configured issuer exactly; `authorization_endpoint`, `token_endpoint` must be `https` (same `http`-loopback exception for tests); `end_session_endpoint` optional. A `Provider.Ready()` state: discovered or not, with the last error; retried with backoff (1 s doubling to 1 min) until it succeeds.
+- Readiness (the 7.1 readiness func) in secure mode also requires `Validate()` passing and discovery done; the reason ("sign-in not configured: …") goes to the log only.
+- `--oidc-ca-file` (optional): a PEM bundle added to the system roots for discovery and token calls, for issuers behind a private CA (plan-codex 7.2 #4).
+- Public auth status, outside `/api/` and the gate (plan-codex 7.2 #3): `GET /auth/status` → `{"mode":"local"|"secure","signIn":"ready"|"not-configured"|"unavailable"}`. No reasons, URLs or errors in the body.
+
+- [ ] Tests: `TestValidateConfig` (table), `TestDiscoveryIssuerMismatch`, `TestDiscoveryRejectsHTTPEndpoints`, `TestDiscoveryRetries` (fails twice then succeeds, injected clock), `TestSecureModeNotReadyWithoutOIDC`.
+
+### Task 10: Sign-in flow and TokenReview
+
+**Files:** new `pkg/auth/oidc/login.go`, `transaction.go`, `tokenreview.go`; tests alongside.
+
+**Interfaces:**
+- `oidc.Reviewer` interface: `Review(ctx, idToken string) (Identity, error)`; production implementation creates an `authentication.k8s.io/v1` `TokenReview` with `spec.audiences: [clientID]` through client-go and returns `Identity{Username, UID, Groups, Extra}` only when `status.authenticated` is true and `status.audiences` contains the client ID.
+- Transaction store: one-use records keyed by a random 128-bit ID in cookie `snellius_login` (HttpOnly, SameSite=Lax, Secure per `--cookie-secure`, Path `/auth/`, Max-Age 600); holds state, nonce, PKCE S256 verifier, return path; at most 10,000 open transactions (oldest evicted).
+- `GET /auth/login?return=<path>`: return path must be a same-origin relative path starting with `/` and not `//`; else `/`. Redirects to the authorization endpoint with `response_type=code`, `client_id`, `redirect_uri`, `scope`, `state`, `nonce`, `code_challenge`, `code_challenge_method=S256`.
+- `GET /auth/callback`: the order of design §4.1 exactly (transaction, state, code exchange with verifier, ID-token claims `iss`/`aud`/`azp`/`exp`/`iat` ±2 min/`nonce` decoded without trust, TokenReview, return path). Any failure: an error page state (no session), audit `security` record `login` with `outcome: failure` and a reason code, never the token.
+- The ID token is never logged or sent to the browser.
+- A failed callback redirects to `/signin-failed?reason=<code>`, codes `audience` (TokenReview audiences), `unauthenticated` (TokenReview false), `invalid` (anything else). No other detail reaches the browser.
+
+- [ ] Tests (with an `httptest` issuer and a fake `Reviewer`): happy path; replayed callback; wrong state; expired transaction; wrong `aud`; `azp` mismatch with several audiences; expired token; wrong nonce; TokenReview `authenticated: false`; TokenReview audiences missing the client ID; open-redirect return paths (`//evil`, `https://evil`, `/\evil`); the redirect reason codes.
+- [ ] The production `Reviewer` adapter is tested against a fake API server (`httptest` serving `/apis/authentication.k8s.io/v1/tokenreviews` behind a client-go config): the request carries `spec.audiences: [clientID]`; `authenticated: false`; missing and wrong response audiences; transport failure (plan-codex 7.2 #7).
+
+### Task 11: Sessions, refresh and logout
+
+**Files:** new `pkg/auth/session/store.go`, `refresh.go`, `middleware.go`; `pkg/app/mode.go`; tests alongside.
+
+**Interfaces:**
+- `session.Store`: 256-bit IDs; cookie `snellius_session` (HttpOnly, SameSite=Lax, Secure per `--cookie-secure`, Path `/`); idle 30 min (`--session-idle`), absolute 8 h (`--session-absolute`); at most 5,000 sessions (oldest idle evicted, audited); a sweeper every minute; an opaque audit session ID per session, distinct from the cookie value.
+- Freshness per design §4.4: fresh until min(ID token `exp`, last TokenReview + 15 min); refresh ahead of staleness, single-flight per session; new ID token must keep `iss` and `sub`; then TokenReview replaces groups; failure ends the session; logout wins over an in-flight refresh. A request with a stale identity gets `401`.
+- Middleware in secure mode, in front of the 7.1 gate: `/api/` without a valid session → `401 {"error":"sign-in-required","login":"/auth/login?return=<path>"}`; a session that ended (idle, absolute, refresh failure) → `401 {"error":"session-ended","login":…}` once, then `sign-in-required`; with a session the request carries the identity in its context (for 7.3) and still hits the gate's 503.
+- `GET /auth/me` → `{username, groups}` of the session (not cluster data); `401` without a session.
+- `POST /auth/logout`: requires an `Origin` header equal to the origin of the configured redirect URL — the public origin, which stays correct behind TLS termination (plan-codex 7.2 #1); deletes the session; responds `{"next": url}` with the IdP's `end_session_endpoint` when discovered, using `client_id` and `post_logout_redirect_uri` (the app root) and **no** `id_token_hint`, so no token reaches the browser (plan-codex 7.2 #2); else `/`. The docs say to register the post-logout redirect URI at the IdP.
+- Audit `security` records: login success, logout, session expired (idle, absolute, refresh failure), eviction.
+- Gauge `snellius_sessions_active` on the 7.1 registry, updated on create, logout, expiry and eviction (plan-codex 7.2 #6).
+- `audit.RequestIDTrusting(cidrs, next)` with `--trusted-proxy-cidrs` (also the only source of `X-Forwarded-For` for the audit `source`).
+
+- [ ] Tests (injected clock): idle and absolute expiry; bound and eviction; refresh single-flight under concurrency (`-race`); refresh with a different `sub` ends the session; logout during refresh; `/auth/me`; 401 bodies (`sign-in-required`, `session-ended`); logout `Origin` against an `https` redirect URL with a plain-HTTP upstream request, missing Origin refused; logout URL has no `id_token_hint`; the sessions gauge; trusted request IDs only from configured CIDRs.
+
+### Task 12: Chart for secure mode
+
+**Files:** `deploy/helm/snellius/values.yaml`, `templates/deployment.yaml`, `templates/clusterrole.yaml`, `templates/_helpers.tpl`, `templates/NOTES.txt`; tests `deploy/helm/chart_test.go`.
+
+Install surface:
+- **New values:** `auth.oidc.issuerURL`, `auth.oidc.clientID`, `auth.oidc.redirectURL`, `auth.oidc.scopes` (list), `auth.oidc.clientSecret.existingSecret` and `.key` (mounted read-only at `/etc/snellius/oidc/client-secret`, passed as `--oidc-client-secret-file`), `auth.oidc.ca.existingConfigMap` and `.key` (mounted at `/etc/snellius/oidc/ca.pem`, passed as `--oidc-ca-file`), `auth.session.idle`, `auth.session.absolute`, `auth.session.cookieSecure` (default true), `auth.trustedProxyCIDRs` (list), and `hostAliases` (list, rendered into the pod spec; needed by the e2e and by clusters whose IdP name is not in DNS). All read nil-safe (`dig`), as in 7.1.
+- Secure mode fails rendering without `issuerURL`, `clientID` or `redirectURL`.
+- ClusterRole gains `create` on `authentication.k8s.io/tokenreviews` in secure mode only.
+- NOTES in secure mode: the redirect URL to register at the IdP, and the audience requirement (same client ID as the cluster, or an extra audience in the API server's authentication configuration), with `kubectl auth whoami` as the check.
+
+- [ ] Tests: renders every flag; secret mount only when `existingSecret` is set; required-values failures; tokenreviews rule only in secure mode; `--reuse-values` without the new keys still renders (local mode).
+
+### Task 13: Web sign-in
+
+**Files:** `web/packages/shell/src/api/client.ts`, `api/hooks.ts`, new `auth/` components, `shell/Header.tsx`, `shell/Shell.tsx`, `copy/`; tests alongside and `web/e2e`.
+
+- `request()`: a `401` with `login` redirects the browser to that URL (once; no loop); `retryEveryPoll` stops on 401.
+- SWR polling pauses while `document.visibilityState` is hidden, and scheduled error retries and focus revalidation wait until the tab is visible again (plan-codex 7.2 #8).
+- Pages, each driven by a real backend response (plan-codex 7.2 #3): "Signing in" (redirecting); "Sign-in is not configured" (`/auth/status` `signIn: not-configured`, generic text plus the doc link); "Can't reach the sign-in provider" (`unavailable`); "Your sign-in is not accepted by this cluster" (`/signin-failed?reason=audience|unauthenticated`); "Sign-in failed" (`reason=invalid`); "Your session has ended" (`401 session-ended`).
+- Header in secure mode: the user's name with a menu: "Who am I" (username and groups from `/auth/me`) and "Sign out" (`POST /auth/logout`, then follow the returned URL). Hover and active styles; tooltips; light and dark checked.
+- Every new string through the wording picker (controller supplies the copy).
+
+- [ ] Tests: redirect once on 401; no retry loop; polling pause, including a tab hidden after an error (no retry fires while hidden); menu renders identity; sign-out posts and navigates; each sign-in state page from its backend response.
+
+### Task 14: Test issuer and e2e
+
+**Files:** new `test/oidc-issuer/` (Go, `package main`, standard library only), `test/e2e/setup.sh`, new `test/e2e/kind-auth.yaml` (structured authentication configuration), `test/e2e/signin_test.go`, `web/e2e/signin.spec.ts`, `.github/workflows/e2e.yaml`.
+
+- Issuer: HTTPS with a generated test CA; discovery; JWKS (RSA); `/authorize` with a form to pick a test user; `/token` with code + PKCE verification and refresh tokens; `/end_session`; users and groups from flags.
+- Connectivity, one hostname `oidc.snellius.test` for all three clients (plan-codex 7.2 #4):
+  - **Browser** (Playwright on the runner): the issuer runs on the runner on a fixed port; the hostname resolves to 127.0.0.1 through Chromium's `--host-resolver-rules`.
+  - **API server** (kind control-plane node): the kind config adds an `/etc/hosts` entry on the node mapping the hostname to the docker network gateway, where the runner's issuer port is reachable; the structured authentication configuration carries the test CA.
+  - **Snellius** pod: `hostAliases` maps the hostname to the same gateway address; `auth.oidc.ca` supplies the test CA as a ConfigMap.
+  - The issuer certificate's SAN is `oidc.snellius.test`.
+- e2e: a `SECURE=1` setup variant installs Snellius in secure mode; two users sign in through the real flow; `/auth/me` shows the cluster's view of each (prefixed username and groups); `/api/` still answers `503 secure-mode-incomplete`; logout ends the session.
+- CI (plan-codex 7.2 #5): a new `kind-secure` job in `.github/workflows/e2e.yaml` runs `SECURE=1` setup and only the sign-in tests (`-run TestSignIn`, `signin.spec.ts`); the existing jobs skip them when `SECURE` is unset.
+- If kind cannot run locally, the controller runs the Go-level pieces against unit fakes and CI runs the kind job on the PR.
+
+- [ ] Tests as listed; the issuer has its own unit tests for PKCE and token signing.
+
+### Task 15: Docs for sign-in
+
+- README and chart README: configuring secure mode step by step (numbered), both audience options, `kubectl auth whoami`, client secret Secret, cookie and HTTPS notes, the in-memory session limitation (one replica, restart signs everyone out).
+- `docs/documentation-notes.md` topics.
+- [ ] Commit; 7.2 complete record (controller).
 
 ## Sub-phase 7.3 — Authoriser (data still gated)
 

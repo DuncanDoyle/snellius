@@ -11,7 +11,7 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 - [x] Implementation plan, revised after `reviews/plan-codex.md`
 - [x] Codex review of design + plan, triage; approval delegated (see Status). Open for the user: claim-mapping fallback scope and its JWT dependency (design-codex #11)
 - [x] 7.1 Modes and groundwork — closed 2026-11-14, phases/phase-7/phase-7.1-complete.md (local branch, not pushed)
-- [ ] 7.2 Identity and sessions ← NEXT
+- [ ] 7.2 Identity and sessions ← CURRENT
 - [ ] 7.3 Authoriser
 - [ ] 7.4 Visibility everywhere
 - [ ] 7.5 Two signals (gate opens)
@@ -28,7 +28,9 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 - [ ] phase-7-complete.md written, roadmap updated, tracked items closed
 
 ## Sub-phase
-Sub-phase: none (7.1 closed 2026-11-14; 7.2 next)
+Sub-phase: 7.2 — Identity and sessions (planned)
+Base: b9c742243a95b0b245b380641b75ebe373e8e6f7
+Brief: phases/phase-7/phase-7.2-brief.md
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md
