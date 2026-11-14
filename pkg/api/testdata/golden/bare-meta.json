@@ -1,5 +1,6 @@
 {
   "body": {
+    "authMode": "local",
     "capabilities": [],
     "filters": {
       "delegation": [

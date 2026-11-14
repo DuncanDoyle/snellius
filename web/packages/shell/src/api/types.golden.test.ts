@@ -606,8 +606,10 @@ const metaShape = shape<MetaResponse>(
     filters: "?",
     packs: "?",
     capabilityStates: "?",
+    authMode: "!",
   },
   { kinds: kind, views: groupKind, capabilityStates: capability },
+  { authMode: { local: 1, secure: 1 } },
 );
 const errorShape = shape<ErrorResponse>({ error: "!" });
 

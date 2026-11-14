@@ -162,6 +162,7 @@ it("links only kinds that /api/v1/meta lists", () => {
     synced: true,
     platform: "Kubernetes",
     capabilities: ["scope", "workloads"],
+    authMode: "secure",
     kinds: [
       {
         group: "apps",

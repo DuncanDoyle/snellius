@@ -135,3 +135,15 @@ func TestMetaListsPacks(t *testing.T) {
 		t.Errorf("a server without packs must send an empty list: %s", raw)
 	}
 }
+
+// /meta names the auth mode: local unless the handler was built with WithSecureMode.
+func TestMetaAuthMode(t *testing.T) {
+	_, local, _ := startWith(t, setup{}, world()...)
+	if got := get[MetaResponse](t, local, "/api/v1/meta", 200).AuthMode; got != "local" {
+		t.Errorf("authMode %q, want local", got)
+	}
+	_, secure, _ := startWith(t, setup{opts: []HandlerOption{WithSecureMode(true)}}, world()...)
+	if got := get[MetaResponse](t, secure, "/api/v1/meta", 200).AuthMode; got != "secure" {
+		t.Errorf("authMode %q, want secure", got)
+	}
+}

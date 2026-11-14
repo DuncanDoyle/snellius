@@ -191,6 +191,8 @@ export interface MetaResponse {
   filters?: Record<string, string[]>;
   /** Extension capabilities with their state, by name; omitted when there are none. */
   capabilityStates?: Capability[];
+  /** "local" runs without sign-in; "secure" requires it. */
+  authMode: "local" | "secure";
 }
 /** One extension capability; reason says why it is not on. Only "on" ones are also in MetaResponse.capabilities. */
 export interface Capability {

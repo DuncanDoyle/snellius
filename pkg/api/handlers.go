@@ -176,7 +176,10 @@ func synced(m *engine.Model) bool { return m != nil && m.Snapshot != nil && m.Sn
 func (h *handler) meta(w http.ResponseWriter, _ *http.Request) {
 	m, plat := h.current(), h.src.Platform()
 	resp := MetaResponse{Version: version.Version, Platform: plat.Name, Capabilities: append([]string{}, plat.Capabilities...), Kinds: []kinds.Served{},
-		Packs: append([]string{}, h.packs...)}
+		Packs: append([]string{}, h.packs...), AuthMode: "local"}
+	if h.secure {
+		resp.AuthMode = "secure"
+	}
 	if m != nil {
 		resp.Pinned, resp.Synced = m.Pinned, synced(m)
 		for _, k := range m.Served {

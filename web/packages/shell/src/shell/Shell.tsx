@@ -20,6 +20,7 @@ import {
   ShellExtensionContext,
 } from "./extension";
 import { Header } from "./Header";
+import { ModeBanner } from "./ModeBanner";
 import { ABOUT_PATH } from "./paths";
 import { RootRedirect } from "./RootRedirect";
 import { kubernetesVocabulary } from "./vocabulary";
@@ -126,6 +127,7 @@ export function Shell({ extension = noExtension, pages, stylesOverride }: ShellP
             <Root data-testid="shell-root" stylesOverride={stylesOverride}>
               <DocumentTitle />
               <Header installPaths={installRoutes.map(([path]) => path)} />
+              <ModeBanner />
               <main>
                 <Routes>
                   <Route path="/" element={<RootRedirect ClusterLanding={ClusterLanding} />} />
