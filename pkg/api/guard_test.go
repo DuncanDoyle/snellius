@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -55,5 +56,47 @@ func TestHostGuardCrossOrigin(t *testing.T) {
 	}
 	if got := guardStatus(t, nil, "localhost:8080", "null"); got != http.StatusForbidden {
 		t.Errorf("null origin = %d, want 403", got)
+	}
+}
+
+// Origin must be a well-formed http(s) origin equal to the request's own scheme, host and port.
+func TestHostGuardOriginMatchesRequestOrigin(t *testing.T) {
+	cases := []struct {
+		host, origin string
+		tls          bool
+		want         int
+	}{
+		{"localhost:8080", "", false, http.StatusOK},
+		{"localhost:8080", "http://localhost:8080", false, http.StatusOK},
+		{"localhost:8080", "HTTP://LOCALHOST:8080", false, http.StatusOK},
+		{"localhost:80", "http://localhost", false, http.StatusOK},
+		{"localhost", "http://localhost:80", false, http.StatusOK},
+		{"localhost", "https://localhost", true, http.StatusOK},
+		{"localhost:443", "https://localhost", true, http.StatusOK},
+		{"localhost:8080", "https://localhost:8080", false, http.StatusForbidden},
+		{"localhost:8080", "http://localhost:8080", true, http.StatusForbidden},
+		{"localhost", "https://localhost:80", false, http.StatusForbidden},
+		{"localhost:8080", "//localhost:8080", false, http.StatusForbidden},
+		{"localhost:8080", "ftp://localhost:8080", false, http.StatusForbidden},
+		{"localhost:8080", "null", false, http.StatusForbidden},
+		{"localhost:8080", "http://localhost:8080/path", false, http.StatusForbidden},
+		{"localhost:8080", "http://user@localhost:8080", false, http.StatusForbidden},
+		{"localhost:8080", "http://127.0.0.1:8080", false, http.StatusForbidden},
+	}
+	h := HostGuard(nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	for _, c := range cases {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Host = c.host
+		if c.tls {
+			req.TLS = &tls.ConnectionState{}
+		}
+		if c.origin != "" {
+			req.Header.Set("Origin", c.origin)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != c.want {
+			t.Errorf("Host %q, TLS %v, Origin %q = %d, want %d", c.host, c.tls, c.origin, rec.Code, c.want)
+		}
 	}
 }
