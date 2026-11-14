@@ -11,10 +11,33 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 const uiNamespace = "snellius"
+
+// client bounds every request so a stalled port-forward fails the poll instead of hanging.
+var client = &http.Client{Timeout: 5 * time.Second}
+
+// lockedBuf is a bytes.Buffer safe to read while kubectl still writes to it.
+type lockedBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuf) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuf) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // forward port-forwards target (for example "pod/x") port 8080 to a free local
 // port, waits until /api/v1/meta answers, and returns the base URL.
@@ -30,9 +53,9 @@ func forward(t *testing.T, target string, remote int) string {
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, "kubectl", "--kubeconfig", harnessKubeconfig(t), "-n", uiNamespace,
 		"port-forward", target, fmt.Sprintf("%d:%d", port, remote))
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	cmd.Stdout = &stderr
+	stderr := &lockedBuf{}
+	cmd.Stderr = stderr
+	cmd.Stdout = stderr
 	if err := cmd.Start(); err != nil {
 		cancel()
 		t.Fatal(err)
@@ -48,7 +71,7 @@ func forward(t *testing.T, target string, remote int) string {
 			t.Fatalf("port-forward %s exited: %s", target, stderr.String())
 		default:
 		}
-		resp, err := http.Get(u + "/api/v1/meta")
+		resp, err := client.Get(u + "/api/v1/meta")
 		if err != nil {
 			return fmt.Errorf("%w; kubectl: %s", err, stderr.String())
 		}
@@ -64,7 +87,7 @@ func forward(t *testing.T, target string, remote int) string {
 // meta returns authMode from base's /api/v1/meta.
 func meta(t *testing.T, u string) string {
 	t.Helper()
-	resp, err := http.Get(u + "/api/v1/meta")
+	resp, err := client.Get(u + "/api/v1/meta")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +103,7 @@ func meta(t *testing.T, u string) string {
 
 func uiPod(t *testing.T) string {
 	t.Helper()
-	out, err := kubectlRun(t, "-n", uiNamespace, "get", "pod", "-l", "app.kubernetes.io/name=snellius",
+	out, err := kubectlRun(t, "-n", uiNamespace, "get", "pod", "-l", "app.kubernetes.io/name=snellius", "--field-selector=status.phase=Running",
 		"-o", "jsonpath={.items[0].metadata.name}")
 	if err != nil || len(out) == 0 {
 		t.Fatalf("UI pod: %v %s", err, out)
@@ -134,7 +157,7 @@ func TestLocalModeRejectsForeignHostAndOrigin(t *testing.T) {
 			} else {
 				req.Header.Set(tc.header, tc.value)
 			}
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := client.Do(req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -146,9 +169,9 @@ func TestLocalModeRejectsForeignHostAndOrigin(t *testing.T) {
 	}
 }
 
-// probeScript prints one "R:<url>=<http code>" line per URL, 000 when the connection failed.
+// probeScript prints one "R:<url>=<http code>" line per URL, "000 7" when the connection is refused.
 const probeScript = `for u in "$@"; do
-  c=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "$u"); echo "R:$u=$c"
+  c=$(curl -s -m 5 -o /dev/null -w "%{http_code} %{exitcode}" "$u"); echo "R:$u=$c"
 done`
 
 // TestLocalModeUnreachableInCluster checks from a throwaway pod that the main
@@ -164,7 +187,7 @@ func TestLocalModeUnreachableInCluster(t *testing.T) {
 		"http://" + podIP + ":8081/metrics",
 		"http://" + podIP + ":8081/api/v1/meta",
 	}
-	want := []string{"000", "000", "200", "200", "200", "404"}
+	want := []string{"000 7", "000 7", "200 0", "200 0", "200 0", "404 0"}
 
 	// A detached pod whose logs are read once it succeeds: attaching to a --rm pod loses output.
 	kc := harnessKubeconfig(t)
