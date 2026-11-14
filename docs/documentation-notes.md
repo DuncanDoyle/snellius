@@ -58,3 +58,23 @@ Topics the user-facing documentation must cover when it is written. Each entry s
 - **Large Gateways.** More than 60 routes or backends opens on problems only, with a prompt to narrow.
 - **Keyboard and accessibility.** One tab stop; arrow keys along the paths, Enter for details, Escape to close. The Table button is the accessible equivalent.
 - **Export.** SVG or PNG of the whole drawn graph (filters, focus and collapse applied), with a title line and legend; not the visible viewport.
+
+## Local and secure mode (2026-11-14, Phase 7 sub-phase 7.1)
+
+- **Two modes.** Flag `--auth-mode`, chart value `auth.mode`, default `local`. Explain what each means for who sees what.
+- **Local mode.** No sign-in. Snellius listens on `127.0.0.1:8080` in the pod, so only `kubectl port-forward` reaches it. Whoever can port-forward (needs `pods/portforward` in its namespace) sees everything Snellius reads. A banner on every page says so.
+- **Refusals.** A Host that is not localhost (or in `auth.allowedHosts`) gets 421; a cross-origin request gets 403. Explain both, and that the binary refuses a non-loopback `--listen` or host networking, and the chart refuses `httpRoute.enabled`.
+- **Secure mode.** OIDC sign-in with visibility that follows Kubernetes RBAC, from `v0.8.0`. Until then it answers `/api/` with 503 `secure-mode-incomplete`. Write the setup once the release exists.
+- **Upgrade break.** An install with `httpRoute.enabled` needs `auth.mode: secure`. Say not to upgrade it to a development build.
+
+## Audit stream (2026-11-14, Phase 7 sub-phase 7.1)
+
+- **Format.** JSON lines on stdout, each with `"log":"snellius.audit"`. Document the record fields once more than the startup record exists.
+- **Levels.** `--audit-levels` (chart `audit.levels`), default `security,agent,reads,summaries`. Explain what each level records.
+- **Request ID.** Every response carries `X-Request-Id`; say how to match it to audit lines.
+
+## Probe port and metrics (2026-11-14, Phase 7 sub-phase 7.1)
+
+- **Probe listener.** `--probe-listen`, chart container port `probe` (8081). It serves `/healthz`, `/readyz` and `/metrics`, and the probes use it.
+- **Readiness body.** `/readyz` lists no install IDs; they go to the log.
+- **Metrics.** `snellius_auth_mode{mode}`, `snellius_audit_records_total{level}`, `snellius_audit_dropped_total{level}`. Say how to scrape them and that a NetworkPolicy must allow it.

@@ -4,12 +4,11 @@ Installs Snellius, a read-only UI for Kubernetes Gateway API, built for kgateway
 
 ## Security and trust model
 
-The UI has no login. Whoever reaches it sees everything its ServiceAccount can read, which can be more than their own Kubernetes RBAC allows. Treat access to the UI as cluster-read access.
+Snellius runs in one of two modes, set with `auth.mode` (default `local`).
 
+- **Local mode.** There is no sign-in. The UI and API listen on `127.0.0.1:8080` in the pod, so only `kubectl port-forward` reaches them. Whoever can port-forward to Snellius sees everything its ServiceAccount can read, which can be more than their own Kubernetes RBAC allows. A request with an unknown Host gets 421, a cross-origin request 403. Add Host names with `auth.allowedHosts`. The chart refuses `httpRoute.enabled` in local mode.
+- **Secure mode.** OIDC sign-in with per-user visibility arrives with `v0.8.0`. Until then, `auth.mode: secure` answers every `/api/` request with 503 `secure-mode-incomplete`.
 - The ClusterRole never grants Secrets. That is the UI's whole secret-handling guarantee: no other field is redacted, and Deployments and other objects are shown as stored.
-- The default exposure is a port-forward to the ClusterIP Service.
-- `httpRoute.enabled` is for operators who put authentication and authorisation on the route, for example a kgateway TrafficPolicy with OIDC or external auth that admits only operators.
-- Per-user authorisation is on the roadmap.
 
 ## Install
 
@@ -43,8 +42,11 @@ helm install ui ./deploy/helm/snellius -n snellius --create-namespace \
 | `diagnostics.endpoints` | `true` | Grants `services` and `endpointslices`. No check reads them yet. Off drops both rules. |
 | `diagnostics.controllerLogs` | `false` | Read controller logs for derived signals. Adds a `pods/log` `get` Role in each namespace below. The UI keeps fixed fields and never stores or shows log text. |
 | `diagnostics.controllerLogsNamespaces` | `[kgateway-system]` | Namespaces that get the `pods/log` Role. Only used when `diagnostics.controllerLogs` is on. |
+| `auth.mode` | `local` | `local` or `secure`. Local mode has no sign-in and listens on loopback only. Secure mode serves data only from `v0.8.0`; `httpRoute.enabled` needs it. |
+| `auth.allowedHosts` | `[]` | Host names accepted in local mode besides `localhost`, `127.0.0.1` and `[::1]`. Passed as `--allowed-hosts`. |
+| `audit.levels` | `security,agent,reads,summaries` | Audit levels written to stdout as JSON lines, passed as `--audit-levels`. |
 | `extraArgs` | `[]` | More flags for the UI binary, appended after the chart's own args, e.g. `--set extraArgs={--poll-interval=10m}`. |
-| `httpRoute.enabled` | `false` | Create an HTTPRoute on an existing Gateway. Read [Security and trust model](#security-and-trust-model) first. |
+| `httpRoute.enabled` | `false` | Create an HTTPRoute on an existing Gateway. Needs `auth.mode: secure`. Read [Security and trust model](#security-and-trust-model) first. |
 | `httpRoute.parentRefs` | `[]` | Gateway parentRefs for the route. See [Security and trust model](#security-and-trust-model). |
 | `httpRoute.hostnames` | `[]` | Hostnames for the route. See [Security and trust model](#security-and-trust-model). |
 | `serviceAccount.create` | `true` | Create the ServiceAccount. |
@@ -58,6 +60,10 @@ helm install ui ./deploy/helm/snellius -n snellius --create-namespace \
 | `resources` | 50m CPU / 128Mi requested, 512Mi memory limit | Container resources. The chart sets `GOMEMLIMIT` only from `memoryLimit`: the binary uses 90 % of the pod's memory limit unless `GOMEMLIMIT` is set. |
 | `podSecurityContext` | `runAsNonRoot`, `RuntimeDefault` seccomp | Pod security context. |
 | `securityContext` | no privilege escalation, read-only root FS, all capabilities dropped | Container security context. |
+
+## Probes and metrics
+
+The container has a second port, `probe` (8081), served by `--probe-listen`. Liveness uses `/healthz` and readiness uses `/readyz`; neither lists install IDs. `/metrics` serves Prometheus text: `snellius_auth_mode{mode}`, `snellius_audit_records_total{level}` and `snellius_audit_dropped_total{level}`. The main port serves no probes.
 
 ## Recompute
 
