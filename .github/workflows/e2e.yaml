@@ -107,6 +107,12 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
           npx playwright test -c e2e/playwright.config.ts signin.spec.ts
+      # upload-artifact skips hidden paths, and .e2e holds the kubeconfig: copy only the logs out.
+      - name: collect logs
+        if: always()
+        run: |
+          mkdir -p e2e-logs
+          cp .e2e/oidc/issuer.log .e2e/oidc/auth.yaml .e2e/port-forward.log e2e-logs/ 2>/dev/null || true
       - if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -114,7 +120,7 @@ jobs:
           path: |
             web/test-results
             web/playwright-report
-            .e2e/oidc/issuer.log
+            e2e-logs
           if-no-files-found: ignore
       - name: diagnostics
         if: failure()
