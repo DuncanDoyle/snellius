@@ -27,6 +27,9 @@ func TestValidateConfig(t *testing.T) {
 		"valid loopback redirect":    {with(func(c *Config) { c.RedirectURL = "http://localhost:8080/auth/callback" }), ""},
 		"valid 127.0.0.1 redirect":   {with(func(c *Config) { c.RedirectURL = "http://127.0.0.1:8080/auth/callback" }), ""},
 		"valid scopes":               {with(func(c *Config) { c.Scopes = []string{"openid", "email"} }), ""},
+		"issuer with query":          {with(func(c *Config) { c.IssuerURL = "https://idp.example.com?a=b" }), "query"},
+		"issuer without host":        {with(func(c *Config) { c.IssuerURL = "https://:443" }), "host"},
+		"redirect without host":      {with(func(c *Config) { c.RedirectURL = "https://:443/cb" }), "host"},
 		"missing issuer":             {with(func(c *Config) { c.IssuerURL = "" }), "issuer"},
 		"http issuer":                {with(func(c *Config) { c.IssuerURL = "http://idp.example.com" }), "issuer"},
 		"http loopback issuer":       {with(func(c *Config) { c.IssuerURL = "http://localhost:5556" }), "issuer"},
@@ -127,16 +130,35 @@ func TestDiscoveryRejectsHTTPEndpoints(t *testing.T) {
 			t.Fatal("Discover() = nil, want error")
 		}
 	})
-	t.Run("loopback http is allowed", func(t *testing.T) {
-		srv, _ := idp(t, func(s string) map[string]any {
-			d := goodDoc(s)
-			d["authorization_endpoint"], d["token_endpoint"] = "http://127.0.0.1:5556/auth", "http://localhost:5556/token"
-			return d
-		}, 0)
-		if _, err := provider(t, srv).Discover(context.Background(), srv.Client()); err != nil {
-			t.Fatal(err)
-		}
-	})
+	for _, bad := range []string{"http://localhost:5556/x", "http://127.0.0.1:5556/x", "http://localhost.evil.com/x"} {
+		t.Run("rejects "+bad, func(t *testing.T) {
+			for _, field := range []string{"authorization_endpoint", "token_endpoint", "end_session_endpoint"} {
+				srv, _ := idp(t, func(s string) map[string]any { d := goodDoc(s); d[field] = bad; return d }, 0)
+				if _, err := provider(t, srv).Discover(context.Background(), srv.Client()); err == nil {
+					t.Errorf("%s = %s accepted", field, bad)
+				}
+			}
+		})
+	}
+}
+
+func TestDiscoveryRefusesRedirects(t *testing.T) {
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(goodDoc("x"))
+	}))
+	defer target.Close()
+	srv := httptest.NewTLSServer(http.RedirectHandler(target.URL, http.StatusFound))
+	defer srv.Close()
+	p := provider(t, srv)
+	// The provider's own client, with the test server's roots, must not follow.
+	c := *srv.Client()
+	c.CheckRedirect = p.HTTPClient().CheckRedirect
+	if _, err := p.Discover(context.Background(), &c); err == nil || !strings.Contains(err.Error(), "302") {
+		t.Fatalf("Discover() = %v, want a status 302 error", err)
+	}
+	if p.HTTPClient().CheckRedirect == nil {
+		t.Fatal("provider client follows redirects")
+	}
 }
 
 func TestDiscoveryRetries(t *testing.T) {

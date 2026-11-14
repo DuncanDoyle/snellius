@@ -39,6 +39,8 @@ func (c Config) Validate() error {
 	var bad []string
 	if err := checkURL(c.IssuerURL, false); err != "" {
 		bad = append(bad, "issuer URL "+err)
+	} else if u, _ := url.Parse(c.IssuerURL); u.RawQuery != "" || u.ForceQuery {
+		bad = append(bad, "issuer URL must not have a query")
 	}
 	if c.ClientID == "" {
 		bad = append(bad, "client ID is required")
@@ -68,6 +70,9 @@ func checkURL(s string, loopbackHTTP bool) string {
 	u, err := url.Parse(s)
 	if err != nil || !u.IsAbs() || u.Host == "" {
 		return "must be an absolute URL"
+	}
+	if u.Hostname() == "" {
+		return "must have a host"
 	}
 	if u.Fragment != "" || u.User != nil {
 		return "must not have a fragment or user info"

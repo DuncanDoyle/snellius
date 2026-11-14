@@ -62,7 +62,9 @@ func NewProvider(cfg Config, clk clock.Clock) (*Provider, error) {
 		}
 		tr.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	}
-	return &Provider{cfg: cfg, clk: clk, client: &http.Client{Transport: tr, Timeout: 10 * time.Second},
+	return &Provider{cfg: cfg, clk: clk, client: &http.Client{Transport: tr, Timeout: 10 * time.Second,
+		// A redirect is a failure: it could carry the code or secret to another host.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		lastErr: errors.New("discovery has not run")}, nil
 }
 
@@ -109,8 +111,7 @@ func (p *Provider) Run(ctx context.Context) {
 func nextBackoff(d time.Duration) time.Duration { return min(d*2, maxBackoff) }
 
 // Discover reads the issuer's discovery document with client. The document's
-// issuer must equal the configured one, and the endpoints must be https (http
-// on loopback is allowed for testing).
+// issuer must equal the configured one, and the endpoints must always be https.
 func (p *Provider) Discover(ctx context.Context, client *http.Client) (*Endpoints, error) {
 	u := strings.TrimSuffix(p.cfg.IssuerURL, "/") + "/.well-known/openid-configuration"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -138,12 +139,12 @@ func (p *Provider) Discover(ctx context.Context, client *http.Client) (*Endpoint
 		return nil, fmt.Errorf("discovery issuer %q does not match the configured issuer %q", doc.Issuer, p.cfg.IssuerURL)
 	}
 	for _, e := range []struct{ name, v string }{{"authorization_endpoint", doc.Authorization}, {"token_endpoint", doc.Token}} {
-		if why := checkURL(e.v, true); why != "" {
+		if why := checkURL(e.v, false); why != "" {
 			return nil, fmt.Errorf("discovery %s %s", e.name, why)
 		}
 	}
 	if doc.EndSession != "" {
-		if why := checkURL(doc.EndSession, true); why != "" {
+		if why := checkURL(doc.EndSession, false); why != "" {
 			return nil, fmt.Errorf("discovery end_session_endpoint %s", why)
 		}
 	}

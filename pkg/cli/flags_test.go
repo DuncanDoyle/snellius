@@ -1,13 +1,13 @@
 package cli
 
 import (
+	"flag"
 	"reflect"
 	"strings"
-
-	"flag"
-	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"testing"
 	"time"
+
+	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 )
 
 // The defaults are the stock binary's; class-only installs are off unless asked for.
