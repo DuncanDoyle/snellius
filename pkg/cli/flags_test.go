@@ -21,3 +21,13 @@ func TestParseDefaultsAndClassOnly(t *testing.T) {
 		t.Fatalf("parsed %q %+v, %v", kc, o, err)
 	}
 }
+
+func TestParseAuditLevels(t *testing.T) {
+	_, o, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), nil)
+	if err != nil || o.AuditLevels != "security,agent,reads,summaries" {
+		t.Fatalf("default: %q, %v", o.AuditLevels, err)
+	}
+	if _, _, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), []string{"--audit-levels=security,bogus"}); err == nil {
+		t.Fatal("unknown level must fail")
+	}
+}

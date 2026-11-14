@@ -9,6 +9,7 @@ import (
 
 	"github.com/DuncanDoyle/snellius/internal/webui"
 	"github.com/DuncanDoyle/snellius/pkg/app"
+	"github.com/DuncanDoyle/snellius/pkg/audit"
 )
 
 // Parse registers the flags on fs and parses args. It returns the kubeconfig
@@ -21,6 +22,7 @@ func Parse(fs *flag.FlagSet, args []string) (kubeconfig string, o app.Options, e
 	fs.StringVar(&o.Listen, "listen", "", "listen address (default :8080 in-cluster, 127.0.0.1:8080 locally)")
 	fs.StringVar(&o.AuthMode, "auth-mode", app.ModeLocal, `"local": loopback only, Host-guarded; "secure": serve on the network behind an identity gate`)
 	allowedHosts := fs.String("allowed-hosts", "", "comma-separated extra Host names local mode serves (any port)")
+	fs.StringVar(&o.AuditLevels, "audit-levels", audit.DefaultLevels, "comma-separated audit levels to write: security, agent, reads, summaries, disclosure, requests")
 	fs.StringVar(&o.ProbeListen, "probe-listen", "", "health-probe address (default :8081 in-cluster, 127.0.0.1:8081 locally)")
 	fs.DurationVar(&o.PollInterval, "poll-interval", 30*time.Second, "maximum time between model recomputes (safety timer)")
 	fs.DurationVar(&o.MetricsInterval, "metrics-interval", 10*time.Second, "controller metrics scrape interval")
@@ -33,6 +35,9 @@ func Parse(fs *flag.FlagSet, args []string) (kubeconfig string, o app.Options, e
 	fs.BoolVar(&o.ClassOnlyInstalls, "class-only-installs", false, "also show an install per GatewayClass controllerName that no detector recognises")
 	fs.BoolVar(&o.Diagnostics.ControllerLogs, "diagnostics-controller-logs", false, "read controller logs for derived signals")
 	if err := fs.Parse(args); err != nil {
+		return "", app.Options{}, err
+	}
+	if _, err := audit.ParseLevels(o.AuditLevels); err != nil {
 		return "", app.Options{}, err
 	}
 	for _, h := range strings.Split(*allowedHosts, ",") {

@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/DuncanDoyle/snellius/pkg/api"
+	"github.com/DuncanDoyle/snellius/pkg/audit"
 )
 
 // Auth modes. Local serves only through loopback; secure expects an identity gate.
@@ -46,12 +47,20 @@ func checkListen(mode, addr, podIP, hostIP string) error {
 }
 
 // servedHandler builds the handler that is served: the API behind the Host
-// guard in local mode, the API alone in secure mode.
+// guard in local mode, the API alone in secure mode, all behind request IDs.
 func (a *App) servedHandler() http.Handler {
 	if a.opts.AuthMode == ModeSecure {
-		return a.Handler
+		return audit.RequestID(a.Handler)
 	}
-	return api.HostGuard(a.opts.AllowedHosts, a.Handler)
+	return audit.RequestID(api.HostGuard(a.opts.AllowedHosts, a.Handler))
+}
+
+// mode returns the effective auth mode; empty means local.
+func (a *App) mode() string {
+	if a.opts.AuthMode == "" {
+		return ModeLocal
+	}
+	return a.opts.AuthMode
 }
 
 // podHostIPs returns the downward-API POD_IP and HOST_IP, empty when unset.

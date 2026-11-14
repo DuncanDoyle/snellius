@@ -6,10 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +26,7 @@ import (
 	"k8s.io/utils/clock"
 
 	"github.com/DuncanDoyle/snellius/pkg/api"
+	"github.com/DuncanDoyle/snellius/pkg/audit"
 	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/collect"
 	"github.com/DuncanDoyle/snellius/pkg/ctrllogs"
@@ -49,6 +52,10 @@ type Options struct {
 	AuthMode string
 	// AllowedHosts are extra Host names local mode serves, besides loopback.
 	AllowedHosts []string
+	// AuditLevels is the comma list of audit levels to write; empty means audit.DefaultLevels.
+	AuditLevels string
+	// AuditOut receives the audit JSON lines; nil means stdout.
+	AuditOut io.Writer
 	// ProbeListen is the health-probe address; empty means :8081 in-cluster and 127.0.0.1:8081 locally.
 	ProbeListen string
 	// Pinned restricts the UI to one install: its ID, or namespace/name (D-016).
@@ -227,6 +234,8 @@ type App struct {
 	Handler http.Handler
 	// Metrics is served on the probe listener.
 	Metrics *obs.Registry
+	// Audit writes the audit records.
+	Audit *audit.Logger
 	// probe replaces the probe handler; tests only.
 	probe http.Handler
 	cfg   engine.Config
@@ -314,13 +323,21 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 	h := api.NewHandler(eng, o.UI, reg.Authorizer, api.WithExtMounts(mounts...), api.WithCoreCapabilities(core), api.WithCapabilitySources(reg.CapabilityStates),
 		api.WithCommands(reg.Commands), api.WithInstallCommands(commands), api.WithInstallFeatures(reg.FeaturesFor),
 		api.WithPacks(reg.Packs()...), api.WithInstallKinds(reg.KindAppliesTo), api.WithScopedReader(scoped), api.WithBackendConsumers(consumers))
+	levels, err := audit.ParseLevels(o.AuditLevels)
+	if err != nil {
+		return nil, err
+	}
+	auditOut := o.AuditOut
+	if auditOut == nil {
+		auditOut = os.Stdout
+	}
 	metrics := obs.NewRegistry()
 	mode := o.AuthMode
 	if mode == "" {
 		mode = ModeLocal
 	}
 	metrics.Gauge("snellius_auth_mode", "Authentication mode of this process; 1 for the active mode.", "mode").Set(1, mode)
-	return &App{Engine: eng, Handler: h, Metrics: metrics, cfg: cfg, cache: ca, kinds: mon, opts: o, discovered: discovered, reg: reg,
+	return &App{Engine: eng, Handler: h, Metrics: metrics, Audit: audit.New(auditOut, levels, metrics), cfg: cfg, cache: ca, kinds: mon, opts: o, discovered: discovered, reg: reg,
 		packs: extension.NewCore(extension.WithCollectors(packCols...)), collectors: packCols, collected: collected, deps: deps}, nil
 }
 
@@ -410,6 +427,10 @@ func serve(ctx context.Context, a *App, addr, probeAddr string, onListen func(ma
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	a.Start(ctx)
+	auditDone := make(chan struct{})
+	go func() { a.Audit.Run(ctx); close(auditDone) }()
+	defer func() { cancel(); <-auditDone }()
+	a.Audit.Emit(ctx, audit.Record{Level: audit.LevelSecurity, Action: "startup", Outcome: "success", Mode: a.mode(), Listen: addr})
 	probe := a.probe
 	if probe == nil {
 		probe = api.ProbeHandler(api.ModelReady(a.Engine), a.Metrics)
