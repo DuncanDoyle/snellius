@@ -1455,3 +1455,14 @@ Measured on the reference machine, 5 runs per world:
 4. kgwctl itself stays on kubeconfig (exec plugins such as kubelogin). It reports forbidden reads and never turns missing evidence into healthy. A browser or device-code login comes only if it ever calls a Snellius server.
 
 **Consequences:** The MCP server milestone splits into the two forms above.
+
+## D-090 … D-096 — Phase 7 design decisions (2026-11-14, Phase 7)
+**Status:** accepted under the user's AFK instruction (2026-11-14), after the Codex design and plan reviews (`phases/phase-7/reviews/design-codex.md`, `plan-codex.md`). Details in `phases/phase-7/design.md`.
+
+- **D-090** Identity comes from TokenReview with `audiences` set to Snellius's client ID, after full OIDC client validation (§4.1–4.2). The claim-mapping fallback needs a JWT library; its scope for `v0.8.0` and the dependency wait for the user (§4.3).
+- **D-091** A SubjectAccessReview authoriser: list then get, 30 s TTL never extended, a full-read fast path, hard bounds, `ErrAuthorizer` and a buffered response so an unavailable check answers 503, never 404 or a partial view (§6).
+- **D-092** Findings and object-derived check results carry a basis; a restricted viewer sees them only when the resource and the whole basis are readable. No permission beyond object RBAC; one permissions note per viewer (§7).
+- **D-093** Two signals in the API; legacy `health` keeps the D-082 lift and is at least unknown over a path that is incomplete for the viewer; incompleteness comes only from readable refs and permissions (§8).
+- **D-094** Audit as JSON lines on stdout with a fixed marker, the agreed levels and fields; OTLP later (§9).
+- **D-095** A probe listener with `/healthz`, `/readyz` (no install IDs) and a dependency-free `/metrics` (§3.3).
+- **D-096** Sessions in memory, one replica in secure mode; secure mode answers `503 secure-mode-incomplete` until 7.5 (§3.2, §5).

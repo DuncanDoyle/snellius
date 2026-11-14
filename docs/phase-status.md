@@ -4,24 +4,33 @@
 Phase: 7 — Identity & Access (inserted 2026-11-14, D-084)
 Base: 81a2c0b844677e9fa1f79b32b364066d4d17176b (main after #44)
 Docs: docs/phases/phase-7/
-Status: design
+Status: implementing (design and plan approved under the user's AFK instruction, 2026-11-14: "if both you and codex agree, you can continue with the implementation if there are no major design topics")
 
 ### Queue
-- [ ] Design (`phases/phase-7/design.md`) ← CURRENT
-- [ ] Implementation plan
-- [ ] Codex review of design + plan, triage, user approval
+- [x] Design (`phases/phase-7/design.md`), revised after `reviews/design-codex.md`
+- [x] Implementation plan, revised after `reviews/plan-codex.md`
+- [x] Codex review of design + plan, triage; approval delegated (see Status). Open for the user: claim-mapping fallback scope and its JWT dependency (design-codex #11)
+- [ ] 7.1 Modes and groundwork ← CURRENT
+- [ ] 7.2 Identity and sessions
+- [ ] 7.3 Authoriser
+- [ ] 7.4 Visibility everywhere
+- [ ] 7.5 Two signals (gate opens)
+- [ ] 7.6 Audit, docs, release
+- [ ] 7.7 Claim-mapping fallback (if approved)
 
 ### Exit gates
 - [ ] tests/vet pass (observed)
 - [ ] all queue items done or deferred
-- [ ] design+plan cross-model review + triage
+- [x] design+plan cross-model review + triage
 - [ ] phase cross-model review + triage
 - [ ] decisions.md / design / plan in sync with code
 - [ ] snellius.dev matches the user-visible changes (program P-006; `npm run sync:findings` for finding codes)
 - [ ] phase-7-complete.md written, roadmap updated, tracked items closed
 
 ## Sub-phase
-Sub-phase: none
+Sub-phase: 7.1 — Modes and groundwork (planned)
+Base: cecadca06a5688962f6c8429c7ec9efe6454919f
+Brief: phases/phase-7/phase-7.1-brief.md
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md
