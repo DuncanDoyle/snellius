@@ -78,3 +78,12 @@ Topics the user-facing documentation must cover when it is written. Each entry s
 - **Probe listener.** `--probe-listen`, chart container port `probe` (8081). It serves `/healthz`, `/readyz` and `/metrics`, and the probes use it.
 - **Readiness body.** `/readyz` lists no install IDs; they go to the log.
 - **Metrics.** `snellius_auth_mode{mode}`, `snellius_audit_records_total{level}`, `snellius_audit_dropped_total{level}`. Say how to scrape them and that a NetworkPolicy must allow it.
+
+## Secure-mode sign-in (2026-11-14, Phase 7 sub-phase 7.2)
+
+- **IdP setup per provider.** Later, add one short walkthrough per common IdP: the client, the redirect and post-logout URIs, the scopes and the groups claim. The README has the provider-neutral steps.
+- **Audience configuration.** Explain the two options in depth: reuse the client ID the cluster trusts, or add Snellius's client ID to `audiences` in the structured authentication configuration. Say why Snellius needs it: the API server validates the ID token through TokenReview. Cover how the claim mappings and prefixes set the username and groups that RBAC sees.
+- **Troubleshooting `/signin-failed`.** One entry per reason. `audience`: the API server does not accept the client. `unauthenticated`: the IdP or the API server rejects the user. `invalid`: a missing or expired login attempt, a failed code exchange or ID token check, or a failed token review. Say which log lines to read and that the browser never sees more than the reason.
+- **Sessions.** Idle and absolute limits, the 5,000-session bound, the identity check at least every 15 minutes, and that a restart signs everyone out. Explain why one replica.
+- **Sign-out.** RP-initiated logout: `client_id` and the app root as `post_logout_redirect_uri`, no ID token hint. Say what happens when the IdP has no end-session endpoint (the browser returns to the app root).
+- **HTTPS and cookies.** `cookieSecure=false` only for a localhost redirect. Behind a gateway, the route must carry TLS and operator authentication.

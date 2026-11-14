@@ -7,7 +7,12 @@ Installs Snellius, a read-only UI for Kubernetes Gateway API, built for kgateway
 Snellius runs in one of two modes, set with `auth.mode` (default `local`).
 
 - **Local mode.** There is no sign-in. The UI and API listen on `127.0.0.1:8080` in the pod, so only `kubectl port-forward` and other containers in the pod reach them. Sidecars and `extraContainers` share the pod network and can call the API, so add only containers you trust with everything Snellius can read. Whoever can port-forward to Snellius sees everything its ServiceAccount can read, which can be more than their own Kubernetes RBAC allows. A request with an unknown Host gets 421, a cross-origin request 403. Add Host names with `auth.allowedHosts`. The chart refuses `httpRoute.enabled` in local mode.
-- **Secure mode.** OIDC sign-in with per-user visibility arrives with `v0.8.0`. Until then, `auth.mode: secure` answers every `/api/` request with 503 `secure-mode-incomplete`.
+- **Secure mode.** Users sign in with OIDC. Per-user visibility arrives with `v0.8.0`. Until then, `auth.mode: secure` answers every `/api/` request with 503 `secure-mode-incomplete` after sign-in. Setup steps are in the [README](https://github.com/DuncanDoyle/snellius#secure-mode).
+  - The issuer and the redirect URL must be https. A redirect on `localhost` or `127.0.0.1` can use http, with `auth.session.cookieSecure: false`.
+  - The API server must accept the client ID as an audience, either because the cluster already trusts that client ID or through `audiences` in its structured authentication configuration.
+  - Sessions live in memory. The chart runs one replica, and a restart signs everyone out.
+  - The secure-mode ClusterRole gains `create` on `tokenreviews`.
+  - Secrets and tokens never reach the browser or the logs.
 - The ClusterRole never grants Secrets. That is the UI's whole secret-handling guarantee: no other field is redacted, and Deployments and other objects are shown as stored.
 
 ## Install
@@ -44,6 +49,19 @@ helm install ui ./deploy/helm/snellius -n snellius --create-namespace \
 | `diagnostics.controllerLogsNamespaces` | `[kgateway-system]` | Namespaces that get the `pods/log` Role. Only used when `diagnostics.controllerLogs` is on. |
 | `auth.mode` | `local` | `local` or `secure`. Local mode has no sign-in and listens on loopback only. Secure mode serves data only from `v0.8.0`; `httpRoute.enabled` needs it. |
 | `auth.allowedHosts` | `[]` | Host names accepted in local mode besides `localhost`, `127.0.0.1` and `[::1]`. Passed as `--allowed-hosts`. |
+| `auth.oidc.issuerURL` | `""` | Secure mode: OIDC issuer URL, https. Required. Passed as `--oidc-issuer-url`. |
+| `auth.oidc.clientID` | `""` | Secure mode: OIDC client ID. Required. The API server must accept it as an audience. |
+| `auth.oidc.redirectURL` | `""` | Secure mode: `https://<host>/auth/callback`. Required. Register it, and `https://<host>/` as the post-logout redirect URI, at the IdP. |
+| `auth.oidc.scopes` | `[]` | Secure mode: OIDC scopes. Empty uses `openid`, `profile`, `email`, `groups` and `offline_access`. |
+| `auth.oidc.clientSecret.existingSecret` | `""` | Secret holding the client secret, mounted under `/etc/snellius/oidc/secret/`. Empty is a public client. |
+| `auth.oidc.clientSecret.key` | `client-secret` | Key inside that Secret. |
+| `auth.oidc.ca.existingConfigMap` | `""` | ConfigMap with a PEM bundle for an IdP behind a private CA, mounted under `/etc/snellius/oidc/ca/`. |
+| `auth.oidc.ca.key` | `ca.pem` | Key inside that ConfigMap. |
+| `auth.session.idle` | `""` | A session ends after this long without a request. Empty uses `30m`. |
+| `auth.session.absolute` | `""` | A session ends this long after sign-in. Empty uses `8h`. |
+| `auth.session.cookieSecure` | `true` | Mark the session cookie Secure. Set `false` only for plain-HTTP testing. |
+| `auth.trustedProxyCIDRs` | `[]` | CIDRs of proxies whose `X-Request-Id` and `X-Forwarded-For` Snellius trusts. Passed as `--trusted-proxy-cidrs`. |
+| `hostAliases` | `[]` | Pod `hostAliases`, for an IdP name that is not in DNS. |
 | `audit.levels` | `[security, agent, reads, summaries]` | Audit levels written to stdout as JSON lines, passed as `--audit-levels`. |
 | `extraArgs` | `[]` | More flags for the UI binary, appended after the chart's own args, e.g. `--set extraArgs={--poll-interval=10m}`. |
 | `httpRoute.enabled` | `false` | Create an HTTPRoute on an existing Gateway. Needs `auth.mode: secure`. Read [Security and trust model](#security-and-trust-model) first. |

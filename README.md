@@ -33,13 +33,82 @@ Snellius runs in one of two modes. Set it with `--auth-mode` or the chart value 
 - At startup, local mode logs a warning with the bind address that anyone who can port-forward sees everything Snellius reads.
 - The binary refuses a non-loopback `--listen` and a pod on host networking in local mode. The chart refuses `httpRoute.enabled` in local mode.
 
-**Secure mode.** OIDC sign-in, with visibility per user that follows Kubernetes RBAC, is available from `v0.8.0`. Before that, a build started with `--auth-mode=secure` answers every `/api/` request with 503 `secure-mode-incomplete`. Main is a development build until `v0.8.0`.
+**Secure mode.** OIDC sign-in, with visibility per user that follows Kubernetes RBAC, is available from `v0.8.0`. Before that, a build started with `--auth-mode=secure` answers every `/api/` request with 503 `secure-mode-incomplete`. Main is a development build until `v0.8.0`. Setup steps are in [Secure mode](#secure-mode).
 
 **Both modes.**
 
 - **No Secrets.** The UI never reads Secrets, and its ClusterRole excludes them. No other field is redacted, because a secret can sit in any field, such as an inline token or a literal env var.
 - **Audit stream.** Snellius writes JSON audit lines to stdout, each with `"log":"snellius.audit"`. Select the levels with `--audit-levels` (chart `audit.levels`, default `security,agent,reads,summaries`). Only a startup record exists so far.
 - **Request IDs.** Every response from the UI and API listener carries an `X-Request-Id`. The probe listener does not.
+
+### Secure mode
+
+Secure mode signs users in with your IdP and shows the data of the Kubernetes identity that the IdP issues. It needs an IdP that your cluster already trusts for API access.
+
+1. **Register Snellius as an OIDC client at your IdP.**
+   - Redirect URI: `https://<host>/auth/callback`
+   - Post-logout redirect URI: `https://<host>/`
+   - Use the authorization code flow with PKCE. A client secret is optional.
+   - Allow the scopes `openid`, `profile`, `email`, `groups` and `offline_access`, or set your own with `auth.oidc.scopes`. The list must include `openid`.
+2. **Make the cluster accept the client's tokens.** Snellius sends the user's ID token to the API server, so the API server must accept the client as an audience. Do one of these:
+   - Register Snellius with the same client ID that the cluster already trusts. Then the API server needs no change.
+   - Add Snellius's client ID to `audiences` in the API server's structured authentication configuration. This example keeps the claim mappings that the cluster already uses. Yours may differ.
+
+     ```yaml
+     apiVersion: apiserver.config.k8s.io/v1
+     kind: AuthenticationConfiguration
+     jwt:
+       - issuer:
+           url: https://idp.example.com
+           audiences:
+             - kubectl            # the client ID the cluster already trusts
+             - snellius           # the Snellius client ID
+         claimMappings:
+           username:
+             claim: email
+             prefix: "oidc:"
+           groups:
+             claim: groups
+             prefix: "oidc:"
+     ```
+3. **Create the optional Secret and ConfigMap.** A client secret is only for a confidential client. The CA bundle is only for an IdP behind a private CA.
+
+   ```sh
+   kubectl -n snellius create secret generic snellius-oidc --from-literal=client-secret='<secret>'
+   kubectl -n snellius create configmap snellius-oidc-ca --from-file=ca.pem=./idp-ca.pem
+   ```
+4. **Install with the secure-mode values.** The issuer and the redirect URL must be https. The client ID must match step 1.
+
+   ```yaml
+   auth:
+     mode: secure
+     oidc:
+       issuerURL: https://idp.example.com
+       clientID: snellius
+       redirectURL: https://snellius.example.com/auth/callback
+       clientSecret:
+         existingSecret: snellius-oidc   # omit for a public client
+       ca:
+         existingConfigMap: snellius-oidc-ca   # omit for a public CA
+   httpRoute:
+     enabled: true
+     parentRefs:
+       - name: my-gateway
+         namespace: gateway-system
+     hostnames:
+       - snellius.example.com
+   ```
+5. **Check the result.** Run `kubectl auth whoami` as the same user, with the same IdP. Open Snellius, sign in, and select Account details in the user menu. The username and groups match the `kubectl auth whoami` output.
+
+Notes:
+
+- **HTTPS everywhere.** The browser reaches Snellius over https, and the issuer and its endpoints use https. The one exception is a redirect URL on `localhost` or `127.0.0.1`, which can use http for testing. Then also set `auth.session.cookieSecure=false`.
+- **Sessions live in memory.** The chart runs one replica. A restart signs everyone out. A session ends after 30 minutes without a request or 8 hours after sign-in (`auth.session.idle` and `auth.session.absolute`). Snellius keeps at most 5,000 sessions. It checks each user's identity again at least every 15 minutes.
+- **Sign-out.** The Sign out menu item ends the session and sends the browser to the IdP's end-session endpoint, if the IdP publishes one. Snellius sends `client_id` and a `post_logout_redirect_uri` that is the app root. It sends no ID token hint.
+- **Sign-in errors.** A failed sign-in lands on `/signin-failed` with the reason `audience` (the API server does not accept the client), `unauthenticated` (the IdP or the API server rejects the user) or `invalid` (the login attempt has no open transaction or a wrong state, the code exchange or ID token check fails, or the token review itself fails).
+- **Routes.** Secure mode serves `/auth/login`, `/auth/callback`, `/auth/me` and `POST /auth/logout`. `/auth/status` reports the mode and whether sign-in is ready. Local mode serves only `/auth/status`.
+- **Data stays closed for now.** Until per-user authorisation lands later in Phase 7, every `/api/` request answers `503 secure-mode-incomplete` after sign-in. Main is a development build until `v0.8.0`.
+- **No secrets in the browser.** The client secret, the ID token, the refresh token and the user's bearer token never reach the browser or the logs. The browser holds only an opaque session cookie.
 
 ## Install
 
@@ -293,6 +362,12 @@ Saved theme choices carry over. Finding codes keep the `KGWUI-` prefix, so API v
 - **`/metrics`.** The probe listener serves Prometheus text: `snellius_auth_mode{mode}`, `snellius_audit_records_total{level}` and `snellius_audit_dropped_total{level}`.
 - **Audit stream.** JSON lines on stdout, set with `--audit-levels` (chart `audit.levels`). Every response from the UI and API listener carries an `X-Request-Id`.
 - **API.** `/api/v1/meta` gains `authMode`. `index.html` carries `data-auth-mode`.
+- **Sign-in (7.2).**
+  - New flags: `--oidc-issuer-url`, `--oidc-client-id`, `--oidc-client-secret-file`, `--oidc-redirect-url`, `--oidc-ca-file`, `--oidc-scopes`, `--cookie-secure`, `--session-idle`, `--session-absolute` and `--trusted-proxy-cidrs`.
+  - New chart values: `auth.oidc.*`, `auth.session.*`, `auth.trustedProxyCIDRs` and `hostAliases`. Secure mode needs `auth.oidc.issuerURL`, `clientID` and `redirectURL`.
+  - New routes in secure mode: `/auth/login`, `/auth/callback`, `/auth/me`, `POST /auth/logout` and `/signin-failed`. `/auth/status` exists in both modes.
+  - The secure-mode ClusterRole gains `create` on `tokenreviews`.
+  - Sessions live in memory; the chart keeps one replica. See [Secure mode](#secure-mode).
 - **Chart.**
   - New values `auth.mode`, `auth.allowedHosts` and `audit.levels`.
   - In local mode the pod gets the annotation `sidecar.istio.io/inject: "false"` and the label `istio.io/dataplane-mode: none`.
