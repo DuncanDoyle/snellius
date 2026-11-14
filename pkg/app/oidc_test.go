@@ -148,3 +148,65 @@ func TestServeRunsDiscovery(t *testing.T) {
 	}()
 	eventually(t, "/readyz 200", func() bool { code, _ := getBody(t, "http://"+ls.probe.Addr().String()+"/readyz"); return code == 200 })
 }
+
+// The sign-in routes exist only in secure mode; local mode answers 404.
+func TestAuthRoutes(t *testing.T) {
+	serve := func(a *App, path, host string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		a.servedHandler().ServeHTTP(rec, req)
+		return rec
+	}
+	t.Run("local has none", func(t *testing.T) {
+		a := oidcApp(t, ModeLocal, oidc.Config{})
+		for _, p := range []string{"/auth/login", "/auth/callback"} {
+			if rec := serve(a, p, "localhost:8080"); rec.Code != http.StatusNotFound {
+				t.Errorf("local %s = %d, want 404", p, rec.Code)
+			}
+		}
+	})
+	t.Run("secure not configured", func(t *testing.T) {
+		a := oidcApp(t, ModeSecure, oidc.Config{})
+		for _, p := range []string{"/auth/login", "/auth/callback"} {
+			if rec := serve(a, p, "s.example.com"); rec.Code != http.StatusServiceUnavailable {
+				t.Errorf("%s = %d, want 503", p, rec.Code)
+			}
+		}
+	})
+	t.Run("secure redirects to the issuer", func(t *testing.T) {
+		srv := httptest.NewTLSServer(nil)
+		defer srv.Close()
+		srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]string{"issuer": srv.URL, "authorization_endpoint": srv.URL + "/a", "token_endpoint": srv.URL + "/t"})
+		})
+		ca := filepath.Join(t.TempDir(), "ca.pem")
+		if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		a := oidcApp(t, ModeSecure, oidc.Config{IssuerURL: srv.URL, ClientID: "c", RedirectURL: "https://s.example.com/auth/callback", CAFile: ca})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go a.oidc.Run(ctx)
+		eventually(t, "discovery", func() bool { ok, _ := a.oidc.Ready(); return ok })
+		rec := serve(a, "/auth/login?return=/x", "s.example.com")
+		if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), srv.URL+"/a?") {
+			t.Fatalf("login = %d %q", rec.Code, rec.Header().Get("Location"))
+		}
+		c := rec.Result().Cookies()
+		if len(c) != 1 || !c[0].Secure {
+			t.Errorf("cookies = %+v; want one Secure login cookie by default", c)
+		}
+		// A callback without a transaction fails to /signin-failed.
+		if rec := serve(a, "/auth/callback?state=x&code=y", "s.example.com"); rec.Header().Get("Location") != "/signin-failed?reason=invalid" {
+			t.Errorf("callback = %d %q", rec.Code, rec.Header().Get("Location"))
+		}
+	})
+	t.Run("unreadable client secret is not configured", func(t *testing.T) {
+		a := oidcApp(t, ModeSecure, oidc.Config{IssuerURL: "https://idp.example.com", ClientID: "c", RedirectURL: "https://s.example.com/auth/callback",
+			ClientSecretFile: filepath.Join(t.TempDir(), "missing")})
+		if _, body := authStatus(t, a, "s.example.com"); body != `{"mode":"secure","signIn":"not-configured"}` {
+			t.Fatalf("status = %s", body)
+		}
+	})
+}

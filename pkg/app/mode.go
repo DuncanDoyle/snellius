@@ -51,14 +51,36 @@ func checkListen(mode, addr, podIP, hostIP string) error {
 }
 
 // servedHandler builds the handler that is served: the API behind the Host
-// guard in local mode, the API alone in secure mode, and /auth/status outside
-// the API, all behind request IDs.
+// guard in local mode, the API alone in secure mode, and /auth/status and the
+// sign-in routes outside the API, all behind request IDs.
 func (a *App) servedHandler() http.Handler {
-	h := a.withAuthStatus(a.Handler)
+	h := a.withAuthStatus(a.withSignIn(a.Handler))
 	if a.opts.AuthMode == ModeSecure {
 		return audit.RequestID(h)
 	}
 	return audit.RequestID(api.HostGuard(a.opts.AllowedHosts, h))
+}
+
+// withSignIn serves /auth/login and /auth/callback ahead of next in secure mode, 503
+// while sign-in is not configured. Local mode has no such routes: 404.
+func (a *App) withSignIn(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/auth/login" && r.URL.Path != "/auth/callback" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		switch {
+		case a.mode() != ModeSecure:
+			http.NotFound(w, r)
+		case a.flow == nil:
+			w.Header().Set("Cache-Control", "no-store")
+			http.Error(w, "sign-in is not configured", http.StatusServiceUnavailable)
+		case r.URL.Path == "/auth/login":
+			a.flow.Login(w, r)
+		default:
+			a.flow.Callback(w, r)
+		}
+	})
 }
 
 // withAuthStatus serves GET /auth/status ahead of next, outside the secure gate.

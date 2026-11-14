@@ -53,6 +53,8 @@ type Options struct {
 	AuthMode string
 	// OIDC configures sign-in in secure mode; local mode ignores it.
 	OIDC oidc.Config
+	// CookieInsecure drops the Secure attribute from sign-in cookies, for plain-HTTP testing only.
+	CookieInsecure bool
 	// AllowedHosts are extra Host names local mode serves, besides loopback.
 	AllowedHosts []string
 	// AuditLevels is the comma list of audit levels to write; empty means audit.DefaultLevels.
@@ -253,8 +255,10 @@ type App struct {
 	collected  *collect.Store
 	deps       extension.Deps
 	// oidc discovers the issuer in secure mode; nil when the configuration is invalid (oidcErr).
+	// flow serves /auth/login and /auth/callback; nil when oidc is.
 	oidc    *oidc.Provider
 	oidcErr error
+	flow    *oidc.Flow
 	// discovered is closed after the first model with an install over a settled cache.
 	discovered chan struct{}
 }
@@ -353,18 +357,14 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		mode = ModeLocal
 	}
 	metrics.Gauge("snellius_auth_mode", "Authentication mode of this process; 1 for the active mode.", "mode").Set(1, mode)
+	auditLog := audit.New(auditOut, levels, metrics)
 	var prov *oidc.Provider
+	var flow *oidc.Flow
 	var oidcErr error
 	if o.AuthMode == ModeSecure {
-		if oidcErr = o.OIDC.Validate(); oidcErr == nil {
-			clk := clock.Clock(clock.RealClock{})
-			if o.Clock != nil {
-				clk = o.Clock
-			}
-			prov, oidcErr = oidc.NewProvider(o.OIDC, clk)
-		}
+		prov, flow, oidcErr = buildSignIn(c.Kube, o, auditLog)
 	}
-	return &App{Engine: eng, oidc: prov, oidcErr: oidcErr, Handler: h, Metrics: metrics, Audit: audit.New(auditOut, levels, metrics), cfg: cfg, cache: ca, kinds: mon, opts: o, authz: authz, discovered: discovered, reg: reg,
+	return &App{Engine: eng, oidc: prov, flow: flow, oidcErr: oidcErr, Handler: h, Metrics: metrics, Audit: auditLog, cfg: cfg, cache: ca, kinds: mon, opts: o, authz: authz, discovered: discovered, reg: reg,
 		packs: extension.NewCore(extension.WithCollectors(packCols...)), collectors: packCols, collected: collected, deps: deps}, nil
 }
 
@@ -563,4 +563,26 @@ func (r *crdRefresher) observe(crds []cache.CRDMeta) {
 			slog.Warn("re-listing served kinds after a CRD change failed", "err", err)
 		}
 	}()
+}
+
+// buildSignIn builds the OIDC provider and sign-in flow; the error means sign-in is not configured.
+func buildSignIn(kube kubernetes.Interface, o Options, auditLog *audit.Logger) (*oidc.Provider, *oidc.Flow, error) {
+	if err := o.OIDC.Validate(); err != nil {
+		return nil, nil, err
+	}
+	clk := clock.Clock(clock.RealClock{})
+	if o.Clock != nil {
+		clk = o.Clock
+	}
+	prov, err := oidc.NewProvider(o.OIDC, clk)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Until sessions exist, a completed sign-in only redirects to its return path.
+	flow, err := oidc.NewFlow(oidc.FlowOptions{Config: o.OIDC, Provider: prov, Reviewer: oidc.NewKubeReviewer(kube, o.OIDC.ClientID),
+		Completer: oidc.RedirectCompleter{}, Audit: auditLog, Clock: clk, CookieSecure: !o.CookieInsecure})
+	if err != nil {
+		return nil, nil, err
+	}
+	return prov, flow, nil
 }

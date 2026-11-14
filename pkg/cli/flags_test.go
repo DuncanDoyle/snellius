@@ -53,3 +53,15 @@ func TestParseOIDCFlags(t *testing.T) {
 		t.Fatalf("parsed %+v, %v; want %+v", o.OIDC, err, want)
 	}
 }
+
+// Login and session cookies are Secure unless --cookie-secure=false.
+func TestParseCookieSecure(t *testing.T) {
+	_, o, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), nil)
+	if err != nil || o.CookieInsecure {
+		t.Fatalf("default CookieInsecure = %v, %v; want false", o.CookieInsecure, err)
+	}
+	_, o, err = Parse(flag.NewFlagSet("t", flag.ContinueOnError), []string{"--cookie-secure=false"})
+	if err != nil || !o.CookieInsecure {
+		t.Fatalf("CookieInsecure = %v, %v; want true", o.CookieInsecure, err)
+	}
+}
