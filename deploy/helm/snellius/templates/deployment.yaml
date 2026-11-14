@@ -50,10 +50,10 @@ spec:
             - --oidc-scopes={{ . }}
             {{- end }}
             {{- if $secretName }}
-            - --oidc-client-secret-file=/etc/snellius/oidc/client-secret
+            - --oidc-client-secret-file=/etc/snellius/oidc/secret/client-secret
             {{- end }}
             {{- if $caName }}
-            - --oidc-ca-file=/etc/snellius/oidc/ca.pem
+            - --oidc-ca-file=/etc/snellius/oidc/ca/ca.pem
             {{- end }}
             {{- with include "snellius.sessionValue" (dict "root" . "key" "idle") }}
             - --session-idle={{ . }}
@@ -126,10 +126,10 @@ spec:
           {{- if or .Values.extraVolumeMounts (and $secure (or $secretName $caName)) }}
           volumeMounts:
             {{- if and $secure $secretName }}
-            - { name: oidc-client-secret, mountPath: /etc/snellius/oidc/client-secret, subPath: client-secret, readOnly: true }
+            - { name: oidc-client-secret, mountPath: /etc/snellius/oidc/secret, readOnly: true }
             {{- end }}
             {{- if and $secure $caName }}
-            - { name: oidc-ca, mountPath: /etc/snellius/oidc/ca.pem, subPath: ca.pem, readOnly: true }
+            - { name: oidc-ca, mountPath: /etc/snellius/oidc/ca, readOnly: true }
             {{- end }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}

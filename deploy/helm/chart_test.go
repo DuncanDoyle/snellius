@@ -666,7 +666,7 @@ func TestSecureModeRendersEveryFlag(t *testing.T) {
 	for _, want := range []string{
 		"--oidc-issuer-url=https://idp.example.com", "--oidc-client-id=snellius",
 		"--oidc-redirect-url=https://ui.example.com/auth/callback", "--oidc-scopes=openid,email",
-		"--oidc-client-secret-file=/etc/snellius/oidc/client-secret", "--oidc-ca-file=/etc/snellius/oidc/ca.pem",
+		"--oidc-client-secret-file=/etc/snellius/oidc/secret/client-secret", "--oidc-ca-file=/etc/snellius/oidc/ca/ca.pem",
 		"--session-idle=15m", "--session-absolute=4h", "--cookie-secure=false",
 		"--trusted-proxy-cidrs=10.0.0.0/8,192.168.0.0/16"} {
 		if !slices.Contains(got, want) {
@@ -711,12 +711,12 @@ func TestOIDCSecretAndCAMounts(t *testing.T) {
 	if len(mounts) != 3 || mounts["/data"].Name != "data" {
 		t.Fatalf("mounts must join extraVolumeMounts: %+v", spec.Containers[0].VolumeMounts)
 	}
-	sm := mounts["/etc/snellius/oidc/client-secret"]
-	if !sm.ReadOnly || sm.SubPath == "" {
-		t.Errorf("secret mount must be read-only and single-file: %+v", sm)
+	sm := mounts["/etc/snellius/oidc/secret"]
+	if !sm.ReadOnly || sm.SubPath != "" {
+		t.Errorf("secret mount must be read-only and a directory without subPath: %+v", sm)
 	}
-	if !mounts["/etc/snellius/oidc/ca.pem"].ReadOnly {
-		t.Errorf("CA mount must be read-only: %+v", mounts)
+	if cm := mounts["/etc/snellius/oidc/ca"]; !cm.ReadOnly || cm.SubPath != "" {
+		t.Errorf("CA mount must be read-only without subPath: %+v", mounts)
 	}
 	vols := map[string]corev1.Volume{}
 	for _, v := range spec.Volumes {
@@ -726,7 +726,7 @@ func TestOIDCSecretAndCAMounts(t *testing.T) {
 	if sv.Secret == nil || sv.Secret.SecretName != "idp" || len(sv.Secret.Items) != 1 || sv.Secret.Items[0].Key != "sec" {
 		t.Errorf("secret volume = %+v", sv)
 	}
-	cv := vols[mounts["/etc/snellius/oidc/ca.pem"].Name]
+	cv := vols[mounts["/etc/snellius/oidc/ca"].Name]
 	if cv.ConfigMap == nil || cv.ConfigMap.Name != "idp-ca" || len(cv.ConfigMap.Items) != 1 || cv.ConfigMap.Items[0].Key != "ca.pem" {
 		t.Errorf("CA volume = %+v", cv)
 	}
