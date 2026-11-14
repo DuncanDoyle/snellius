@@ -55,8 +55,8 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 		h.scoped = endpoints.NoReader
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux.HandleFunc("GET /readyz", h.readyz)
+	mux.HandleFunc("GET /healthz", healthz)
+	mux.HandleFunc("GET /readyz", readyzHandler(ModelReady(src)))
 	mux.HandleFunc("GET /api/v1/meta", h.meta)
 	mux.HandleFunc("GET /api/v1/installs", h.installs)
 	mux.HandleFunc("GET /api/v1/installs/{id}/overview", h.overview)
@@ -154,20 +154,6 @@ func (h *handler) load(w http.ResponseWriter) *engine.Published {
 
 // synced reports whether m exists and was computed over a synced cache.
 func synced(m *engine.Model) bool { return m != nil && m.Snapshot != nil && m.Snapshot.Synced }
-
-func (h *handler) readyz(w http.ResponseWriter, _ *http.Request) {
-	m := h.current()
-	if !synced(m) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		return
-	}
-	// An install with an invalid ID is a detector bug; it must not pass silently (D-016).
-	if len(m.Rejected) > 0 {
-		writeErr(w, http.StatusServiceUnavailable, "install rejected: "+strings.Join(m.Rejected, "; "))
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-}
 
 func (h *handler) meta(w http.ResponseWriter, _ *http.Request) {
 	m, plat := h.current(), h.src.Platform()

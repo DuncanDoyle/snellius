@@ -580,7 +580,7 @@ func TestServeListenFailureStartsNothing(t *testing.T) {
 	}
 	defer func() { _ = ln.Close() }()
 	a := build(t)
-	if err := serve(context.Background(), a, ln.Addr().String(), nil); err == nil {
+	if err := serve(context.Background(), a, ln.Addr().String(), "127.0.0.1:0", nil); err == nil {
 		t.Fatal("serve must fail when the address is in use")
 	}
 	// The compute loop runs every 10 ms; a leaked one would publish a model.
@@ -605,7 +605,9 @@ func TestServeDrainsInFlightRequests(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	addr := make(chan net.Addr, 1)
 	served := make(chan error, 1)
-	go func() { served <- serve(ctx, a, "127.0.0.1:0", func(a net.Addr) { addr <- a }) }()
+	go func() {
+		served <- serve(ctx, a, "127.0.0.1:0", "127.0.0.1:0", func(m, _ net.Listener) { addr <- m.Addr() })
+	}()
 	resp := make(chan string, 1)
 	go func() {
 		var ad net.Addr

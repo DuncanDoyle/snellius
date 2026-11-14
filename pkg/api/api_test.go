@@ -48,6 +48,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/kgateway"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
+	"github.com/DuncanDoyle/snellius/pkg/obs"
 	"github.com/DuncanDoyle/snellius/pkg/overview"
 	"github.com/DuncanDoyle/snellius/pkg/platform"
 	"github.com/DuncanDoyle/snellius/pkg/scopeverify"
@@ -1304,14 +1305,64 @@ func TestInvalidInstallIDsAreRejected(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = resp.Body.Close() }()
-			var body ErrorResponse
-			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || resp.StatusCode != http.StatusServiceUnavailable {
-				t.Fatalf("/readyz: status %d, body %+v, %v", resp.StatusCode, body, err)
+			raw, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusServiceUnavailable || string(raw) != "not ready" {
+				t.Fatalf("/readyz: status %d, body %q; want 503 \"not ready\"", resp.StatusCode, raw)
 			}
-			if !strings.Contains(body.Error, "detector kgateway") || !strings.Contains(body.Error, strconv.Quote(id)) {
-				t.Fatalf("/readyz must name the detector and the raw ID %s: %q", strconv.Quote(id), body.Error)
+			// The text handler quotes the err attribute, which itself quotes the ID.
+			q := strconv.Quote(strconv.Quote(id))
+			if !strings.Contains(logs.String(), "detector kgateway") || !strings.Contains(logs.String(), q[1:len(q)-1]) {
+				t.Fatalf("the log must name the detector and the raw ID %s:\n%s", strconv.Quote(id), logs.String())
 			}
 		})
+	}
+}
+
+// /readyz and the probe listener never echo an install ID; they say "not ready".
+func TestReadyzHidesRejectedInstalls(t *testing.T) {
+	var logs bytes.Buffer
+	e, srv, _ := startWith(t, setup{detectors: []install.Detector{idDetector{id: "a/b"}}, logger: slog.New(slog.NewTextHandler(&logs, nil))}, world()...)
+	e.Compute()
+	probe := httptest.NewServer(ProbeHandler(ModelReady(e), obs.NewRegistry()))
+	defer probe.Close()
+	for _, u := range []string{srv.URL, probe.URL} {
+		resp, err := http.Get(u + "/readyz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusServiceUnavailable || string(raw) != "not ready" {
+			t.Fatalf("%s/readyz: %d %q", u, resp.StatusCode, raw)
+		}
+	}
+}
+
+// The probe handler serves health, readiness and metrics, and no API or UI.
+func TestProbeHandlerServesOnlyProbes(t *testing.T) {
+	reg := obs.NewRegistry()
+	reg.Gauge("snellius_auth_mode", "Auth mode.", "mode").Set(1, "local")
+	ready := true
+	srv := httptest.NewServer(ProbeHandler(func() (bool, string) { return ready, "x" }, reg))
+	defer srv.Close()
+	for p, want := range map[string]int{"/healthz": 200, "/readyz": 200, "/metrics": 200, "/api/v1/installs": 404, "/": 404} {
+		resp, err := http.Get(srv.URL + p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != want {
+			t.Fatalf("%s: %d, want %d", p, resp.StatusCode, want)
+		}
+	}
+	ready = false
+	resp, err := http.Get(srv.URL + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 503 {
+		t.Fatalf("not ready: %d", resp.StatusCode)
 	}
 }
 

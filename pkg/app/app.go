@@ -36,6 +36,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/install"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
+	"github.com/DuncanDoyle/snellius/pkg/obs"
 	"github.com/DuncanDoyle/snellius/pkg/proxystats"
 	"github.com/DuncanDoyle/snellius/pkg/setup"
 )
@@ -224,10 +225,14 @@ type Clients struct {
 type App struct {
 	Engine  *engine.Engine
 	Handler http.Handler
-	cfg     engine.Config
-	cache   *cache.Cache
-	kinds   *kinds.Monitor
-	opts    Options
+	// Metrics is served on the probe listener.
+	Metrics *obs.Registry
+	// probe replaces the probe handler; tests only.
+	probe http.Handler
+	cfg   engine.Config
+	cache *cache.Cache
+	kinds *kinds.Monitor
+	opts  Options
 	// reg starts the extension collectors; packs runs the pack collectors; collected is their store.
 	reg, packs *extension.Registry
 	collectors []extension.Collector
@@ -309,7 +314,13 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 	h := api.NewHandler(eng, o.UI, reg.Authorizer, api.WithExtMounts(mounts...), api.WithCoreCapabilities(core), api.WithCapabilitySources(reg.CapabilityStates),
 		api.WithCommands(reg.Commands), api.WithInstallCommands(commands), api.WithInstallFeatures(reg.FeaturesFor),
 		api.WithPacks(reg.Packs()...), api.WithInstallKinds(reg.KindAppliesTo), api.WithScopedReader(scoped), api.WithBackendConsumers(consumers))
-	return &App{Engine: eng, Handler: h, cfg: cfg, cache: ca, kinds: mon, opts: o, discovered: discovered, reg: reg,
+	metrics := obs.NewRegistry()
+	mode := o.AuthMode
+	if mode == "" {
+		mode = ModeLocal
+	}
+	metrics.Gauge("snellius_auth_mode", "Authentication mode of this process; 1 for the active mode.", "mode").Set(1, mode)
+	return &App{Engine: eng, Handler: h, Metrics: metrics, cfg: cfg, cache: ca, kinds: mon, opts: o, discovered: discovered, reg: reg,
 		packs: extension.NewCore(extension.WithCollectors(packCols...)), collectors: packCols, collected: collected, deps: deps}, nil
 }
 
@@ -376,37 +387,70 @@ func RunWith(ctx context.Context, kubeconfig string, o Options, reg *extension.R
 	if err != nil {
 		return err
 	}
-	return serve(ctx, a, o.Listen, func(addr net.Addr) { slog.Info("snellius listening", "addr", addr.String(), "inCluster", inCluster) })
+	return serve(ctx, a, o.Listen, o.ProbeListen, func(main, probe net.Listener) {
+		slog.Info("snellius listening", "addr", main.Addr().String(), "probeAddr", probe.Addr().String(), "inCluster", inCluster)
+	})
 }
 
-// serve listens on addr, starts a and serves its handler until ctx is done,
-// then drains in-flight requests for up to 5 s. Everything it started is
-// cancelled when it returns; onListen, if set, receives the bound address.
-func serve(ctx context.Context, a *App, addr string, onListen func(net.Addr)) error {
+// serve listens on addr (the UI and API) and probeAddr (probes and metrics),
+// starts a and serves both until ctx is done, then drains in-flight requests
+// for up to 5 s. Either listener failing to bind or either server failing stops
+// both. Everything it started is cancelled when it returns; onListen, if set,
+// receives the bound listeners.
+func serve(ctx context.Context, a *App, addr, probeAddr string, onListen func(main, probe net.Listener)) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
+	probeLn, err := net.Listen("tcp", probeAddr)
+	if err != nil {
+		_ = ln.Close()
+		return fmt.Errorf("listen probe: %w", err)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	a.Start(ctx)
-	srv := &http.Server{Handler: a.servedHandler(), ReadHeaderTimeout: 10 * time.Second}
+	probe := a.probe
+	if probe == nil {
+		probe = api.ProbeHandler(api.ModelReady(a.Engine), a.Metrics)
+	}
+	srvs := []*http.Server{
+		{Handler: a.servedHandler(), ReadHeaderTimeout: 10 * time.Second},
+		{Handler: probe, ReadHeaderTimeout: 10 * time.Second},
+	}
 	drained := make(chan struct{})
 	go func() { //nolint:gosec // shutdown must outlive the cancelled serve context
 		defer close(drained)
 		<-ctx.Done()
 		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer scancel()
-		_ = srv.Shutdown(sctx)
+		var wg sync.WaitGroup
+		for _, s := range srvs {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_ = s.Shutdown(sctx)
+			}()
+		}
+		wg.Wait()
 	}()
 	if onListen != nil {
-		onListen(ln.Addr())
+		onListen(ln, probeLn)
 	}
-	err = srv.Serve(ln)
-	cancel()
+	errs := make(chan error, len(srvs))
+	for i, l := range []net.Listener{ln, probeLn} {
+		go func() { errs <- srvs[i].Serve(l) }()
+	}
+	var failure error
+	for range srvs {
+		if err := <-errs; !errors.Is(err, http.ErrServerClosed) && failure == nil {
+			failure = err
+		}
+		cancel()
+	}
 	<-drained
-	if !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("serve: %w", err)
+	if failure != nil {
+		return fmt.Errorf("serve: %w", failure)
 	}
 	return nil
 }
