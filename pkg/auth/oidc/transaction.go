@@ -3,6 +3,7 @@ package oidc
 import (
 	"container/list"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"sync"
 	"time"
@@ -63,20 +64,34 @@ func (s *transactions) put(tx transaction) (string, error) {
 	return id, nil
 }
 
-// take removes and returns the transaction for id; false when it is unknown or expired.
-func (s *transactions) take(id string) (transaction, bool) {
+// txResult is the outcome of take.
+type txResult int
+
+const (
+	txMissing  txResult = iota // unknown or expired
+	txMismatch                 // the state differs; the transaction stays open
+	txTaken                    // removed and returned
+)
+
+// take compares state and removes the transaction for id in one step, so a
+// forged callback cannot cancel a pending sign-in and only one callback wins.
+func (s *transactions) take(id, state string) (transaction, txResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	el, ok := s.byID[id]
 	if !ok {
-		return transaction{}, false
+		return transaction{}, txMissing
 	}
-	s.remove(el)
 	tx := el.Value.(*entry).tx
 	if s.expired(tx) {
-		return transaction{}, false
+		s.remove(el)
+		return transaction{}, txMissing
 	}
-	return tx, true
+	if subtle.ConstantTimeCompare([]byte(state), []byte(tx.state)) != 1 {
+		return transaction{}, txMismatch
+	}
+	s.remove(el)
+	return tx, txTaken
 }
 
 func (s *transactions) len() int {

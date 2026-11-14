@@ -42,6 +42,7 @@ type testIdP struct {
 	idToken   string                 // the last issued ID token
 	form      url.Values             // the last token request
 	basicAuth bool                   // the last token request used HTTP basic auth
+	tokenErr  map[string]string      // when set, the token endpoint answers 400 with it
 }
 
 func newTestIdP(t *testing.T, clk *clocktesting.FakeClock) *testIdP {
@@ -62,6 +63,12 @@ func (p *testIdP) serve(w http.ResponseWriter, r *http.Request) {
 		defer p.mu.Unlock()
 		p.form = r.PostForm
 		_, _, p.basicAuth = r.BasicAuth()
+		if p.tokenErr != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(p.tokenErr)
+			return
+		}
 		if r.PostForm.Get("code") != "good-code" || oauth2.S256ChallengeFromVerifier(r.PostForm.Get("code_verifier")) != p.challenge {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
@@ -165,8 +172,14 @@ func newFlowFixture(t *testing.T, secret string) *flowFixture {
 // login starts a sign-in and returns the login cookie and the authorization URL's parameters.
 func (f *flowFixture) login(ret string) (*http.Cookie, url.Values) {
 	f.t.Helper()
+	return f.loginRaw(url.QueryEscape(ret))
+}
+
+// loginRaw is login with the return parameter as written in the query string.
+func (f *flowFixture) loginRaw(rawReturn string) (*http.Cookie, url.Values) {
+	f.t.Helper()
 	rec := httptest.NewRecorder()
-	f.flow.Login(rec, httptest.NewRequest("GET", "/auth/login?return="+url.QueryEscape(ret), nil))
+	f.flow.Login(rec, httptest.NewRequest("GET", "/auth/login?return="+rawReturn, nil))
 	if rec.Code != http.StatusFound {
 		f.t.Fatalf("login status %d", rec.Code)
 	}
@@ -287,6 +300,7 @@ func TestCallbackSuccess(t *testing.T) {
 	if len(f.audit.recs) != 0 {
 		t.Errorf("audit records = %+v; success is the completer's", f.audit.recs)
 	}
+	assertNoTokens(t, f, rec)
 }
 
 // A public client sends client_id in the form; a confidential one uses basic auth.
@@ -321,11 +335,6 @@ func TestCallbackFailures(t *testing.T) {
 		"wrong state": {func(f *flowFixture) *httptest.ResponseRecorder {
 			ck, _ := f.login("/")
 			return f.callback(ck, url.Values{"code": {"good-code"}, "state": {"other"}})
-		}, "invalid"},
-		"wrong state consumes the transaction": {func(f *flowFixture) *httptest.ResponseRecorder {
-			ck, q := f.login("/")
-			f.callback(ck, url.Values{"code": {"good-code"}, "state": {"other"}})
-			return f.callback(ck, url.Values{"code": {"good-code"}, "state": {q.Get("state")}})
 		}, "invalid"},
 		"no cookie": {func(f *flowFixture) *httptest.ResponseRecorder {
 			_, q := f.login("/")
@@ -445,6 +454,12 @@ func TestSafeReturnPath(t *testing.T) {
 		"/\t/evil":                      "/",
 		"/\n/evil":                      "/",
 		"/a\x7f":                        "/",
+		`/a/../\evil.example`:           "/",
+		`/./\evil`:                      "/",
+		`/a\b`:                          "/",
+		`/a?next=\evil`:                 "/",
+		"/a/..//evil":                   "/evil",
+		"/a/./b/":                       "/a/b/",
 		"relative":                      "/",
 		"/" + strings.Repeat("a", 2048): "/",
 	} {
@@ -480,5 +495,98 @@ func TestLoginBeforeDiscovery(t *testing.T) {
 	flow.Login(rec, httptest.NewRequest("GET", "/auth/login", nil))
 	if rec.Code != http.StatusServiceUnavailable || len(rec.Result().Cookies()) != 0 {
 		t.Fatalf("login before discovery = %d, cookies %v", rec.Code, rec.Result().Cookies())
+	}
+}
+
+// Return paths given URL-encoded in the login query; the callback redirects to the normalized safe path.
+func TestCallbackOpenRedirectEncoded(t *testing.T) {
+	long := "/routes/" + strings.Repeat("ns-name/", 200) + "detail?kind=HTTPRoute&ns=a"
+	for raw, want := range map[string]string{
+		"%2Fa%2F..%2F%5Cevil.example": "/",
+		"/%5Cevil":                    "/",
+		"/./%5Cevil":                  "/",
+		"/a/..//evil":                 "/evil",
+		"/%09/evil":                   "/",
+		"/%0A/evil":                   "/",
+		"/%0D/evil":                   "/",
+		url.QueryEscape(long):         long,
+	} {
+		t.Run(raw[:min(len(raw), 40)], func(t *testing.T) {
+			f := newFlowFixture(t, "")
+			ck, q := f.loginRaw(raw)
+			rec := f.callback(ck, url.Values{"code": {"good-code"}, "state": {q.Get("state")}})
+			loc := rec.Header().Get("Location")
+			if loc != want || strings.HasPrefix(loc, "//") || strings.Contains(loc, `\`) {
+				t.Fatalf("return %q led to %q, want %q", raw, loc, want)
+			}
+		})
+	}
+}
+
+// A callback with the wrong state leaves the pending sign-in and its cookie intact.
+func TestCallbackWrongStateKeepsTransaction(t *testing.T) {
+	f := newFlowFixture(t, "")
+	ck, q := f.login("/x")
+	rec := f.callback(ck, url.Values{"code": {"good-code"}, "state": {"forged"}})
+	f.assertFailed(rec, "invalid")
+	if c := rec.Result().Cookies(); len(c) != 0 {
+		t.Errorf("a state mismatch set cookies %+v", c)
+	}
+	if rec := f.callback(ck, url.Values{"code": {"good-code"}, "state": {q.Get("state")}}); rec.Header().Get("Location") != "/x" {
+		t.Fatalf("the real callback = %q, want /x", rec.Header().Get("Location"))
+	}
+}
+
+// Browser A's cookie with browser B's state is refused, and both sign-ins still complete.
+func TestCallbackCrossedBrowsers(t *testing.T) {
+	f := newFlowFixture(t, "")
+	ckA, qA := f.login("/a")
+	ckB, qB := f.login("/b")
+	f.assertFailed(f.callback(ckA, url.Values{"code": {"good-code"}, "state": {qB.Get("state")}}), "invalid")
+	for _, b := range []struct {
+		ck   *http.Cookie
+		q    url.Values
+		want string
+	}{{ckA, qA, "/a"}, {ckB, qB, "/b"}} {
+		f.idp.mu.Lock()
+		f.idp.challenge, f.idp.nonce = b.q.Get("code_challenge"), b.q.Get("nonce")
+		f.idp.mu.Unlock()
+		if rec := f.callback(b.ck, url.Values{"code": {"good-code"}, "state": {b.q.Get("state")}}); rec.Header().Get("Location") != b.want {
+			t.Errorf("callback for %s = %q", b.want, rec.Header().Get("Location"))
+		}
+	}
+}
+
+// An unexpired ID token with an old iat is accepted: some issuers backdate iat.
+func TestCallbackBackdatedIat(t *testing.T) {
+	f := newFlowFixture(t, "")
+	f.idp.claims = func(c map[string]any) { c["iat"] = f.clk.Now().Add(-10 * time.Minute).Unix() }
+	if rec := f.signIn("/"); rec.Header().Get("Location") != "/" {
+		t.Fatalf("backdated iat: %q", rec.Header().Get("Location"))
+	}
+}
+
+// Token endpoint errors are logged by standard error code only; anything else is "other".
+func TestCallbackExchangeErrorLog(t *testing.T) {
+	const sentinel = "tok-SENTINEL-value"
+	for name, c := range map[string]struct {
+		body map[string]string
+		want string
+	}{
+		"standard code": {map[string]string{"error": "invalid_grant", "error_description": sentinel, "error_uri": "https://x/" + sentinel}, "error=invalid_grant"},
+		"unknown code":  {map[string]string{"error": sentinel, "error_description": sentinel, "error_uri": "https://x/" + sentinel}, "error=other"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFlowFixture(t, "")
+			f.idp.tokenErr = c.body
+			rec := f.signIn("/")
+			f.assertFailed(rec, "invalid")
+			if !strings.Contains(f.logs.String(), c.want) {
+				t.Errorf("log %q lacks %q", f.logs.String(), c.want)
+			}
+			if strings.Contains(f.logs.String(), sentinel) || strings.Contains(rec.Header().Get("Location"), sentinel) {
+				t.Error("the token endpoint's error text reached the log or the browser")
+			}
+		})
 	}
 }

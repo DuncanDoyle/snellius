@@ -18,14 +18,14 @@ func TestTransactionsOneUse(t *testing.T) {
 	if len(id) != 32 {
 		t.Errorf("id %q: want 128 bits as 32 hex characters", id)
 	}
-	tx, ok := s.take(id)
-	if !ok || tx.state != "s" || tx.nonce != "n" || tx.verifier != "v" || tx.returnPath != "/x" {
-		t.Fatalf("take = %+v, %v", tx, ok)
+	tx, res := s.take(id, "s")
+	if res != txTaken || tx.state != "s" || tx.nonce != "n" || tx.verifier != "v" || tx.returnPath != "/x" {
+		t.Fatalf("take = %+v, %v", tx, res)
 	}
-	if _, ok := s.take(id); ok {
+	if _, res := s.take(id, "s"); res != txMissing {
 		t.Fatal("a transaction was taken twice")
 	}
-	if _, ok := s.take("unknown"); ok {
+	if _, res := s.take("unknown", ""); res != txMissing {
 		t.Fatal("an unknown ID was accepted")
 	}
 }
@@ -35,7 +35,7 @@ func TestTransactionsExpire(t *testing.T) {
 	s := newTransactions(clk, 10)
 	id, _ := s.put(transaction{state: "s"})
 	clk.Step(10*time.Minute + time.Second)
-	if _, ok := s.take(id); ok {
+	if _, res := s.take(id, "s"); res != txMissing {
 		t.Fatal("an expired transaction was accepted")
 	}
 	// Expired records are dropped when new ones arrive.
@@ -54,11 +54,11 @@ func TestTransactionsEvictOldest(t *testing.T) {
 		id, _ := s.put(transaction{state: fmt.Sprint(i)})
 		ids = append(ids, id)
 	}
-	if _, ok := s.take(ids[0]); ok {
+	if _, res := s.take(ids[0], "0"); res != txMissing {
 		t.Error("the oldest transaction was not evicted")
 	}
-	for _, id := range ids[1:] {
-		if _, ok := s.take(id); !ok {
+	for i, id := range ids[1:] {
+		if _, res := s.take(id, fmt.Sprint(i+1)); res != txTaken {
 			t.Errorf("transaction %s was evicted", id)
 		}
 	}
@@ -67,20 +67,43 @@ func TestTransactionsEvictOldest(t *testing.T) {
 	}
 }
 
+// Concurrent callbacks for one transaction: exactly one takes it.
 func TestTransactionsConcurrent(t *testing.T) {
 	s := newTransactions(clocktesting.NewFakeClock(time.Now()), 100)
+	id, _ := s.put(transaction{state: "s"})
 	var wg sync.WaitGroup
-	for range 8 {
+	var mu sync.Mutex
+	wins := 0
+	for i := range 16 {
 		wg.Go(func() {
-			for range 200 {
-				id, err := s.put(transaction{state: "s"})
-				if err != nil {
-					t.Error(err)
-					return
-				}
-				s.take(id)
+			state := "s"
+			if i%2 == 1 {
+				state = "forged"
+			}
+			if _, res := s.take(id, state); res == txTaken {
+				mu.Lock()
+				wins++
+				mu.Unlock()
 			}
 		})
 	}
 	wg.Wait()
+	if wins != 1 {
+		t.Fatalf("%d callbacks took one transaction, want exactly 1", wins)
+	}
+}
+
+// A state mismatch leaves the transaction open; the right state then takes it.
+func TestTransactionsStateMismatch(t *testing.T) {
+	s := newTransactions(clocktesting.NewFakeClock(time.Now()), 10)
+	id, _ := s.put(transaction{state: "s", returnPath: "/x"})
+	if _, res := s.take(id, "forged"); res != txMismatch {
+		t.Fatalf("forged state = %v, want a mismatch", res)
+	}
+	if tx, res := s.take(id, "s"); res != txTaken || tx.returnPath != "/x" {
+		t.Fatalf("real state = %+v, %v", tx, res)
+	}
+	if _, res := s.take(id, "s"); res != txMissing {
+		t.Fatalf("second take = %v, want missing", res)
+	}
 }

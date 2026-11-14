@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -180,21 +181,23 @@ func (f *Flow) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	http.SetCookie(w, f.cookie("", -1))
+	q := r.URL.Query()
 	var tx transaction
-	ok := false
+	res := txMissing
 	if c, err := r.Cookie(loginCookie); err == nil {
-		tx, ok = f.tx.take(c.Value)
+		tx, res = f.tx.take(c.Value, q.Get("state"))
 	}
-	if !ok {
+	switch res {
+	case txMismatch:
+		// The cookie and transaction stay, so a forged callback cannot cancel a pending sign-in.
+		f.fail(w, r, ReasonInvalid, "state mismatch")
+		return
+	case txMissing:
+		http.SetCookie(w, f.cookie("", -1))
 		f.fail(w, r, ReasonInvalid, "no open login transaction")
 		return
 	}
-	q := r.URL.Query()
-	if subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(tx.state)) != 1 {
-		f.fail(w, r, ReasonInvalid, "state mismatch")
-		return
-	}
+	http.SetCookie(w, f.cookie("", -1))
 	if q.Get("error") != "" || q.Get("code") == "" {
 		f.fail(w, r, ReasonInvalid, "the issuer returned no code")
 		return
@@ -233,13 +236,21 @@ func (f *Flow) Callback(w http.ResponseWriter, r *http.Request) {
 		AccessToken: tok.AccessToken, RefreshToken: tok.RefreshToken, ReturnPath: safeReturnPath(tx.returnPath)})
 }
 
-// exchangeAttrs describes a code-exchange failure by status and error code only, never the response body.
+// oauthErrors are the RFC 6749 §5.2 token error codes; any other value is logged as "other".
+var oauthErrors = []string{"invalid_request", "invalid_client", "invalid_grant", "unauthorized_client", "unsupported_grant_type",
+	"invalid_scope", "server_error", "temporarily_unavailable"}
+
+// exchangeAttrs describes a code-exchange failure by status and a standard error code only, never issuer text.
 func exchangeAttrs(err error) []any {
 	var re *oauth2.RetrieveError
-	if errors.As(err, &re) && re.Response != nil {
-		return []any{"status", re.Response.StatusCode, "error", re.ErrorCode}
+	if !errors.As(err, &re) || re.Response == nil {
+		return nil
 	}
-	return nil
+	code := "other"
+	if slices.Contains(oauthErrors, re.ErrorCode) {
+		code = re.ErrorCode
+	}
+	return []any{"status", re.Response.StatusCode, "error", code}
 }
 
 // fail audits a failed sign-in and redirects to /signin-failed. step is a fixed description, never a token.
@@ -320,6 +331,7 @@ func (f *Flow) checkClaims(raw, nonce string) (*idClaims, error) {
 		return nil, errors.New("has no exp or iat")
 	case now.After(unix(*c.Exp).Add(clockSkew)):
 		return nil, errors.New("has expired")
+	// iat has no lower bound: some issuers backdate it, and exp bounds the token's age.
 	case unix(*c.Iat).After(now.Add(clockSkew)):
 		return nil, errors.New("iat is in the future")
 	case subtle.ConstantTimeCompare([]byte(c.Nonce), []byte(nonce)) != 1:
@@ -330,9 +342,10 @@ func (f *Flow) checkClaims(raw, nonce string) (*idClaims, error) {
 
 func unix(s float64) time.Time { return time.Unix(int64(s), 0) }
 
-// safeReturnPath returns p when it is a same-origin relative path, else "/".
+// safeReturnPath returns p, normalized as http.Redirect would, when it is a
+// same-origin relative path; else "/". Browsers read a backslash as a slash, so any is refused.
 func safeReturnPath(p string) string {
-	if len(p) > maxReturnPath || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.HasPrefix(p, `/\`) {
+	if len(p) > maxReturnPath || !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.Contains(p, `\`) {
 		return "/"
 	}
 	for _, c := range p {
@@ -340,10 +353,28 @@ func safeReturnPath(p string) string {
 			return "/"
 		}
 	}
+	p = cleanRedirectPath(p)
+	if strings.HasPrefix(p, "//") {
+		return "/"
+	}
 	if u, err := url.Parse(p); err != nil || u.Scheme != "" || u.Host != "" {
 		return "/"
 	}
 	return p
+}
+
+// cleanRedirectPath cleans the path before any query, keeping a trailing slash, as http.Redirect does.
+func cleanRedirectPath(p string) string {
+	var query string
+	if i := strings.Index(p, "?"); i != -1 {
+		p, query = p[:i], p[i:]
+	}
+	trailing := strings.HasSuffix(p, "/")
+	p = path.Clean(p)
+	if trailing && !strings.HasSuffix(p, "/") {
+		p += "/"
+	}
+	return p + query
 }
 
 // random returns 256 random bits, base64url encoded.
