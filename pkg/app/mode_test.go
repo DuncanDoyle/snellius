@@ -1,12 +1,15 @@
 package app
 
 import (
+	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
+	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/extension"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
@@ -64,6 +67,30 @@ func TestSecureModeWiresDenyAll(t *testing.T) {
 		}
 		if got := a.authz.Authorize(httptest.NewRequest("GET", "/", nil), objects.Ref{}); got != wantAllow {
 			t.Errorf("%s: authoriser allows %v, want %v", mode, got, wantAllow)
+		}
+	}
+}
+
+// Secure mode replaces either concrete AllowAll with DenyAll and keeps a custom authoriser.
+func TestSecureModeReplacesAllowAllForms(t *testing.T) {
+	dyn, kube := testutil.Clients(t)
+	custom := api.AuthorizerFunc(func(*http.Request, objects.Ref) bool { return true })
+	for name, c := range map[string]struct {
+		authz api.Authorizer
+		want  string
+	}{
+		"value":   {api.AllowAll{}, "api.DenyAll"},
+		"pointer": {&api.AllowAll{}, "api.DenyAll"},
+		"custom":  {custom, "api.AuthorizerFunc"},
+	} {
+		a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}},
+			Options{AuthMode: ModeSecure, PollInterval: 10 * time.Millisecond, MetricsInterval: time.Hour, UI: ui, AuditOut: io.Discard},
+			extension.New(extension.WithAuthorizer(c.authz)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fmt.Sprintf("%T", a.authz); got != c.want {
+			t.Errorf("%s: secure-mode authoriser is %s, want %s", name, got, c.want)
 		}
 	}
 }

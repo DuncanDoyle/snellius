@@ -3,8 +3,10 @@ package app
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -122,5 +124,84 @@ func TestServeWritesRecordsFromDrainingRequests(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"action":"drained"`) {
 		t.Fatalf("drained record lost: %q", out.String())
+	}
+}
+
+// Local mode logs one port-forward exposure warning with the bind address; secure mode none.
+func TestServeWarnsAboutLocalModeExposure(t *testing.T) {
+	for mode, want := range map[string]int{ModeLocal: 1, ModeSecure: 0} {
+		t.Run(mode, func(t *testing.T) {
+			logs := &lockedBuf{}
+			old := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(old) })
+			a, _, err := buildAudit(t, Options{AuthMode: mode})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			ls, served := startServe(t, a, ctx)
+			cancel()
+			if err := testutil.Recv(t, served, "serve to return"); err != nil {
+				t.Fatal(err)
+			}
+			var warns []string
+			for _, l := range strings.Split(logs.String(), "\n") {
+				if strings.Contains(l, "level=WARN") && strings.Contains(l, "port-forward") {
+					warns = append(warns, l)
+				}
+			}
+			if len(warns) != want {
+				t.Fatalf("%d port-forward warnings, want %d:\n%s", len(warns), want, logs.String())
+			}
+			if want == 1 && (!strings.Contains(warns[0], "sees everything it reads") || !strings.Contains(warns[0], "addr="+ls.main.Addr().String())) {
+				t.Fatalf("warning lacks the exposure or bind address: %s", warns[0])
+			}
+		})
+	}
+}
+
+// A request still running when the drain times out is cut off, and its later
+// audit record is counted as dropped rather than queued for a stopped writer.
+func TestServeDrainTimeoutDropsLateRecords(t *testing.T) {
+	old := drainTimeout
+	drainTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { drainTimeout = old })
+	a, out, err := buildAudit(t, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, release, emitted := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	a.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		a.Audit.Emit(r.Context(), audit.Record{Level: audit.LevelSecurity, Action: "late"})
+		close(emitted)
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ls, served := startServe(t, a, ctx)
+	clientErr := make(chan error, 1)
+	go func() {
+		r, err := http.Get("http://" + ls.main.Addr().String() + "/")
+		if err == nil {
+			_ = r.Body.Close()
+		}
+		clientErr <- err
+	}()
+	testutil.Recv(t, started, "request to start")
+	cancel()
+	if err := testutil.Recv(t, served, "serve to return after the drain timeout"); err != nil {
+		t.Fatal(err)
+	}
+	if err := testutil.Recv(t, clientErr, "the cut-off request to end"); err == nil {
+		t.Fatal("the request running past the drain timeout must be cut off")
+	}
+	close(release)
+	testutil.Recv(t, emitted, "the late emit to return")
+	rec := httptest.NewRecorder()
+	a.Metrics.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), `snellius_audit_dropped_total{level="security"} 1`) || strings.Contains(out.String(), `"action":"late"`) {
+		t.Fatalf("late record not dropped:\n%s\naudit: %s", rec.Body.String(), out.String())
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/audit"
@@ -67,3 +68,16 @@ func (a *App) mode() string {
 func podHostIPs() (podIP, hostIP string) {
 	return os.Getenv("POD_IP"), os.Getenv("HOST_IP")
 }
+
+// noAuthorizer reports whether a is unset or either form of api.AllowAll,
+// the registry default that secure mode never serves with.
+func noAuthorizer(a api.Authorizer) bool {
+	switch a.(type) {
+	case nil, api.AllowAll, *api.AllowAll:
+		return true
+	}
+	return false
+}
+
+// drainTimeout bounds how long serve waits for in-flight requests at shutdown.
+var drainTimeout = 5 * time.Second

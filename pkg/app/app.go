@@ -322,9 +322,8 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		}
 		scoped = endpoints.Bounded(cache.NewScopedReader(c.Kube, clk), endpoints.DefaultBounds, clk)
 	}
-	// The registry defaults to AllowAll; secure mode never serves with it.
 	authz := reg.Authorizer
-	if _, isAll := authz.(api.AllowAll); o.AuthMode == ModeSecure && (authz == nil || isAll) {
+	if o.AuthMode == ModeSecure && noAuthorizer(authz) {
 		authz = api.DenyAll{}
 	}
 	hopts := []api.HandlerOption{api.WithExtMounts(mounts...), api.WithCoreCapabilities(core), api.WithCapabilitySources(reg.CapabilityStates),
@@ -422,9 +421,9 @@ func RunWith(ctx context.Context, kubeconfig string, o Options, reg *extension.R
 
 // serve listens on addr (the UI and API) and probeAddr (probes and metrics),
 // starts a and serves both until ctx is done, then drains in-flight requests
-// for up to 5 s. Either listener failing to bind or either server failing stops
-// both. Everything it started is cancelled when it returns; onListen, if set,
-// receives the bound listeners.
+// for up to drainTimeout, then closes what is left. Either listener failing to
+// bind or either server failing stops both. Everything it started is cancelled
+// when it returns; onListen, if set, receives the bound listeners.
 func serve(ctx context.Context, a *App, addr, probeAddr string, onListen func(main, probe net.Listener)) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -444,6 +443,9 @@ func serve(ctx context.Context, a *App, addr, probeAddr string, onListen func(ma
 	go func() { a.Audit.Run(auditCtx); close(auditDone) }()
 	defer func() { stopAudit(); <-auditDone }()
 	a.Audit.Emit(ctx, audit.Record{Level: audit.LevelSecurity, Action: "startup", Outcome: "success", Mode: a.mode(), Listen: addr})
+	if a.mode() == ModeLocal {
+		slog.Warn("local mode: anyone who can port-forward to Snellius sees everything it reads", "addr", ln.Addr().String())
+	}
 	probe := a.probe
 	if probe == nil {
 		probe = api.ProbeHandler(api.ModelReady(a.Engine), a.Metrics)
@@ -456,14 +458,18 @@ func serve(ctx context.Context, a *App, addr, probeAddr string, onListen func(ma
 	go func() { //nolint:gosec // shutdown must outlive the cancelled serve context
 		defer close(drained)
 		<-ctx.Done()
-		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
+		sctx, scancel := context.WithTimeout(context.Background(), drainTimeout)
 		defer scancel()
 		var wg sync.WaitGroup
 		for _, s := range srvs {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_ = s.Shutdown(sctx)
+				// Past the drain timeout, close the connections still open.
+				if err := s.Shutdown(sctx); err != nil {
+					slog.Warn("drain timed out; closing open connections", "err", err)
+					_ = s.Close()
+				}
 			}()
 		}
 		wg.Wait()
