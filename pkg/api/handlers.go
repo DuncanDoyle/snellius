@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"io/fs"
 	"net/http"
@@ -82,7 +83,7 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 	mountExts(mux, cfg.ext)
 	// Unknown /api/ paths, extension ones included, get a JSON 404, never the SPA.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { writeErr(w, http.StatusNotFound, "not found") })
-	mux.Handle("/", spa(ui))
+	mux.Handle("/", spa(ui, authMode(cfg.secure)))
 	if cfg.secure && !cfg.complete {
 		return secureGate(mux)
 	}
@@ -176,10 +177,7 @@ func synced(m *engine.Model) bool { return m != nil && m.Snapshot != nil && m.Sn
 func (h *handler) meta(w http.ResponseWriter, _ *http.Request) {
 	m, plat := h.current(), h.src.Platform()
 	resp := MetaResponse{Version: version.Version, Platform: plat.Name, Capabilities: append([]string{}, plat.Capabilities...), Kinds: []kinds.Served{},
-		Packs: append([]string{}, h.packs...), AuthMode: "local"}
-	if h.secure {
-		resp.AuthMode = "secure"
-	}
+		Packs: append([]string{}, h.packs...), AuthMode: authMode(h.secure)}
 	if m != nil {
 		resp.Pinned, resp.Synced = m.Pinned, synced(m)
 		for _, k := range m.Served {
@@ -466,9 +464,18 @@ func deploymentObject(d *appsv1.Deployment) map[string]any {
 	return clean(obj)
 }
 
+// authMode is the /meta authMode for a handler built with or without WithSecureMode.
+func authMode(secure bool) string {
+	if secure {
+		return "secure"
+	}
+	return "local"
+}
+
 // spa serves static files and falls back to index.html for client-side
-// routes; directories are never listed.
-func spa(ui fs.FS) http.Handler {
+// routes; directories are never listed. The fallback stamps the auth mode on <html>,
+// so the UI can show the mode on first paint without waiting for /meta.
+func spa(ui fs.FS, mode string) http.Handler {
 	files := http.FileServerFS(ui)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/")
@@ -483,6 +490,7 @@ func spa(ui fs.FS) http.Handler {
 			http.Error(w, "UI not built", http.StatusNotFound)
 			return
 		}
+		b = bytes.Replace(b, []byte("<html "), []byte(`<html data-auth-mode="`+mode+`" `), 1)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(b)
 	})

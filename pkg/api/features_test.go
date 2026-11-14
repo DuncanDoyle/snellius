@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -145,5 +146,21 @@ func TestMetaAuthMode(t *testing.T) {
 	_, secure, _ := startWith(t, setup{opts: []HandlerOption{WithSecureMode(true)}}, world()...)
 	if got := get[MetaResponse](t, secure, "/api/v1/meta", 200).AuthMode; got != "secure" {
 		t.Errorf("authMode %q, want secure", got)
+	}
+}
+
+// The SPA fallback stamps the auth mode on <html>, so the UI can show it before /meta loads.
+func TestIndexStampsAuthMode(t *testing.T) {
+	ui := fstest.MapFS{"index.html": {Data: []byte(`<!doctype html><html lang="en"><head></head></html>`)}}
+	for _, tc := range []struct {
+		opts []HandlerOption
+		want string
+	}{{nil, "local"}, {[]HandlerOption{WithSecureMode(false)}, "secure"}} {
+		srv := httptest.NewServer(NewHandler(staticModel{}, ui, nil, tc.opts...))
+		_, body := gateGet(t, srv.URL+"/i/some-route")
+		srv.Close()
+		if want := `<html data-auth-mode="` + tc.want + `" lang="en">`; !strings.Contains(body, want) {
+			t.Errorf("%s: index is %q, want %q", tc.want, body, want)
+		}
 	}
 }

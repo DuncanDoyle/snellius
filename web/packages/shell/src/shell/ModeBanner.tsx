@@ -23,10 +23,16 @@ const Banner = styled.div`
 `;
 
 // region Component
-/** Warns on every page that the server runs without sign-in; it never dismisses and renders once /meta says local. */
+/** The mode the server stamped on <html> in index.html; absent under the dev server. */
+const stampedMode = () => document.documentElement.dataset.authMode;
+
+/**
+ * Warns on every page that the server runs without sign-in; it never dismisses. The stamped mode shows it on
+ * first paint, so nothing shifts; without a stamp it waits for /meta.
+ */
 export function ModeBanner() {
   const { data: meta } = useMeta();
-  if (meta?.authMode !== "local") return null;
+  if ((stampedMode() ?? meta?.authMode) !== "local") return null;
   return (
     <Banner role="note" data-testid="mode-banner">
       <TriangleAlert size={16} aria-hidden="true" />
