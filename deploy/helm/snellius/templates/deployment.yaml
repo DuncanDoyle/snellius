@@ -19,6 +19,15 @@ spec:
         sidecar.istio.io/inject: "false"
       {{- end }}
     spec:
+      {{- include "snellius.requireOIDC" . }}
+      {{- $secure := eq (include "snellius.authMode" .) "secure" }}
+      {{- $secretName := include "snellius.secretRef" (dict "root" . "name" "clientSecret" "field" "existingSecret") }}
+      {{- $secretKey := include "snellius.secretRef" (dict "root" . "name" "clientSecret" "field" "key") | default "client-secret" }}
+      {{- $caName := include "snellius.secretRef" (dict "root" . "name" "ca" "field" "existingConfigMap") }}
+      {{- $caKey := include "snellius.secretRef" (dict "root" . "name" "ca" "field" "key") | default "ca.pem" }}
+      {{- with .Values.hostAliases }}
+      hostAliases: {{- toYaml . | nindent 8 }}
+      {{- end }}
       serviceAccountName: {{ include "snellius.sa" . }}
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -33,6 +42,32 @@ spec:
             - --allowed-hosts={{ . }}
             {{- end }}
             - --audit-levels={{ include "snellius.auditLevels" . }}
+            {{- if $secure }}
+            - --oidc-issuer-url={{ include "snellius.oidcValue" (dict "root" . "key" "issuerURL") }}
+            - --oidc-client-id={{ include "snellius.oidcValue" (dict "root" . "key" "clientID") }}
+            - --oidc-redirect-url={{ include "snellius.oidcValue" (dict "root" . "key" "redirectURL") }}
+            {{- with include "snellius.oidcScopes" . }}
+            - --oidc-scopes={{ . }}
+            {{- end }}
+            {{- if $secretName }}
+            - --oidc-client-secret-file=/etc/snellius/oidc/client-secret
+            {{- end }}
+            {{- if $caName }}
+            - --oidc-ca-file=/etc/snellius/oidc/ca.pem
+            {{- end }}
+            {{- with include "snellius.sessionValue" (dict "root" . "key" "idle") }}
+            - --session-idle={{ . }}
+            {{- end }}
+            {{- with include "snellius.sessionValue" (dict "root" . "key" "absolute") }}
+            - --session-absolute={{ . }}
+            {{- end }}
+            {{- if eq (include "snellius.cookieSecure" .) "false" }}
+            - --cookie-secure=false
+            {{- end }}
+            {{- with include "snellius.trustedProxyCIDRs" . }}
+            - --trusted-proxy-cidrs={{ . }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.install.pin }}
             - --install={{ . }}
             {{- end }}
@@ -88,12 +123,38 @@ spec:
           livenessProbe: { httpGet: { path: /healthz, port: probe }, periodSeconds: 10 }
           resources: {{- toYaml .Values.resources | nindent 12 }}
           securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
-          {{- with .Values.extraVolumeMounts }}
-          volumeMounts: {{- toYaml . | nindent 12 }}
+          {{- if or .Values.extraVolumeMounts (and $secure (or $secretName $caName)) }}
+          volumeMounts:
+            {{- if and $secure $secretName }}
+            - { name: oidc-client-secret, mountPath: /etc/snellius/oidc/client-secret, subPath: client-secret, readOnly: true }
+            {{- end }}
+            {{- if and $secure $caName }}
+            - { name: oidc-ca, mountPath: /etc/snellius/oidc/ca.pem, subPath: ca.pem, readOnly: true }
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
         {{- with .Values.extraContainers }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.extraVolumes }}
-      volumes: {{- toYaml . | nindent 8 }}
+      {{- if or .Values.extraVolumes (and $secure (or $secretName $caName)) }}
+      volumes:
+        {{- if and $secure $secretName }}
+        - name: oidc-client-secret
+          secret:
+            secretName: {{ $secretName }}
+            items:
+              - { key: {{ $secretKey }}, path: client-secret }
+        {{- end }}
+        {{- if and $secure $caName }}
+        - name: oidc-ca
+          configMap:
+            name: {{ $caName }}
+            items:
+              - { key: {{ $caKey }}, path: ca.pem }
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}

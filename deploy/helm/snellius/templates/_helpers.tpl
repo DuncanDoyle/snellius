@@ -25,3 +25,36 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "snellius.auditLevels" -}}
 {{ join "," (dig "levels" (list "security" "agent" "reads" "summaries") (.Values.audit | default dict)) }}
 {{- end }}
+{{/* Nil-safe reads of the secure-mode values; an older release has none of them. */}}
+{{- define "snellius.oidcValue" -}}
+{{- $oidc := dig "oidc" (dict) (.root.Values.auth | default dict) -}}
+{{ dig .key "" $oidc }}
+{{- end }}
+{{- define "snellius.oidcScopes" -}}
+{{ join "," (dig "scopes" (list) (dig "oidc" (dict) (.Values.auth | default dict))) }}
+{{- end }}
+{{- define "snellius.sessionValue" -}}
+{{- $s := dig "session" (dict) (.root.Values.auth | default dict) -}}
+{{ dig .key "" $s }}
+{{- end }}
+{{- define "snellius.cookieSecure" -}}
+{{ dig "cookieSecure" true (dig "session" (dict) (.Values.auth | default dict)) }}
+{{- end }}
+{{- define "snellius.trustedProxyCIDRs" -}}
+{{ join "," (dig "trustedProxyCIDRs" (list) (.Values.auth | default dict)) }}
+{{- end }}
+{{- define "snellius.secretRef" -}}
+{{- $oidc := dig "oidc" (dict) (.root.Values.auth | default dict) -}}
+{{- $ref := dig .name (dict) $oidc -}}
+{{ dig .field "" $ref }}
+{{- end }}
+{{/* Secure mode needs the issuer, client ID and redirect URL. */}}
+{{- define "snellius.requireOIDC" -}}
+{{- if eq (include "snellius.authMode" .) "secure" -}}
+{{- range $k := list "issuerURL" "clientID" "redirectURL" -}}
+{{- if not (include "snellius.oidcValue" (dict "root" $ "key" $k)) -}}
+{{- fail (printf "auth.oidc.%s is required when auth.mode is secure" $k) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}

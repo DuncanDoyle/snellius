@@ -8,7 +8,19 @@ Open it with:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "snellius.fullname" . }} 8080:80
 then browse to http://localhost:8080
 {{- else }}
-Snellius runs in secure mode. The sign-in values arrive in a later release step.
+Snellius runs in secure mode.
+{{- $redirect := include "snellius.oidcValue" (dict "root" . "key" "redirectURL") }}
+{{- $u := urlParse $redirect }}
+
+At the identity provider, register:
+  Redirect URL:             {{ $redirect }}
+  Post-logout redirect URI: {{ $u.scheme }}://{{ $u.host }}/
+
+The Kubernetes API server must accept tokens for client ID "{{ include "snellius.oidcValue" (dict "root" . "key" "clientID") }}".
+Either use the same client ID as the cluster, or add it as an extra audience
+in the API server's structured authentication configuration.
+Check that the cluster accepts your token with:
+  kubectl auth whoami
 {{- if .Values.httpRoute.enabled }}
 It is exposed through an HTTPRoute.
 {{- end }}

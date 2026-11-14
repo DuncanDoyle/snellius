@@ -290,8 +290,8 @@ func TestHTTPRouteIsOptIn(t *testing.T) {
 	if n := len(kind(render(t), "HTTPRoute")); n != 0 {
 		t.Fatalf("HTTPRoute must be off by default, got %d", n)
 	}
-	docs := render(t, "--set", "auth.mode=secure", "--set", "httpRoute.enabled=true", "--set", "httpRoute.parentRefs[0].name=edge",
-		"--set", "httpRoute.parentRefs[0].namespace=infra", "--set", "httpRoute.hostnames[0]=ui.example.com")
+	docs := render(t, append(secureSet, "--set", "httpRoute.enabled=true", "--set", "httpRoute.parentRefs[0].name=edge",
+		"--set", "httpRoute.parentRefs[0].namespace=infra", "--set", "httpRoute.hostnames[0]=ui.example.com")...)
 	routes := kind(docs, "HTTPRoute")
 	if len(routes) != 1 {
 		t.Fatalf("want HTTPRoute when enabled, got %d", len(routes))
@@ -306,7 +306,7 @@ func TestHTTPRouteIsOptIn(t *testing.T) {
 
 func TestHTTPRouteRequiresParentRefs(t *testing.T) {
 	render(t) // skips without helm
-	out, err := exec.Command("helm", "template", "ui", "./snellius", "-n", "snellius", "--set", "auth.mode=secure", "--set", "httpRoute.enabled=true").CombinedOutput()
+	out, err := exec.Command("helm", append([]string{"template", "ui", "./snellius", "-n", "snellius"}, append(secureSet, "--set", "httpRoute.enabled=true")...)...).CombinedOutput()
 	if err == nil {
 		t.Fatalf("want render failure without parentRefs, got:\n%s", out)
 	}
@@ -600,9 +600,11 @@ func TestLocalModeRefusesHTTPRoute(t *testing.T) {
 }
 
 func TestSecureModeArgs(t *testing.T) {
-	got := containerArgs(t, "--set", "auth.mode=secure", "--set", "extraArgs={--poll-interval=10m}")
+	got := containerArgs(t, append(secureSet, "--set", "extraArgs={--poll-interval=10m}")...)
 	want := []string{"--listen=:8080", "--probe-listen=:8081", "--auth-mode=secure",
-		"--audit-levels=security,agent,reads,summaries", "--poll-interval=10m"}
+		"--audit-levels=security,agent,reads,summaries",
+		"--oidc-issuer-url=https://idp.example.com", "--oidc-client-id=snellius",
+		"--oidc-redirect-url=https://ui.example.com/auth/callback", "--poll-interval=10m"}
 	if !slices.Equal(got, want) {
 		t.Errorf("args = %v, want %v", got, want)
 	}
@@ -618,7 +620,7 @@ func TestMeshOptOutInLocalMode(t *testing.T) {
 	if _, ok := d.Spec.Selector.MatchLabels["istio.io/dataplane-mode"]; ok {
 		t.Errorf("selector must not carry the mesh label: %v", d.Spec.Selector.MatchLabels)
 	}
-	s := deployment(t, "--set", "auth.mode=secure").Spec.Template.ObjectMeta
+	s := deployment(t, secureSet...).Spec.Template.ObjectMeta
 	if _, ok := s.Annotations["sidecar.istio.io/inject"]; ok {
 		t.Errorf("secure mode must not opt out: %v", s.Annotations)
 	}
@@ -640,6 +642,170 @@ func TestValuesWiredToFlags(t *testing.T) {
 // --reuse-values from an older release has no auth or audit keys at all.
 func TestRendersWithoutAuthAndAuditValues(t *testing.T) {
 	got := containerArgs(t, "--set", "auth=null", "--set", "audit=null")
+	if !slices.Equal(got, localBase) {
+		t.Errorf("args = %v, want %v", got, localBase)
+	}
+}
+
+// secureSet is the minimum that renders secure mode.
+var secureSet = []string{"--set", "auth.mode=secure",
+	"--set", "auth.oidc.issuerURL=https://idp.example.com",
+	"--set", "auth.oidc.clientID=snellius",
+	"--set", "auth.oidc.redirectURL=https://ui.example.com/auth/callback"}
+
+func withSecure(extra ...string) []string { return append(slices.Clone(secureSet), extra...) }
+
+func TestSecureModeRendersEveryFlag(t *testing.T) {
+	got := containerArgs(t, withSecure(
+		"--set", "auth.oidc.scopes={openid,email}",
+		"--set", "auth.oidc.clientSecret.existingSecret=idp",
+		"--set", "auth.oidc.ca.existingConfigMap=idp-ca",
+		"--set", "auth.session.idle=15m", "--set", "auth.session.absolute=4h",
+		"--set", "auth.session.cookieSecure=false",
+		"--set", "auth.trustedProxyCIDRs={10.0.0.0/8,192.168.0.0/16}")...)
+	for _, want := range []string{
+		"--oidc-issuer-url=https://idp.example.com", "--oidc-client-id=snellius",
+		"--oidc-redirect-url=https://ui.example.com/auth/callback", "--oidc-scopes=openid,email",
+		"--oidc-client-secret-file=/etc/snellius/oidc/client-secret", "--oidc-ca-file=/etc/snellius/oidc/ca.pem",
+		"--session-idle=15m", "--session-absolute=4h", "--cookie-secure=false",
+		"--trusted-proxy-cidrs=10.0.0.0/8,192.168.0.0/16"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("args lack %q: %v", want, got)
+		}
+	}
+	def := containerArgs(t, secureSet...)
+	for _, a := range def {
+		for _, no := range []string{"--oidc-scopes", "--oidc-client-secret-file", "--oidc-ca-file", "--session-", "--cookie-secure", "--trusted-proxy-cidrs"} {
+			if strings.HasPrefix(a, no) {
+				t.Errorf("unset value rendered %q", a)
+			}
+		}
+	}
+}
+
+func TestLocalModeIgnoresSecureValues(t *testing.T) {
+	got := containerArgs(t, "--set", "auth.oidc.issuerURL=https://idp.example.com", "--set", "auth.session.idle=15m",
+		"--set", "auth.trustedProxyCIDRs={10.0.0.0/8}", "--set", "auth.oidc.clientSecret.existingSecret=idp")
+	if !slices.Equal(got, localBase) {
+		t.Errorf("args = %v, want %v", got, localBase)
+	}
+	if v := deployment(t, "--set", "auth.oidc.clientSecret.existingSecret=idp").Spec.Template.Spec.Volumes; len(v) != 0 {
+		t.Errorf("local mode must not mount the secret: %+v", v)
+	}
+}
+
+func TestOIDCSecretAndCAMounts(t *testing.T) {
+	spec := deployment(t, secureSet...).Spec.Template.Spec
+	if len(spec.Volumes) != 0 || len(spec.Containers[0].VolumeMounts) != 0 {
+		t.Fatalf("no secret or CA set: want no volumes, got %+v %+v", spec.Volumes, spec.Containers[0].VolumeMounts)
+	}
+	spec = deployment(t, withSecure(
+		"--set", "auth.oidc.clientSecret.existingSecret=idp", "--set", "auth.oidc.clientSecret.key=sec",
+		"--set", "auth.oidc.ca.existingConfigMap=idp-ca",
+		"--set-json", `extraVolumes=[{"name":"data","emptyDir":{}}]`,
+		"--set-json", `extraVolumeMounts=[{"name":"data","mountPath":"/data"}]`)...).Spec.Template.Spec
+	mounts := map[string]corev1.VolumeMount{}
+	for _, m := range spec.Containers[0].VolumeMounts {
+		mounts[m.MountPath] = m
+	}
+	if len(mounts) != 3 || mounts["/data"].Name != "data" {
+		t.Fatalf("mounts must join extraVolumeMounts: %+v", spec.Containers[0].VolumeMounts)
+	}
+	sm := mounts["/etc/snellius/oidc/client-secret"]
+	if !sm.ReadOnly || sm.SubPath == "" {
+		t.Errorf("secret mount must be read-only and single-file: %+v", sm)
+	}
+	if !mounts["/etc/snellius/oidc/ca.pem"].ReadOnly {
+		t.Errorf("CA mount must be read-only: %+v", mounts)
+	}
+	vols := map[string]corev1.Volume{}
+	for _, v := range spec.Volumes {
+		vols[v.Name] = v
+	}
+	sv := vols[sm.Name]
+	if sv.Secret == nil || sv.Secret.SecretName != "idp" || len(sv.Secret.Items) != 1 || sv.Secret.Items[0].Key != "sec" {
+		t.Errorf("secret volume = %+v", sv)
+	}
+	cv := vols[mounts["/etc/snellius/oidc/ca.pem"].Name]
+	if cv.ConfigMap == nil || cv.ConfigMap.Name != "idp-ca" || len(cv.ConfigMap.Items) != 1 || cv.ConfigMap.Items[0].Key != "ca.pem" {
+		t.Errorf("CA volume = %+v", cv)
+	}
+	if len(spec.Volumes) != 3 || vols["data"].Name == "" {
+		t.Errorf("volumes must join extraVolumes: %+v", spec.Volumes)
+	}
+}
+
+func TestSecureModeRequiresOIDCValues(t *testing.T) {
+	render(t) // skips without helm
+	for _, name := range []string{"issuerURL", "clientID", "redirectURL"} {
+		var args []string
+		for i := 0; i < len(secureSet); i += 2 {
+			if !strings.Contains(secureSet[i+1], "auth.oidc."+name+"=") {
+				args = append(args, secureSet[i], secureSet[i+1])
+			}
+		}
+		out, err := exec.Command("helm", append([]string{"template", "ui", "./snellius", "-n", "snellius"}, args...)...).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "auth.oidc."+name+" is required") {
+			t.Errorf("%s: want a failure naming the value, got err=%v\n%s", name, err, out)
+		}
+	}
+}
+
+func TestTokenReviewRuleOnlyInSecureMode(t *testing.T) {
+	if grants(clusterRole(t).Rules, "authentication.k8s.io", "tokenreviews", "create") {
+		t.Errorf("local mode must not grant tokenreviews")
+	}
+	cr := clusterRole(t, secureSet...)
+	if !grants(cr.Rules, "authentication.k8s.io", "tokenreviews", "create") {
+		t.Errorf("secure mode must grant tokenreviews create")
+	}
+	for _, r := range cr.Rules {
+		if slices.Contains(r.Resources, "tokenreviews") {
+			if !slices.Equal(r.Verbs, []string{"create"}) || !slices.Equal(r.APIGroups, []string{"authentication.k8s.io"}) {
+				t.Errorf("tokenreviews rule too wide: %+v", r)
+			}
+			continue
+		}
+		for _, v := range r.Verbs {
+			if !slices.Contains([]string{"get", "list", "watch"}, v) {
+				t.Errorf("verb %q outside the tokenreviews rule", v)
+			}
+		}
+		if slices.Contains(r.Resources, "secrets") {
+			t.Errorf("secrets must not be granted")
+		}
+	}
+}
+
+func TestHostAliases(t *testing.T) {
+	for _, args := range [][]string{nil, secureSet} {
+		if h := deployment(t, args...).Spec.Template.Spec.HostAliases; len(h) != 0 {
+			t.Errorf("default hostAliases = %+v", h)
+		}
+		h := deployment(t, append(slices.Clone(args), "--set-json", `hostAliases=[{"ip":"10.1.2.3","hostnames":["idp.example.com"]}]`)...).Spec.Template.Spec.HostAliases
+		if len(h) != 1 || h[0].IP != "10.1.2.3" || h[0].Hostnames[0] != "idp.example.com" {
+			t.Errorf("hostAliases = %+v", h)
+		}
+	}
+}
+
+func TestSecureNotes(t *testing.T) {
+	render(t) // skips without helm
+	out, err := exec.Command("helm", append([]string{"install", "ui", "./snellius", "-n", "snellius", "--dry-run=client"}, secureSet...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("helm install --dry-run: %v\n%s", err, out)
+	}
+	notes := string(out[strings.Index(string(out), "NOTES:"):])
+	for _, want := range []string{"https://ui.example.com/auth/callback", "https://ui.example.com/", "client ID \"snellius\"", "kubectl auth whoami"} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("NOTES lack %q:\n%s", want, notes)
+		}
+	}
+}
+
+// --reuse-values from an older release has none of the new keys.
+func TestRendersWithoutOIDCValues(t *testing.T) {
+	got := containerArgs(t, "--set", "auth.oidc=null", "--set", "auth.session=null", "--set", "auth.trustedProxyCIDRs=null", "--set", "hostAliases=null")
 	if !slices.Equal(got, localBase) {
 		t.Errorf("args = %v, want %v", got, localBase)
 	}

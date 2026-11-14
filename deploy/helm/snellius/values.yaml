@@ -39,10 +39,30 @@ extraVolumeMounts: []   # mounts of the UI container
 extraContainers: []
 auth:
   # local: loopback only, reached with kubectl port-forward, no sign-in.
-  # secure: listens on the Pod IP for a gateway route; needs sign-in values (later release step).
+  # secure: listens on the Pod IP for a gateway route; needs auth.oidc.issuerURL, clientID and redirectURL.
   mode: local
   # Host names the UI answers to. Empty uses the binary's default.
   allowedHosts: []
+  # Secure mode only. Users sign in with OIDC and Snellius reads with their own identity.
+  oidc:
+    issuerURL: ""       # required in secure mode, https
+    clientID: ""        # required in secure mode; the API server must accept it as an audience
+    redirectURL: ""     # required in secure mode, https://<host>/auth/callback; register it at the IdP
+    scopes: []          # empty uses the binary's default scopes
+    clientSecret:
+      existingSecret: ""   # Secret holding the client secret, mounted by the kubelet; empty is a public client
+      key: client-secret   # key inside that Secret
+    ca:
+      existingConfigMap: ""   # ConfigMap with a PEM bundle for an IdP behind a private CA
+      key: ca.pem             # key inside that ConfigMap
+  session:
+    idle: ""            # a session ends after this long without a request; empty uses 30m
+    absolute: ""        # a session ends this long after sign-in; empty uses 8h
+    cookieSecure: true  # false only for plain-HTTP testing
+  # CIDRs of proxies whose X-Request-Id and X-Forwarded-For Snellius trusts (secure mode).
+  trustedProxyCIDRs: []
+# Pod hostAliases, for an IdP name that is not in DNS. Passed through unchanged.
+hostAliases: []
 audit:
   # Audit event levels written to the log.
   levels: [security, agent, reads, summaries]
