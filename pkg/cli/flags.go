@@ -26,7 +26,7 @@ func Parse(fs *flag.FlagSet, args []string) (kubeconfig string, o app.Options, e
 	fs.StringVar(&o.OIDC.IssuerURL, "oidc-issuer-url", "", "secure mode: OIDC issuer URL (https)")
 	fs.StringVar(&o.OIDC.ClientID, "oidc-client-id", "", "secure mode: OIDC client ID")
 	fs.StringVar(&o.OIDC.ClientSecretFile, "oidc-client-secret-file", "", "secure mode: file holding the OIDC client secret; empty: public client")
-	fs.StringVar(&o.OIDC.RedirectURL, "oidc-redirect-url", "", "secure mode: OIDC redirect URL, https://<host>/auth/callback")
+	fs.StringVar(&o.OIDC.RedirectURL, "oidc-redirect-url", "", "secure mode: OIDC redirect URL, https://<host>/auth/callback; also register https://<host>/ as the post-logout redirect URI")
 	fs.StringVar(&o.OIDC.CAFile, "oidc-ca-file", "", "secure mode: PEM bundle of extra CAs trusted for the OIDC issuer")
 	cookieSecure := fs.Bool("cookie-secure", true, "secure mode: mark sign-in cookies Secure; false only for plain-HTTP testing")
 	fs.DurationVar(&o.SessionIdle, "session-idle", 30*time.Minute, "secure mode: a session ends after this long without a request")

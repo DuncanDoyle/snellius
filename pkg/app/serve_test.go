@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
+	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/extension"
 )
 
@@ -174,7 +176,8 @@ func TestServeDrainsBoth(t *testing.T) {
 }
 
 // The served secure-mode app answers every API route, extension routes, other
-// methods and encoded paths included, with 503 and never runs extension code.
+// methods and encoded paths included, with 401 without a session and 503 with
+// one, and never runs extension code.
 func TestServedSecureModeGatesTheAPI(t *testing.T) {
 	var calls atomic.Int32
 	count := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { calls.Add(1) })
@@ -200,6 +203,10 @@ func TestServedSecureModeGatesTheAPI(t *testing.T) {
 	}()
 	eventually(t, "an install in the model", func() bool { return len(a.Engine.Installs()) > 0 })
 	addr := ls.main.Addr().String()
+	signIn := httptest.NewRecorder()
+	a.sessions.Complete(signIn, httptest.NewRequest("GET", "/auth/callback", nil), oidc.Result{Identity: oidc.Identity{Username: "u"},
+		Expiry: time.Now().Add(time.Hour), ReturnPath: "/"})
+	session := signIn.Result().Cookies()[0]
 	for _, c := range []struct{ method, path string }{
 		{"GET", "/api/v1/meta"},
 		{"GET", "/api/v1/installs"},
@@ -210,15 +217,22 @@ func TestServedSecureModeGatesTheAPI(t *testing.T) {
 		{"POST", "/api/ext/acme/hi"},
 		{"GET", "/%61pi/ext/acme/hi"},
 	} {
-		req := &http.Request{Method: c.method, URL: &url.URL{Scheme: "http", Host: addr, Opaque: c.path}, Host: addr, Header: http.Header{}}
-		r, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		b, _ := io.ReadAll(r.Body)
-		_ = r.Body.Close()
-		if r.StatusCode != http.StatusServiceUnavailable || strings.TrimSpace(string(b)) != `{"error":"secure-mode-incomplete"}` {
-			t.Errorf("%s %s: %d %.80q", c.method, c.path, r.StatusCode, b)
+		for _, withSession := range []bool{false, true} {
+			req := &http.Request{Method: c.method, URL: &url.URL{Scheme: "http", Host: addr, Opaque: c.path}, Host: addr, Header: http.Header{}}
+			code, want := http.StatusUnauthorized, `{"error":"sign-in-required","login":"/auth/login?return=%2F"}`
+			if withSession {
+				req.AddCookie(session)
+				code, want = http.StatusServiceUnavailable, `{"error":"secure-mode-incomplete"}`
+			}
+			r, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(r.Body)
+			_ = r.Body.Close()
+			if r.StatusCode != code || strings.TrimSpace(string(b)) != want {
+				t.Errorf("%s %s (session %v): %d %.80q", c.method, c.path, withSession, r.StatusCode, b)
+			}
 		}
 	}
 	if n := calls.Load(); n != 0 {

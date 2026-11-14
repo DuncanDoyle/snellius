@@ -29,6 +29,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/audit"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
+	"github.com/DuncanDoyle/snellius/pkg/auth/session"
 	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/collect"
 	"github.com/DuncanDoyle/snellius/pkg/ctrllogs"
@@ -264,6 +265,8 @@ type App struct {
 	oidc    *oidc.Provider
 	oidcErr error
 	flow    *oidc.Flow
+	// sessions holds secure-mode sessions; nil in local mode.
+	sessions *session.Store
 	// discovered is closed after the first model with an install over a settled cache.
 	discovered chan struct{}
 }
@@ -366,10 +369,11 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 	var prov *oidc.Provider
 	var flow *oidc.Flow
 	var oidcErr error
+	var sessions *session.Store
 	if o.AuthMode == ModeSecure {
-		prov, flow, oidcErr = buildSignIn(c.Kube, o, auditLog)
+		sessions, prov, flow, oidcErr = buildSignIn(c.Kube, o, auditLog, metrics)
 	}
-	return &App{Engine: eng, oidc: prov, flow: flow, oidcErr: oidcErr, Handler: h, Metrics: metrics, Audit: auditLog, cfg: cfg, cache: ca, kinds: mon, opts: o, authz: authz, discovered: discovered, reg: reg,
+	return &App{Engine: eng, oidc: prov, flow: flow, oidcErr: oidcErr, sessions: sessions, Handler: h, Metrics: metrics, Audit: auditLog, cfg: cfg, cache: ca, kinds: mon, opts: o, authz: authz, discovered: discovered, reg: reg,
 		packs: extension.NewCore(extension.WithCollectors(packCols...)), collectors: packCols, collected: collected, deps: deps}, nil
 }
 
@@ -383,6 +387,9 @@ func (a *App) Start(ctx context.Context) {
 	a.reg.RunCollectors(ctx, a.deps, a.collected)
 	go a.Engine.Run(ctx, a.opts.PollInterval)
 	go a.kinds.Run(ctx, a.opts.KindsInterval)
+	if a.sessions != nil {
+		go a.sessions.Run(ctx)
+	}
 }
 
 // Run is RunWith over extension.New(opts...): the core plus the kgateway pack.
@@ -570,24 +577,53 @@ func (r *crdRefresher) observe(crds []cache.CRDMeta) {
 	}()
 }
 
-// buildSignIn builds the OIDC provider and sign-in flow; the error means sign-in is not configured.
-func buildSignIn(kube kubernetes.Interface, o Options, auditLog *audit.Logger) (*oidc.Provider, *oidc.Flow, error) {
-	if err := o.OIDC.Validate(); err != nil {
-		return nil, nil, err
-	}
-	clk := clock.Clock(clock.RealClock{})
+// buildSignIn builds the session store, the OIDC provider and the sign-in flow.
+// The store always exists in secure mode; the error means sign-in is not configured.
+func buildSignIn(kube kubernetes.Interface, o Options, auditLog *audit.Logger, metrics *obs.Registry) (*session.Store, *oidc.Provider, *oidc.Flow, error) {
+	clk := clock.WithTicker(clock.RealClock{})
 	if o.Clock != nil {
 		clk = o.Clock
 	}
-	prov, err := oidc.NewProvider(o.OIDC, clk)
-	if err != nil {
-		return nil, nil, err
+	// The store and the flow refer to each other: the flow completes into the store, the store refreshes through the flow.
+	var prov *oidc.Provider
+	var flow *oidc.Flow
+	store := session.New(session.Options{Idle: o.SessionIdle, Absolute: o.SessionAbsolute, Clock: clk, Audit: auditLog, Metrics: metrics,
+		CookieSecure: !o.CookieInsecure, ClientID: o.OIDC.ClientID, RedirectURL: o.OIDC.RedirectURL,
+		Refresher: refresherFunc(func(ctx context.Context, rt string) (oidc.Result, error) {
+			if flow == nil {
+				return oidc.Result{}, errors.New("sign-in is not configured")
+			}
+			return flow.Refresh(ctx, rt)
+		}),
+		EndSession: func() string {
+			if prov == nil {
+				return ""
+			}
+			if eps := prov.Endpoints(); eps != nil {
+				return eps.EndSessionEndpoint
+			}
+			return ""
+		}})
+	if err := o.OIDC.Validate(); err != nil {
+		return store, nil, nil, err
 	}
-	// Until sessions exist, a completed sign-in only redirects to its return path.
-	flow, err := oidc.NewFlow(oidc.FlowOptions{Config: o.OIDC, Provider: prov, Reviewer: oidc.NewKubeReviewer(kube, o.OIDC.ClientID),
-		Completer: oidc.RedirectCompleter{}, Audit: auditLog, Clock: clk, CookieSecure: !o.CookieInsecure})
+	p, err := oidc.NewProvider(o.OIDC, clk)
 	if err != nil {
-		return nil, nil, err
+		return store, nil, nil, err
 	}
-	return prov, flow, nil
+	f, err := oidc.NewFlow(oidc.FlowOptions{Config: o.OIDC, Provider: p, Reviewer: oidc.NewKubeReviewer(kube, o.OIDC.ClientID),
+		Completer: store, Audit: auditLog, Clock: clk, CookieSecure: !o.CookieInsecure})
+	if err != nil {
+		return store, nil, nil, err
+	}
+	prov, flow = p, f
+	return store, prov, flow, nil
+}
+
+// refresherFunc adapts a function to session.Refresher.
+type refresherFunc func(ctx context.Context, refreshToken string) (oidc.Result, error)
+
+// Refresh implements session.Refresher.
+func (f refresherFunc) Refresh(ctx context.Context, refreshToken string) (oidc.Result, error) {
+	return f(ctx, refreshToken)
 }
