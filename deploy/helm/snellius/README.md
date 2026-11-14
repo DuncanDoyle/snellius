@@ -44,7 +44,7 @@ helm install ui ./deploy/helm/snellius -n snellius --create-namespace \
 | `diagnostics.controllerLogsNamespaces` | `[kgateway-system]` | Namespaces that get the `pods/log` Role. Only used when `diagnostics.controllerLogs` is on. |
 | `auth.mode` | `local` | `local` or `secure`. Local mode has no sign-in and listens on loopback only. Secure mode serves data only from `v0.8.0`; `httpRoute.enabled` needs it. |
 | `auth.allowedHosts` | `[]` | Host names accepted in local mode besides `localhost`, `127.0.0.1` and `[::1]`. Passed as `--allowed-hosts`. |
-| `audit.levels` | `security,agent,reads,summaries` | Audit levels written to stdout as JSON lines, passed as `--audit-levels`. |
+| `audit.levels` | `[security, agent, reads, summaries]` | Audit levels written to stdout as JSON lines, passed as `--audit-levels`. |
 | `extraArgs` | `[]` | More flags for the UI binary, appended after the chart's own args, e.g. `--set extraArgs={--poll-interval=10m}`. |
 | `httpRoute.enabled` | `false` | Create an HTTPRoute on an existing Gateway. Needs `auth.mode: secure`. Read [Security and trust model](#security-and-trust-model) first. |
 | `httpRoute.parentRefs` | `[]` | Gateway parentRefs for the route. See [Security and trust model](#security-and-trust-model). |
@@ -63,7 +63,7 @@ helm install ui ./deploy/helm/snellius -n snellius --create-namespace \
 
 ## Probes and metrics
 
-The container has a second port, `probe` (8081), served by `--probe-listen`. Liveness uses `/healthz` and readiness uses `/readyz`; neither lists install IDs. `/metrics` serves Prometheus text: `snellius_auth_mode{mode}`, `snellius_audit_records_total{level}` and `snellius_audit_dropped_total{level}`. The main port serves no probes.
+The container has a second port, `probe` (8081), served by `--probe-listen`. Liveness uses `/healthz` and readiness uses `/readyz`; neither lists install IDs. `/metrics` serves Prometheus text: `snellius_auth_mode{mode}`, `snellius_audit_records_total{level}` and `snellius_audit_dropped_total{level}`. The main port also answers `/healthz` and `/readyz` for compatibility, in local mode behind the Host guard. The chart's probes use the `probe` port. `/metrics` is on the probe listener only.
 
 ## Recompute
 

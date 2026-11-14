@@ -71,7 +71,7 @@ Topics the user-facing documentation must cover when it is written. Each entry s
 
 - **Format.** JSON lines on stdout, each with `"log":"snellius.audit"`. Document the record fields once more than the startup record exists.
 - **Levels.** `--audit-levels` (chart `audit.levels`), default `security,agent,reads,summaries`. Explain what each level records.
-- **Request ID.** Every response carries `X-Request-Id`; say how to match it to audit lines.
+- **Request ID.** Every response from the UI and API listener carries `X-Request-Id` (the probe listener does not); say how to match it to audit lines.
 
 ## Probe port and metrics (2026-11-14, Phase 7 sub-phase 7.1)
 

@@ -25,18 +25,19 @@ Snellius runs in one of two modes. Set it with `--auth-mode` or the chart value 
 **Local mode (the default).** There is no sign-in.
 
 - The UI and API listen on `127.0.0.1:8080` inside the pod. Only `kubectl port-forward`, to the Service or the pod, reaches them.
-- Whoever can port-forward to Snellius (it needs `pods/portforward` in the Snellius namespace) sees everything Snellius can read. That is everything its ServiceAccount can read across the cluster, Deployments included. It can be more than that person's own Kubernetes RBAC allows.
+- Whoever can port-forward to Snellius sees everything Snellius can read. Port-forwarding needs `pods/portforward` in the Snellius namespace.
+- That is everything its ServiceAccount can read across the cluster, Deployments included. It can be more than that person's own Kubernetes RBAC allows.
 - A request whose Host is not `localhost`, `127.0.0.1` or `[::1]` gets 421. Add other names with `auth.allowedHosts` (`--allowed-hosts`). A cross-origin request gets 403.
 - Every page shows the banner "Local mode: no sign-in. Anyone with port-forward access sees everything Snellius can read."
 - The binary refuses a non-loopback `--listen` and a pod on host networking in local mode. The chart refuses `httpRoute.enabled` in local mode.
 
-**Secure mode.** OIDC sign-in, with visibility per user that follows Kubernetes RBAC, arrives with `v0.8.0`. Until then, a build started with `--auth-mode=secure` answers every `/api/` request with 503 `secure-mode-incomplete`. Main is a development build until `v0.8.0`.
+**Secure mode.** OIDC sign-in, with visibility per user that follows Kubernetes RBAC, is available from `v0.8.0`. Before that, a build started with `--auth-mode=secure` answers every `/api/` request with 503 `secure-mode-incomplete`. Main is a development build until `v0.8.0`.
 
 **Both modes.**
 
 - **No Secrets.** The UI never reads Secrets, and its ClusterRole excludes them. No other field is redacted, because a secret can sit in any field, such as an inline token or a literal env var.
 - **Audit stream.** Snellius writes JSON audit lines to stdout, each with `"log":"snellius.audit"`. Select the levels with `--audit-levels` (chart `audit.levels`, default `security,agent,reads,summaries`). Only a startup record exists so far.
-- **Request IDs.** Every response carries an `X-Request-Id`.
+- **Request IDs.** Every response from the UI and API listener carries an `X-Request-Id`. The probe listener does not.
 
 ## Install
 
@@ -49,7 +50,13 @@ helm install ui oci://ghcr.io/duncandoyle/charts/snellius --version 0.7.1 \
 kubectl -n snellius port-forward svc/ui-snellius 8080:80
 ```
 
-The image is `ghcr.io/duncandoyle/snellius`. Installing from a checkout needs `--set image.tag=<version>`; see the [chart README](deploy/helm/snellius/README.md#install). To pin the UI to one install, set `install.pin`. Exposing it through a Gateway needs secure mode (`auth.mode: secure`), which serves data only from `v0.8.0`. Read [Security and trust model](#security-and-trust-model) first. Then set `httpRoute.enabled`, `httpRoute.parentRefs` and `httpRoute.hostnames`. The [chart README](deploy/helm/snellius/README.md) lists every value.
+The image is `ghcr.io/duncandoyle/snellius`. Installing from a checkout needs `--set image.tag=<version>`; see the [chart README](deploy/helm/snellius/README.md#install). To pin the UI to one install, set `install.pin`. To expose it through a Gateway:
+
+1. Read [Security and trust model](#security-and-trust-model). Secure mode serves data only from `v0.8.0`.
+2. Set `auth.mode: secure`.
+3. Set `httpRoute.enabled`, `httpRoute.parentRefs` and `httpRoute.hostnames`.
+
+The [chart README](deploy/helm/snellius/README.md) lists every value.
 
 ## Run locally
 
@@ -65,7 +72,7 @@ Flags:
 
 - `--kubeconfig`: path to a kubeconfig; empty uses in-cluster config, else the default loading rules.
 - `--install`: pin the UI to one install (install ID or `namespace/name`).
-- `--listen`: listen address (default `:8080` in-cluster, `127.0.0.1:8080` locally). Local mode requires a loopback address.
+- `--listen`: listen address (default `127.0.0.1:8080`). Local mode requires a loopback address.
 - `--auth-mode`: `local` (default) or `secure`; see [Security and trust model](#security-and-trust-model).
 - `--allowed-hosts`: extra Host names accepted in local mode.
 - `--probe-listen`: listen address of the probe listener (`/healthz`, `/readyz`, `/metrics`). The chart uses container port `probe` (8081).
@@ -282,9 +289,11 @@ Saved theme choices carry over. Finding codes keep the `KGWUI-` prefix, so API v
 - **Default mode is `local`.** The UI listens on `127.0.0.1:8080` in the pod, so only `kubectl port-forward` reaches it. Upgrades with `--reuse-values` from older releases work.
 - **Probe port.** Liveness and readiness probes use the new `probe` port (8081). `/readyz` no longer lists install IDs; they go to the log.
 - **`/metrics`.** The probe listener serves Prometheus text: `snellius_auth_mode{mode}`, `snellius_audit_records_total{level}` and `snellius_audit_dropped_total{level}`.
-- **Audit stream.** JSON lines on stdout, set with `--audit-levels` (chart `audit.levels`). Every response carries an `X-Request-Id`.
+- **Audit stream.** JSON lines on stdout, set with `--audit-levels` (chart `audit.levels`). Every response from the UI and API listener carries an `X-Request-Id`.
 - **API.** `/api/v1/meta` gains `authMode`. `index.html` carries `data-auth-mode`.
-- **Chart.** New values `auth.mode`, `auth.allowedHosts` and `audit.levels`. In local mode the pod gets the annotation `sidecar.istio.io/inject: "false"` and the label `istio.io/dataplane-mode: none`.
+- **Chart.**
+  - New values `auth.mode`, `auth.allowedHosts` and `audit.levels`.
+  - In local mode the pod gets the annotation `sidecar.istio.io/inject: "false"` and the label `istio.io/dataplane-mode: none`.
 
 ### v0.7.1
 
