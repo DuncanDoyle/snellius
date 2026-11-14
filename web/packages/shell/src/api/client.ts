@@ -1,9 +1,12 @@
+import { handleUnauthorized } from "../auth/authState";
 import { observeServerDate, trackRequest } from "./clock";
 /** Error thrown for non-2xx API responses. */
 export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** The sign-in URL a 401 carries. */
+    public login?: string,
   ) {
     super(message);
   }
@@ -33,12 +36,16 @@ async function request<T>(path: string): Promise<{ body: T; headers: Headers }> 
   }
   if (!res.ok) {
     let msg = res.statusText;
+    let login: string | undefined;
     try {
-      msg = ((await res.json()) as { error?: string }).error ?? msg;
+      const body = (await res.json()) as { error?: string; login?: string };
+      msg = body.error ?? msg;
+      login = body.login;
     } catch {
       // body was not JSON
     }
-    throw new ApiError(res.status, msg);
+    if (res.status === 401) handleUnauthorized(msg, login);
+    throw new ApiError(res.status, msg, login);
   }
   // Only answers carrying data set the clock their timestamps are read against.
   observeServerDate(res.headers.get("Date"));

@@ -7,6 +7,10 @@ import { useNow } from "../api/clock";
 import { confirmedOrComputed } from "../api/freshness";
 import { isStale, useInstalls } from "../api/hooks";
 import type { Readiness } from "../api/types";
+import { SIGNIN_FAILED_PATH } from "../auth/authState";
+import { isSecureMode } from "../auth/mode";
+import { UserMenu } from "../auth/UserMenu";
+import { useSignInStatus } from "../auth/useAuth";
 import { versionText } from "../format";
 import { HealthIcon } from "../health/HealthIcon";
 import { Shimmer } from "../states/Shimmer";
@@ -173,6 +177,9 @@ export function Header({ installPaths }: { installPaths: readonly string[] }) {
   const theme = useTheme();
   const compact = useMedia(COMPACT);
   const nav = navEntries.filter((n) => n.scope === "top" || id);
+  const secure = isSecureMode();
+  const { data: status } = useSignInStatus(secure);
+  const onFailurePage = useMatch(SIGNIN_FAILED_PATH);
   return (
     <Bar>
       <Brand to="/">
@@ -236,6 +243,8 @@ export function Header({ installPaths }: { installPaths: readonly string[] }) {
         </AboutLink>
       </Tooltip>
       <ThemeSwitcher />
+      {/* The slot is reserved in secure mode from the first paint, so the name loading in shifts nothing. */}
+      {secure ? <UserMenu signedIn={onFailurePage ? false : status && status.signIn === "ready"} /> : null}
     </Bar>
   );
 }

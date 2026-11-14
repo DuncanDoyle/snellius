@@ -69,11 +69,13 @@ interface PageStateProps {
   title: string;
   message?: ReactNode;
   copyText?: string;
+  /** A primary action shown under the message. */
+  action?: ReactNode;
   stylesOverride?: SerializedStyles;
 }
 
 /** Designed full-page loading, connecting, error and empty states. */
-export function PageState({ kind, title, message, copyText, stylesOverride }: PageStateProps) {
+export function PageState({ kind, title, message, copyText, action, stylesOverride }: PageStateProps) {
   return (
     <Center role={kind === "error" ? "alert" : "status"} stylesOverride={stylesOverride}>
       {kind === "loading" || kind === "connecting" ? <Spinner aria-hidden="true" /> : null}
@@ -81,6 +83,7 @@ export function PageState({ kind, title, message, copyText, stylesOverride }: Pa
       {kind === "empty" ? <HealthIcon state="unknown" size={28} notice /> : null}
       <h2>{title}</h2>
       {message ? <p>{message}</p> : null}
+      {action}
       {copyText ? (
         <CopyButton type="button" onClick={() => void navigator.clipboard?.writeText(copyText).catch(() => {})}>
           <Copy size={14} aria-hidden="true" /> Copy error
