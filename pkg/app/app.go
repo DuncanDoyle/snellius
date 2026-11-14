@@ -27,6 +27,7 @@ import (
 
 	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/audit"
+	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/collect"
 	"github.com/DuncanDoyle/snellius/pkg/ctrllogs"
@@ -50,6 +51,8 @@ type Options struct {
 	Listen string
 	// AuthMode is "local" (default: loopback only, Host-guarded) or "secure".
 	AuthMode string
+	// OIDC configures sign-in in secure mode; local mode ignores it.
+	OIDC oidc.Config
 	// AllowedHosts are extra Host names local mode serves, besides loopback.
 	AllowedHosts []string
 	// AuditLevels is the comma list of audit levels to write; empty means audit.DefaultLevels.
@@ -249,6 +252,9 @@ type App struct {
 	collectors []extension.Collector
 	collected  *collect.Store
 	deps       extension.Deps
+	// oidc discovers the issuer in secure mode; nil when the configuration is invalid (oidcErr).
+	oidc    *oidc.Provider
+	oidcErr error
 	// discovered is closed after the first model with an install over a settled cache.
 	discovered chan struct{}
 }
@@ -347,7 +353,18 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		mode = ModeLocal
 	}
 	metrics.Gauge("snellius_auth_mode", "Authentication mode of this process; 1 for the active mode.", "mode").Set(1, mode)
-	return &App{Engine: eng, Handler: h, Metrics: metrics, Audit: audit.New(auditOut, levels, metrics), cfg: cfg, cache: ca, kinds: mon, opts: o, authz: authz, discovered: discovered, reg: reg,
+	var prov *oidc.Provider
+	var oidcErr error
+	if o.AuthMode == ModeSecure {
+		if oidcErr = o.OIDC.Validate(); oidcErr == nil {
+			clk := clock.Clock(clock.RealClock{})
+			if o.Clock != nil {
+				clk = o.Clock
+			}
+			prov, oidcErr = oidc.NewProvider(o.OIDC, clk)
+		}
+	}
+	return &App{Engine: eng, oidc: prov, oidcErr: oidcErr, Handler: h, Metrics: metrics, Audit: audit.New(auditOut, levels, metrics), cfg: cfg, cache: ca, kinds: mon, opts: o, authz: authz, discovered: discovered, reg: reg,
 		packs: extension.NewCore(extension.WithCollectors(packCols...)), collectors: packCols, collected: collected, deps: deps}, nil
 }
 
@@ -443,12 +460,16 @@ func serve(ctx context.Context, a *App, addr, probeAddr string, onListen func(ma
 	go func() { a.Audit.Run(auditCtx); close(auditDone) }()
 	defer func() { stopAudit(); <-auditDone }()
 	a.Audit.Emit(ctx, audit.Record{Level: audit.LevelSecurity, Action: "startup", Outcome: "success", Mode: a.mode(), Listen: addr})
+	warnIgnoredOIDC(a.mode(), a.opts.OIDC)
+	if a.oidc != nil {
+		go a.oidc.Run(ctx)
+	}
 	if a.mode() == ModeLocal {
 		slog.Warn("local mode: anyone who can port-forward to Snellius sees everything it reads", "addr", ln.Addr().String())
 	}
 	probe := a.probe
 	if probe == nil {
-		probe = api.ProbeHandler(api.ModelReady(a.Engine), a.Metrics)
+		probe = api.ProbeHandler(a.readiness(), a.Metrics)
 	}
 	srvs := []*http.Server{
 		{Handler: a.servedHandler(), ReadHeaderTimeout: 10 * time.Second},

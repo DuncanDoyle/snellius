@@ -1,7 +1,9 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/audit"
+	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 )
 
 // Auth modes. Local serves only through loopback; secure expects an identity gate.
@@ -48,12 +51,92 @@ func checkListen(mode, addr, podIP, hostIP string) error {
 }
 
 // servedHandler builds the handler that is served: the API behind the Host
-// guard in local mode, the API alone in secure mode, all behind request IDs.
+// guard in local mode, the API alone in secure mode, and /auth/status outside
+// the API, all behind request IDs.
 func (a *App) servedHandler() http.Handler {
+	h := a.withAuthStatus(a.Handler)
 	if a.opts.AuthMode == ModeSecure {
-		return audit.RequestID(a.Handler)
+		return audit.RequestID(h)
 	}
-	return audit.RequestID(api.HostGuard(a.opts.AllowedHosts, a.Handler))
+	return audit.RequestID(api.HostGuard(a.opts.AllowedHosts, h))
+}
+
+// withAuthStatus serves GET /auth/status ahead of next, outside the secure gate.
+func (a *App) withAuthStatus(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/auth/status" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		st := struct {
+			Mode   string `json:"mode"`
+			SignIn string `json:"signIn,omitempty"`
+		}{Mode: a.mode()}
+		if st.Mode == ModeSecure {
+			st.SignIn = a.signInState()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(st)
+	})
+}
+
+// Sign-in states reported by /auth/status.
+const (
+	signInReady         = "ready"
+	signInNotConfigured = "not-configured"
+	signInUnavailable   = "unavailable"
+)
+
+// signInState is the secure-mode sign-in state, without reasons.
+func (a *App) signInState() string {
+	switch ready, _ := a.oidcReady(); {
+	case a.oidcErr != nil:
+		return signInNotConfigured
+	case ready:
+		return signInReady
+	}
+	return signInUnavailable
+}
+
+// oidcReady reports whether sign-in works; the reason is for the log only.
+func (a *App) oidcReady() (bool, string) {
+	if a.oidcErr != nil {
+		return false, "sign-in not configured: " + a.oidcErr.Error()
+	}
+	if a.oidc == nil {
+		return false, "sign-in not configured: no OIDC provider"
+	}
+	if ok, err := a.oidc.Ready(); !ok {
+		return false, "sign-in unavailable: " + err.Error()
+	}
+	return true, ""
+}
+
+// readiness is the probe's readiness: the model, and in secure mode sign-in too.
+func (a *App) readiness() api.Ready {
+	model := api.ModelReady(a.Engine)
+	if a.mode() != ModeSecure {
+		return model
+	}
+	return func() (bool, string) {
+		if ok, why := model(); !ok {
+			return false, why
+		}
+		return a.oidcReady()
+	}
+}
+
+// warnIgnoredOIDC logs once when local mode is given OIDC settings it ignores.
+func warnIgnoredOIDC(mode string, c oidc.Config) {
+	if mode == ModeLocal && c.Set() {
+		slog.Warn("OIDC flags are ignored in local mode; use --auth-mode secure to sign in")
+	}
 }
 
 // mode returns the effective auth mode; empty means local.
