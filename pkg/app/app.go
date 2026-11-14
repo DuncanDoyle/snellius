@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -55,6 +56,10 @@ type Options struct {
 	OIDC oidc.Config
 	// CookieInsecure drops the Secure attribute from sign-in cookies, for plain-HTTP testing only.
 	CookieInsecure bool
+	// SessionIdle and SessionAbsolute bound a secure-mode session; zero means 30 min and 8 h.
+	SessionIdle, SessionAbsolute time.Duration
+	// TrustedProxyCIDRs are the peers whose X-Request-Id and X-Forwarded-For are trusted.
+	TrustedProxyCIDRs []netip.Prefix
 	// AllowedHosts are extra Host names local mode serves, besides loopback.
 	AllowedHosts []string
 	// AuditLevels is the comma list of audit levels to write; empty means audit.DefaultLevels.

@@ -4,10 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -200,7 +203,10 @@ func attrs(r Record) []slog.Attr {
 	return out
 }
 
-type ctxKey struct{}
+type (
+	ctxKey    struct{}
+	sourceKey struct{}
+)
 
 // RequestIDFrom returns the request ID in ctx, or empty.
 func RequestIDFrom(ctx context.Context) string {
@@ -208,12 +214,103 @@ func RequestIDFrom(ctx context.Context) string {
 	return id
 }
 
+// sourceFrom returns the client address RequestIDTrusting derived from X-Forwarded-For, or empty.
+func sourceFrom(ctx context.Context) string {
+	s, _ := ctx.Value(sourceKey{}).(string)
+	return s
+}
+
 // RequestID gives every request a fresh ID, sets it as the X-Request-Id
 // response header and stores it in the request context.
-func RequestID(next http.Handler) http.Handler {
+func RequestID(next http.Handler) http.Handler { return RequestIDTrusting(nil, next) }
+
+const maxRequestID = 64
+
+// RequestIDTrusting is RequestID, except that a request from a peer in cidrs
+// keeps a valid incoming X-Request-Id, and its X-Forwarded-For gives the audit
+// source: the right-most address that is not itself in cidrs.
+func RequestIDTrusting(cidrs []netip.Prefix, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		id := newID()
+		if trusted(cidrs, peerAddr(r)) {
+			if in := r.Header.Get("X-Request-Id"); validRequestID(in) {
+				id = in
+			}
+			if src := forwardedSource(cidrs, r.Header.Values("X-Forwarded-For")); src != "" {
+				ctx = context.WithValue(ctx, sourceKey{}, src)
+			}
+		}
 		w.Header().Set("X-Request-Id", id)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, id)))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, ctxKey{}, id)))
 	})
+}
+
+func peerAddr(r *http.Request) netip.Addr {
+	ap, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return netip.Addr{}
+	}
+	return ap.Addr().Unmap()
+}
+
+func trusted(cidrs []netip.Prefix, a netip.Addr) bool {
+	if !a.IsValid() {
+		return false
+	}
+	for _, p := range cidrs {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// forwardedSource walks X-Forwarded-For from the right, past trusted proxies;
+// empty when an entry is not an address or every entry is trusted.
+func forwardedSource(cidrs []netip.Prefix, headers []string) string {
+	var hops []string
+	for _, h := range headers {
+		hops = append(hops, strings.Split(h, ",")...)
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		a, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+		if err != nil {
+			return ""
+		}
+		if a = a.Unmap(); !trusted(cidrs, a) {
+			return a.String()
+		}
+	}
+	return ""
+}
+
+// validRequestID accepts 1 to 64 characters of [A-Za-z0-9._-].
+func validRequestID(s string) bool {
+	if s == "" || len(s) > maxRequestID {
+		return false
+	}
+	for _, c := range s {
+		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-'
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// ParseCIDRs parses a comma list of CIDRs; empty means none.
+func ParseCIDRs(s string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v == "" {
+			continue
+		}
+		p, err := netip.ParsePrefix(v)
+		if err != nil {
+			return nil, fmt.Errorf("trusted proxy CIDR %q: %w", v, err)
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
 }

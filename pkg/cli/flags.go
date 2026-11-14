@@ -4,6 +4,7 @@ package cli
 
 import (
 	"flag"
+	"fmt"
 	"strings"
 	"time"
 
@@ -28,6 +29,9 @@ func Parse(fs *flag.FlagSet, args []string) (kubeconfig string, o app.Options, e
 	fs.StringVar(&o.OIDC.RedirectURL, "oidc-redirect-url", "", "secure mode: OIDC redirect URL, https://<host>/auth/callback")
 	fs.StringVar(&o.OIDC.CAFile, "oidc-ca-file", "", "secure mode: PEM bundle of extra CAs trusted for the OIDC issuer")
 	cookieSecure := fs.Bool("cookie-secure", true, "secure mode: mark sign-in cookies Secure; false only for plain-HTTP testing")
+	fs.DurationVar(&o.SessionIdle, "session-idle", 30*time.Minute, "secure mode: a session ends after this long without a request")
+	fs.DurationVar(&o.SessionAbsolute, "session-absolute", 8*time.Hour, "secure mode: a session ends this long after sign-in")
+	proxies := fs.String("trusted-proxy-cidrs", "", "comma-separated CIDRs of proxies whose X-Request-Id and X-Forwarded-For are trusted")
 	scopes := fs.String("oidc-scopes", strings.Join(oidc.DefaultScopes, ","), "secure mode: comma-separated OIDC scopes")
 	allowedHosts := fs.String("allowed-hosts", "", "comma-separated extra Host names local mode serves (any port)")
 	fs.StringVar(&o.AuditLevels, "audit-levels", audit.DefaultLevels, "comma-separated audit levels to write: security, agent, reads, summaries, disclosure, requests")
@@ -46,6 +50,12 @@ func Parse(fs *flag.FlagSet, args []string) (kubeconfig string, o app.Options, e
 		return "", app.Options{}, err
 	}
 	if _, err := audit.ParseLevels(o.AuditLevels); err != nil {
+		return "", app.Options{}, err
+	}
+	if o.SessionIdle <= 0 || o.SessionAbsolute <= 0 {
+		return "", app.Options{}, fmt.Errorf("--session-idle (%v) and --session-absolute (%v) must be positive", o.SessionIdle, o.SessionAbsolute)
+	}
+	if o.TrustedProxyCIDRs, err = audit.ParseCIDRs(*proxies); err != nil {
 		return "", app.Options{}, err
 	}
 	o.OIDC.Scopes = splitList(*scopes)

@@ -65,3 +65,20 @@ func TestParseCookieSecure(t *testing.T) {
 		t.Fatalf("CookieInsecure = %v, %v; want true", o.CookieInsecure, err)
 	}
 }
+
+func TestParseSessionFlags(t *testing.T) {
+	_, o, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), nil)
+	if err != nil || o.SessionIdle != 30*time.Minute || o.SessionAbsolute != 8*time.Hour || o.TrustedProxyCIDRs != nil {
+		t.Fatalf("defaults: idle %v, absolute %v, cidrs %v, %v", o.SessionIdle, o.SessionAbsolute, o.TrustedProxyCIDRs, err)
+	}
+	_, o, err = Parse(flag.NewFlagSet("t", flag.ContinueOnError), []string{"--session-idle=5m", "--session-absolute=1h",
+		"--trusted-proxy-cidrs=10.0.0.0/8, 192.168.0.0/16"})
+	if err != nil || o.SessionIdle != 5*time.Minute || o.SessionAbsolute != time.Hour || len(o.TrustedProxyCIDRs) != 2 {
+		t.Fatalf("parsed: idle %v, absolute %v, cidrs %v, %v", o.SessionIdle, o.SessionAbsolute, o.TrustedProxyCIDRs, err)
+	}
+	for _, bad := range [][]string{{"--trusted-proxy-cidrs=10.0.0.0/33"}, {"--session-idle=0"}, {"--session-absolute=-1h"}} {
+		if _, _, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), bad); err == nil {
+			t.Errorf("%v accepted", bad)
+		}
+	}
+}

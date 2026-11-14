@@ -103,10 +103,13 @@ type Record struct {
 const maxUserAgent = 256
 
 // FromRequest fills the request ID, method, route template, source IP and
-// truncated user agent from r. It copies no header, cookie, query or body.
+// truncated user agent from r. The source is the peer, or the forwarded client
+// that RequestIDTrusting accepted. It copies no header, cookie, query or body.
 func FromRequest(r *http.Request) Record {
 	rec := Record{Request: Request{ID: RequestIDFrom(r.Context()), Method: r.Method, Route: r.Pattern}}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+	if src := sourceFrom(r.Context()); src != "" {
+		rec.Source = src
+	} else if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		rec.Source = host
 	}
 	ua := r.UserAgent()

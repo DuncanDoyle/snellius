@@ -56,9 +56,9 @@ func checkListen(mode, addr, podIP, hostIP string) error {
 func (a *App) servedHandler() http.Handler {
 	h := a.withAuthStatus(a.withSignIn(a.Handler))
 	if a.opts.AuthMode == ModeSecure {
-		return audit.RequestID(h)
+		return audit.RequestIDTrusting(a.opts.TrustedProxyCIDRs, h)
 	}
-	return audit.RequestID(api.HostGuard(a.opts.AllowedHosts, h))
+	return audit.RequestIDTrusting(a.opts.TrustedProxyCIDRs, api.HostGuard(a.opts.AllowedHosts, h))
 }
 
 // withSignIn serves /auth/login and /auth/callback ahead of next in secure mode, 503

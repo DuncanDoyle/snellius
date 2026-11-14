@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -154,5 +155,70 @@ func TestEmitAfterStopCountsDropped(t *testing.T) {
 	reg.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
 	if !strings.Contains(rec.Body.String(), `snellius_audit_dropped_total{level="security"} 3`) {
 		t.Fatalf("late records not counted as dropped:\n%s", rec.Body.String())
+	}
+}
+
+// A caller's X-Request-Id and X-Forwarded-For count only from a peer in a trusted CIDR.
+func TestRequestIDTrusting(t *testing.T) {
+	trusted := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("fd00::/8")}
+	cases := []struct {
+		name, peer, id, xff string
+		cidrs               []netip.Prefix
+		wantID, wantSource  string
+	}{
+		{name: "trusted peer keeps a valid ID", peer: "10.1.2.3:5000", id: "abc-123_x.y", cidrs: trusted, wantID: "abc-123_x.y", wantSource: "10.1.2.3"},
+		{name: "trusted IPv6 peer", peer: "[fd00::1]:5000", id: "v6", cidrs: trusted, wantID: "v6", wantSource: "fd00::1"},
+		{name: "untrusted peer", peer: "192.0.2.7:5000", id: "abc", xff: "198.51.100.1", cidrs: trusted, wantSource: "192.0.2.7"},
+		{name: "no CIDRs", peer: "10.1.2.3:5000", id: "abc", xff: "198.51.100.1", wantSource: "10.1.2.3"},
+		{name: "invalid characters", peer: "10.1.2.3:5000", id: "a b", cidrs: trusted, wantSource: "10.1.2.3"},
+		{name: "too long", peer: "10.1.2.3:5000", id: strings.Repeat("a", 65), cidrs: trusted, wantSource: "10.1.2.3"},
+		{name: "longest kept", peer: "10.1.2.3:5000", id: strings.Repeat("a", 64), cidrs: trusted, wantID: strings.Repeat("a", 64), wantSource: "10.1.2.3"},
+		// The source is the right-most address that is not a trusted proxy; a client cannot prepend its way in.
+		{name: "forwarded source", peer: "10.1.2.3:5000", xff: "203.0.113.9, 198.51.100.1, 10.9.9.9", cidrs: trusted, wantSource: "198.51.100.1"},
+		{name: "forwarded garbage", peer: "10.1.2.3:5000", xff: "not-an-ip", cidrs: trusted, wantSource: "10.1.2.3"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var seenID, seenSource string
+			h := RequestIDTrusting(c.cidrs, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				seenID, seenSource = RequestIDFrom(r.Context()), FromRequest(r).Source
+			}))
+			req := httptest.NewRequest("GET", "/", nil)
+			req.RemoteAddr = c.peer
+			if c.id != "" {
+				req.Header.Set("X-Request-Id", c.id)
+			}
+			if c.xff != "" {
+				req.Header.Set("X-Forwarded-For", c.xff)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			got := rec.Header().Get("X-Request-Id")
+			if got != seenID || got == "" {
+				t.Fatalf("header %q, context %q", got, seenID)
+			}
+			if c.wantID != "" && got != c.wantID {
+				t.Errorf("ID = %q, want %q", got, c.wantID)
+			}
+			if c.wantID == "" && got == c.id {
+				t.Errorf("untrusted ID %q kept", got)
+			}
+			if seenSource != c.wantSource {
+				t.Errorf("source = %q, want %q", seenSource, c.wantSource)
+			}
+		})
+	}
+}
+
+func TestParseCIDRs(t *testing.T) {
+	got, err := ParseCIDRs(" 10.0.0.0/8, ,fd00::1/8")
+	if err != nil || len(got) != 2 || got[1].String() != "fd00::/8" {
+		t.Fatalf("ParseCIDRs = %v, %v", got, err)
+	}
+	if none, err := ParseCIDRs(""); err != nil || none != nil {
+		t.Fatalf("empty = %v, %v", none, err)
+	}
+	if _, err := ParseCIDRs("10.0.0.1"); err == nil {
+		t.Fatal("a bare address was accepted")
 	}
 }

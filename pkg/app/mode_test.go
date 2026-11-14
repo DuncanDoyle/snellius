@@ -5,11 +5,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/pkg/api"
+	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/extension"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
@@ -91,6 +93,22 @@ func TestSecureModeReplacesAllowAllForms(t *testing.T) {
 		}
 		if got := fmt.Sprintf("%T", a.authz); got != c.want {
 			t.Errorf("%s: secure-mode authoriser is %s, want %s", name, got, c.want)
+		}
+	}
+}
+
+// The served handler keeps a proxy's request ID only from a configured CIDR.
+func TestServedHandlerTrustsProxyCIDRs(t *testing.T) {
+	a := oidcApp(t, ModeSecure, oidc.Config{})
+	a.opts.TrustedProxyCIDRs = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	for peer, keep := range map[string]bool{"10.0.0.7:1234": true, "192.0.2.1:1234": false} {
+		req := httptest.NewRequest("GET", "/auth/status", nil)
+		req.RemoteAddr = peer
+		req.Header.Set("X-Request-Id", "proxy-id")
+		rec := httptest.NewRecorder()
+		a.servedHandler().ServeHTTP(rec, req)
+		if got := rec.Header().Get("X-Request-Id") == "proxy-id"; got != keep {
+			t.Errorf("peer %s: kept = %v, want %v", peer, got, keep)
 		}
 	}
 }
