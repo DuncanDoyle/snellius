@@ -43,7 +43,8 @@ auth:
   mode: local
   # Host names the UI answers to. Empty uses the binary's default.
   allowedHosts: []
-  # Secure mode only. Users sign in with OIDC and Snellius reads with their own identity.
+  # Secure mode only. Users sign in with OIDC; Snellius reads with its own ServiceAccount.
+  # Filtering per user arrives later in Phase 7.
   oidc:
     issuerURL: ""       # required in secure mode, https
     clientID: ""        # required in secure mode; the API server must accept it as an audience

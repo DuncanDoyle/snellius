@@ -33,12 +33,12 @@ Snellius runs in one of two modes. Set it with `--auth-mode` or the chart value 
 - At startup, local mode logs a warning with the bind address that anyone who can port-forward sees everything Snellius reads.
 - The binary refuses a non-loopback `--listen` and a pod on host networking in local mode. The chart refuses `httpRoute.enabled` in local mode.
 
-**Secure mode.** OIDC sign-in, with visibility per user that follows Kubernetes RBAC, is available from `v0.8.0`. Before that, a build started with `--auth-mode=secure` answers every `/api/` request with 503 `secure-mode-incomplete`. Main is a development build until `v0.8.0`. Setup steps are in [Secure mode](#secure-mode).
+**Secure mode.** OIDC sign-in, with visibility per user that follows Kubernetes RBAC, is available from `v0.8.0`. Before that, a build started with `--auth-mode=secure` answers `/api/` requests with `401` without a session and with `503 secure-mode-incomplete` after sign-in. Main is a development build until `v0.8.0`. Setup steps are in [Secure mode](#secure-mode).
 
 **Both modes.**
 
 - **No Secrets.** The UI never reads Secrets, and its ClusterRole excludes them. No other field is redacted, because a secret can sit in any field, such as an inline token or a literal env var.
-- **Audit stream.** Snellius writes JSON audit lines to stdout, each with `"log":"snellius.audit"`. Select the levels with `--audit-levels` (chart `audit.levels`, default `security,agent,reads,summaries`). Only a startup record exists so far.
+- **Audit stream.** Snellius writes JSON audit lines to stdout, each with `"log":"snellius.audit"`. Select the levels with `--audit-levels` (chart `audit.levels`, default `security,agent,reads,summaries`). The `security` level records startup, sign-in success and failure, sign-out, a session that ends and a session evicted at the limit.
 - **Request IDs.** Every response from the UI and API listener carries an `X-Request-Id`. The probe listener does not.
 
 ### Secure mode
@@ -52,7 +52,7 @@ Secure mode signs users in with your IdP and shows the data of the Kubernetes id
    - Allow the scopes `openid`, `profile`, `email`, `groups` and `offline_access`, or set your own with `auth.oidc.scopes`. The list must include `openid`.
 2. **Make the cluster accept the client's tokens.** Snellius sends the user's ID token to the API server, so the API server must accept the client as an audience. Do one of these:
    - Register Snellius with the same client ID that the cluster already trusts. Then the API server needs no change.
-   - Add Snellius's client ID to `audiences` in the API server's structured authentication configuration. This example keeps the claim mappings that the cluster already uses. Yours may differ.
+   - Add Snellius's client ID to `audiences` in the API server's structured authentication configuration. Two audiences need `audienceMatchPolicy: MatchAny`. This example keeps the claim mappings that the cluster already uses. Yours may differ. It uses `apiserver.config.k8s.io/v1`, which needs Kubernetes 1.34 or later. Kubernetes 1.30 to 1.33 takes the same file as `v1beta1`.
 
      ```yaml
      apiVersion: apiserver.config.k8s.io/v1
@@ -63,6 +63,7 @@ Secure mode signs users in with your IdP and shows the data of the Kubernetes id
            audiences:
              - kubectl            # the client ID the cluster already trusts
              - snellius           # the Snellius client ID
+           audienceMatchPolicy: MatchAny   # required with more than one audience
          claimMappings:
            username:
              claim: email
@@ -74,6 +75,7 @@ Secure mode signs users in with your IdP and shows the data of the Kubernetes id
 3. **Create the optional Secret and ConfigMap.** A client secret is only for a confidential client. The CA bundle is only for an IdP behind a private CA.
 
    ```sh
+   kubectl create namespace snellius
    kubectl -n snellius create secret generic snellius-oidc --from-literal=client-secret='<secret>'
    kubectl -n snellius create configmap snellius-oidc-ca --from-file=ca.pem=./idp-ca.pem
    ```
@@ -107,7 +109,7 @@ Notes:
 - **Sign-out.** The Sign out menu item ends the session and sends the browser to the IdP's end-session endpoint, if the IdP publishes one. Snellius sends `client_id` and a `post_logout_redirect_uri` that is the app root. It sends no ID token hint.
 - **Sign-in errors.** A failed sign-in lands on `/signin-failed` with the reason `audience` (the API server does not accept the client), `unauthenticated` (the IdP or the API server rejects the user) or `invalid` (the login attempt has no open transaction or a wrong state, the code exchange or ID token check fails, or the token review itself fails).
 - **Routes.** Secure mode serves `/auth/login`, `/auth/callback`, `/auth/me` and `POST /auth/logout`. `/auth/status` reports the mode and whether sign-in is ready. Local mode serves only `/auth/status`.
-- **Data stays closed for now.** Until per-user authorisation lands later in Phase 7, every `/api/` request answers `503 secure-mode-incomplete` after sign-in. Main is a development build until `v0.8.0`.
+- **Data stays closed for now.** Until per-user authorisation lands later in Phase 7, every `/api/` request answers `401` without a session and `503 secure-mode-incomplete` after sign-in. Main is a development build until `v0.8.0`.
 - **No secrets in the browser.** The client secret, the ID token, the refresh token and the user's bearer token never reach the browser or the logs. The browser holds only an opaque session cookie.
 
 ## Install
@@ -154,6 +156,8 @@ Flags:
 - `--class-only-installs`: also show one install per GatewayClass `controllerName` that no detector recognises, from Gateway API status alone (default off; chart value `installs.classOnly`).
 
 `make test`, `make lint` and `make e2e` run the Go tests, the linters and the kind end-to-end suite. `make help` lists all targets.
+
+With `SECURE=1`, the e2e setup installs the UI in secure mode against a test OIDC issuer. Its Playwright run skips browser TLS verification of that issuer; the Go sign-in test and the API server verify it.
 
 ## What it reads
 
