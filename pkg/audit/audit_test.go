@@ -128,3 +128,31 @@ func TestParseLevelsRejectsUnknown(t *testing.T) {
 		t.Fatal("want error")
 	}
 }
+
+// Once the writer has stopped, Emit returns at once and counts the record as dropped.
+func TestEmitAfterStopCountsDropped(t *testing.T) {
+	var buf syncBuf
+	reg := obs.NewRegistry()
+	l := New(&buf, levels(t, ""), reg)
+	drain(t, l, func() {})
+	done := make(chan struct{})
+	go func() {
+		for range 3 {
+			l.Emit(context.Background(), Record{Level: LevelSecurity, Action: "late"})
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Emit blocked after the writer stopped")
+	}
+	if n := len(l.queue); n != 0 || buf.String() != "" {
+		t.Fatalf("%d records queued, output %q; want none", n, buf.String())
+	}
+	rec := httptest.NewRecorder()
+	reg.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), `snellius_audit_dropped_total{level="security"} 3`) {
+		t.Fatalf("late records not counted as dropped:\n%s", rec.Body.String())
+	}
+}

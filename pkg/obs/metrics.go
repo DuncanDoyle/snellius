@@ -98,10 +98,11 @@ func (f *family) at(values []string) *series {
 // ServeHTTP writes every family, sorted by name, with series sorted by label values.
 func (r *Registry) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	_ = r.write(w)
+	_, _ = io.WriteString(w, r.exposition())
 }
 
-func (r *Registry) write(w io.Writer) error {
+// exposition renders every family under the lock, so a slow client never holds it.
+func (r *Registry) exposition() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	names := make([]string, 0, len(r.families))
@@ -136,8 +137,7 @@ func (r *Registry) write(w io.Writer) error {
 			b.WriteByte('\n')
 		}
 	}
-	_, err := io.WriteString(w, b.String())
-	return err
+	return b.String()
 }
 
 var (

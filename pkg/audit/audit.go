@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/DuncanDoyle/snellius/pkg/obs"
@@ -16,10 +17,12 @@ import (
 const defaultBuffer = 1024
 
 // Logger writes enabled records as JSON lines. Emit never blocks: a full
-// queue drops the record and counts it.
+// queue, or a writer that has stopped, drops the record and counts it.
 type Logger struct {
 	levels  Levels
 	queue   chan Record
+	mu      sync.RWMutex
+	stopped bool // set once Run stops reading; guarded by mu
 	log     *slog.Logger
 	written *obs.CounterVec
 	dropped *obs.CounterVec
@@ -51,7 +54,7 @@ func New(w io.Writer, levels Levels, reg *obs.Registry, opts ...Option) *Logger 
 	}
 	l := &Logger{levels: levels, log: slog.New(h).With("log", "snellius.audit"),
 		written: reg.Counter("snellius_audit_records_total", "Audit records written.", "level"),
-		dropped: reg.Counter("snellius_audit_dropped_total", "Audit records dropped because the queue was full.", "level")}
+		dropped: reg.Counter("snellius_audit_dropped_total", "Audit records dropped because the queue was full or the writer had stopped.", "level")}
 	for _, o := range opts {
 		o(l)
 	}
@@ -78,20 +81,32 @@ func (l *Logger) Emit(ctx context.Context, rec Record) {
 	if rec.Request.ID == "" {
 		rec.Request.ID = RequestIDFrom(ctx)
 	}
-	select {
-	case l.queue <- rec:
-	default:
+	queued := false
+	l.mu.RLock()
+	if !l.stopped {
+		select {
+		case l.queue <- rec:
+			queued = true
+		default:
+		}
+	}
+	l.mu.RUnlock()
+	if !queued {
 		l.dropped.Inc(rec.Level)
 	}
 }
 
 // Run writes queued records until ctx is done, then writes what is left.
+// Records emitted after that are dropped.
 func (l *Logger) Run(ctx context.Context) {
 	for {
 		select {
 		case rec := <-l.queue:
 			l.write(rec)
 		case <-ctx.Done():
+			l.mu.Lock()
+			l.stopped = true
+			l.mu.Unlock()
 			for {
 				select {
 				case rec := <-l.queue:

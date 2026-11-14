@@ -3,6 +3,7 @@ package obs
 import (
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestMetricsExposition(t *testing.T) {
@@ -25,5 +26,40 @@ func TestMetricsExposition(t *testing.T) {
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "text/plain; version=0.0.4; charset=utf-8" {
 		t.Fatalf("content type %q", ct)
+	}
+}
+
+// blockedWriter signals its first Write and then blocks until release closes.
+type blockedWriter struct {
+	*httptest.ResponseRecorder
+	entered, release chan struct{}
+}
+
+func (w blockedWriter) Write(p []byte) (int, error) {
+	close(w.entered)
+	<-w.release
+	return len(p), nil
+}
+
+func (w blockedWriter) WriteString(s string) (int, error) { return w.Write([]byte(s)) }
+
+// A scrape stalled on its client does not block counter updates.
+func TestStalledScrapeDoesNotBlockInc(t *testing.T) {
+	r := NewRegistry()
+	c := r.Counter("a_total", "A counter.")
+	w := blockedWriter{httptest.NewRecorder(), make(chan struct{}), make(chan struct{})}
+	defer close(w.release)
+	go r.ServeHTTP(w, httptest.NewRequest("GET", "/metrics", nil))
+	select {
+	case <-w.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the scrape never wrote")
+	}
+	done := make(chan struct{})
+	go func() { c.Inc(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Inc blocked behind a stalled scrape")
 	}
 }
