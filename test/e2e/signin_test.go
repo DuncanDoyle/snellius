@@ -1,0 +1,190 @@
+//go:build e2e
+
+package e2e
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+)
+
+// issuerHost is the test issuer's name; setup.sh maps it for the node and the pod, and this client dials loopback.
+const issuerHost = "oidc.snellius.test"
+
+// browser is an HTTP client that behaves like the user's browser in the sign-in
+// flow: a cookie jar, redirects followed, and the issuer's name on loopback.
+func browser(t *testing.T) *http.Client {
+	t.Helper()
+	ca, err := os.ReadFile(filepath.Join(filepath.Dir(harnessKubeconfig(t)), "oidc", "ca.pem"))
+	if err != nil {
+		t.Fatalf("test issuer CA: %v", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(ca) {
+		t.Fatal("test issuer CA holds no certificate")
+	}
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if host, port, err := net.SplitHostPort(addr); err == nil && host == issuerHost {
+				addr = net.JoinHostPort("127.0.0.1", port)
+			}
+			return dialer.DialContext(ctx, network, addr)
+		},
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &http.Client{Transport: tr, Jar: jar, Timeout: 30 * time.Second}
+}
+
+// signIn runs the real flow for user and returns the signed-in client. The API
+// server fetches the issuer's keys in the background, so early refusals are retried.
+func signIn(t *testing.T, user string) *http.Client {
+	t.Helper()
+	var c *http.Client
+	eventually(t, func() error {
+		c = browser(t)
+		resp, err := c.Get(base + "/auth/login?return=/")
+		if err != nil {
+			return err
+		}
+		_ = resp.Body.Close()
+		form := resp.Request.URL
+		if form.Hostname() != issuerHost || resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("login landed on %s with %d, want the issuer's form", form, resp.StatusCode)
+		}
+		resp, err = c.PostForm(form.String(), url.Values{"user": {user}})
+		if err != nil {
+			return err
+		}
+		_ = resp.Body.Close()
+		if got := resp.Request.URL; got.String() != base+"/" || resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("sign-in ended on %s with %d", got, resp.StatusCode)
+		}
+		return nil
+	})
+	return c
+}
+
+type me struct {
+	Username string   `json:"username"`
+	Groups   []string `json:"groups"`
+}
+
+// call does one request and returns its status and body.
+func call(t *testing.T, c *http.Client, method, path string, hdr map[string]string) (int, []byte) {
+	t.Helper()
+	req, err := http.NewRequest(method, base+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	return resp.StatusCode, body
+}
+
+func whoami(t *testing.T, c *http.Client) (int, me) {
+	t.Helper()
+	code, body := call(t, c, http.MethodGet, "/auth/me", nil)
+	var m me
+	if code == http.StatusOK {
+		if err := json.Unmarshal(body, &m); err != nil {
+			t.Fatalf("/auth/me: %v: %s", err, body)
+		}
+	}
+	return code, m
+}
+
+// TestSignIn signs two users in through the test issuer and checks the
+// cluster's view of each, the closed data API, and logout.
+func TestSignIn(t *testing.T) {
+	if os.Getenv("SECURE") != "1" {
+		t.Skip("needs SECURE=1 and a secure-mode install (test/e2e/setup.sh)")
+	}
+	alice, bob := signIn(t, "alice"), signIn(t, "bob")
+
+	// TokenReview's answer, with the API server's oidc: prefixes, not the ID token's raw claims.
+	for _, tc := range []struct {
+		c      *http.Client
+		user   string
+		has    []string
+		hasNot []string
+	}{
+		{alice, "oidc:alice", []string{"oidc:team-a", "oidc:team-b", "system:authenticated"}, nil},
+		{bob, "oidc:bob", []string{"oidc:team-b", "system:authenticated"}, []string{"oidc:team-a"}},
+	} {
+		code, m := whoami(t, tc.c)
+		if code != http.StatusOK || m.Username != tc.user {
+			t.Fatalf("/auth/me = %d %+v, want %s", code, m, tc.user)
+		}
+		for _, g := range tc.has {
+			if !slices.Contains(m.Groups, g) {
+				t.Errorf("%s: groups %v lack %s", tc.user, m.Groups, g)
+			}
+		}
+		for _, g := range tc.hasNot {
+			if slices.Contains(m.Groups, g) {
+				t.Errorf("%s: groups %v hold %s", tc.user, m.Groups, g)
+			}
+		}
+		// The data API stays closed until secure mode is complete.
+		code, body := call(t, tc.c, http.MethodGet, "/api/v1/meta", nil)
+		var e struct{ Error string }
+		_ = json.Unmarshal(body, &e)
+		if code != http.StatusServiceUnavailable || e.Error != "secure-mode-incomplete" {
+			t.Errorf("%s: /api/v1/meta = %d %s", tc.user, code, body)
+		}
+	}
+
+	// A logout without the UI's Origin is refused and ends nothing.
+	if code, _ := call(t, bob, http.MethodPost, "/auth/logout", map[string]string{"Origin": "http://evil.example"}); code != http.StatusForbidden {
+		t.Fatalf("foreign-origin logout = %d", code)
+	}
+	code, body := call(t, bob, http.MethodPost, "/auth/logout", map[string]string{"Origin": base})
+	var out struct{ Next string }
+	if err := json.Unmarshal(body, &out); code != http.StatusOK || err != nil {
+		t.Fatalf("logout = %d %s", code, body)
+	}
+	if !strings.Contains(out.Next, issuerHost) || !strings.Contains(out.Next, "/end_session") || strings.Contains(out.Next, "id_token_hint") {
+		t.Errorf("logout next = %q, want the issuer's end_session without a token", out.Next)
+	}
+	if code, _ := whoami(t, bob); code != http.StatusUnauthorized {
+		t.Errorf("bob after logout: /auth/me = %d, want 401", code)
+	}
+	// The issuer sends the browser back to the UI.
+	resp, err := bob.Get(out.Next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.Request.URL.String() != base+"/" {
+		t.Errorf("end_session returned to %s", resp.Request.URL)
+	}
+	// Bob's logout ends only his session.
+	if code, m := whoami(t, alice); code != http.StatusOK || m.Username != "oidc:alice" {
+		t.Errorf("alice after bob's logout: %d %+v", code, m)
+	}
+}

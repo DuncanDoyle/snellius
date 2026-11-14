@@ -18,11 +18,18 @@ test("the signin-failed page shows its reason and a Try again button", async ({ 
   await expect(page.getByRole("heading", { name: "Sign-in failed" })).toBeVisible();
 });
 
-test("a signed-in user sees the account menu and can sign out", async ({ page }) => {
+test("a signed-in user sees the account menu and can sign out", async ({ page, baseURL }) => {
   const user = process.env.SIGNED_IN_USER;
   test.skip(!user, "needs a signed-in browser session and its username (SIGNED_IN_USER)");
   const menuButton = page.getByRole("button", { name: user });
   await page.goto("/");
+  // ISSUER_USER signs in through the test issuer's user picker first.
+  const login = process.env.ISSUER_USER;
+  if (login) {
+    const app = new URL(baseURL ?? "http://127.0.0.1:18080").origin;
+    await page.getByRole("button", { name: login, exact: true }).click();
+    await page.waitForURL((u) => u.origin === app && !u.pathname.startsWith("/auth/"));
+  }
   await menuButton.click();
   await page.getByRole("menuitem", { name: "Account details" }).click();
   await expect(page.getByRole("dialog", { name: "Account details" })).toContainText("Kubernetes groups");
