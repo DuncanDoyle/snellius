@@ -15,3 +15,13 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{ default (include "snellius.fullname" .) .Values.serviceAccount.name }}
 {{- end }}
+{{/* Nil-safe: --reuse-values from an older release has no auth or audit keys. */}}
+{{- define "snellius.authMode" -}}
+{{ dig "mode" "local" (.Values.auth | default dict) }}
+{{- end }}
+{{- define "snellius.allowedHosts" -}}
+{{ join "," (dig "allowedHosts" (list) (.Values.auth | default dict)) }}
+{{- end }}
+{{- define "snellius.auditLevels" -}}
+{{ join "," (dig "levels" (list "security" "agent" "reads" "summaries") (.Values.audit | default dict)) }}
+{{- end }}

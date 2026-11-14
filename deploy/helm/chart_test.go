@@ -636,3 +636,11 @@ func TestValuesWiredToFlags(t *testing.T) {
 		t.Errorf("args = %v, want %v", got, want)
 	}
 }
+
+// --reuse-values from an older release has no auth or audit keys at all.
+func TestRendersWithoutAuthAndAuditValues(t *testing.T) {
+	got := containerArgs(t, "--set", "auth=null", "--set", "audit=null")
+	if !slices.Equal(got, localBase) {
+		t.Errorf("args = %v, want %v", got, localBase)
+	}
+}

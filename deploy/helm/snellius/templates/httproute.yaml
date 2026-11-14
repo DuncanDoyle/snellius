@@ -1,5 +1,5 @@
 {{- if .Values.httpRoute.enabled }}
-{{- if eq .Values.auth.mode "local" }}
+{{- if eq (include "snellius.authMode" .) "local" }}
 {{- fail "httpRoute.enabled needs auth.mode: secure; local mode serves only the loopback" }}
 {{- end }}
 {{- if not .Values.httpRoute.parentRefs }}

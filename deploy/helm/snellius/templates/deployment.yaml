@@ -11,10 +11,10 @@ spec:
     metadata:
       labels:
         {{- include "snellius.selector" . | nindent 8 }}
-        {{- if eq .Values.auth.mode "local" }}
+        {{- if eq (include "snellius.authMode" .) "local" }}
         istio.io/dataplane-mode: none
         {{- end }}
-      {{- if eq .Values.auth.mode "local" }}
+      {{- if eq (include "snellius.authMode" .) "local" }}
       annotations:
         sidecar.istio.io/inject: "false"
       {{- end }}
@@ -26,13 +26,13 @@ spec:
           image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-            - --listen={{ if eq .Values.auth.mode "local" }}127.0.0.1:8080{{ else }}:8080{{ end }}
+            - --listen={{ if eq (include "snellius.authMode" .) "local" }}127.0.0.1:8080{{ else }}:8080{{ end }}
             - --probe-listen=:8081
-            - --auth-mode={{ .Values.auth.mode }}
-            {{- with .Values.auth.allowedHosts }}
-            - --allowed-hosts={{ join "," . }}
+            - --auth-mode={{ (include "snellius.authMode" .) }}
+            {{- with include "snellius.allowedHosts" . }}
+            - --allowed-hosts={{ . }}
             {{- end }}
-            - --audit-levels={{ join "," .Values.audit.levels }}
+            - --audit-levels={{ include "snellius.auditLevels" . }}
             {{- with .Values.install.pin }}
             - --install={{ . }}
             {{- end }}

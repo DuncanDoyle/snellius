@@ -1,5 +1,5 @@
 Snellius is installed. It is read-only.
-{{- if eq .Values.auth.mode "local" }}
+{{- if eq (include "snellius.authMode" .) "local" }}
 Snellius runs in local mode: it listens on the Pod's loopback only.
 Anyone who can port-forward to it sees everything it reads (never Secrets),
 which can be more than their own Kubernetes RBAC allows.
