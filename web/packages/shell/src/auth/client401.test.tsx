@@ -19,8 +19,8 @@ it("sign-in-required sends the browser to the login URL, once per page load", as
   vi.stubGlobal("fetch", reply("sign-in-required"));
   await expect(apiFetch("/api/v1/installs")).rejects.toBeInstanceOf(ApiError);
   await expect(apiFetch("/api/v1/meta")).rejects.toBeInstanceOf(ApiError);
+  await vi.waitFor(() => expect(nav.navigate).toHaveBeenCalledWith(login));
   expect(nav.navigate).toHaveBeenCalledTimes(1);
-  expect(nav.navigate).toHaveBeenCalledWith(login);
   expect(authState.get()).toEqual({ kind: "redirecting" });
 });
 
@@ -66,4 +66,75 @@ it("does not redirect from the sign-in failure page", async () => {
   await expect(apiFetch("/api/v1/meta")).rejects.toBeInstanceOf(ApiError);
   expect(nav.navigate).not.toHaveBeenCalled();
   window.history.pushState({}, "", "/");
+});
+
+describe("concurrent 401s after the session ends (secure mode)", () => {
+  // The backend answers session-ended once, then sign-in-required; each answer arrives when its release runs.
+  function oneShotBackend() {
+    let served = 0;
+    const releases: (() => void)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url === "/auth/status")
+          return Promise.resolve(new Response(JSON.stringify({ mode: "secure", signIn: "ready" })));
+        const error = served++ === 0 ? "session-ended" : "sign-in-required";
+        return new Promise<Response>((resolve) =>
+          releases.push(() => resolve(new Response(JSON.stringify({ error, login }), { status: 401 }))),
+        );
+      }),
+    );
+    return releases;
+  }
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  beforeEach(() => {
+    document.documentElement.dataset.authMode = "secure";
+    sessionStorage.clear();
+  });
+  afterEach(() => {
+    delete document.documentElement.dataset.authMode;
+  });
+
+  it("session-ended first: a later sign-in-required does not navigate", async () => {
+    const releases = oneShotBackend();
+    const a = expect(apiFetch("/api/v1/installs")).rejects.toBeInstanceOf(ApiError);
+    const b = expect(apiFetch("/api/v1/meta")).rejects.toBeInstanceOf(ApiError);
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    releases[0]?.();
+    await a;
+    releases[1]?.();
+    await b;
+    await flush();
+    expect(authState.get()).toEqual({ kind: "ended", login });
+    expect(nav.navigate).not.toHaveBeenCalled();
+  });
+
+  it("sign-in-required first: the session-ended that follows wins and nothing navigates", async () => {
+    const releases = oneShotBackend();
+    const ended = expect(apiFetch("/api/v1/installs")).rejects.toBeInstanceOf(ApiError);
+    const required = expect(apiFetch("/api/v1/meta")).rejects.toBeInstanceOf(ApiError);
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    releases[1]?.();
+    await required;
+    releases[0]?.();
+    await ended;
+    await flush();
+    expect(authState.get()).toEqual({ kind: "ended", login });
+    expect(nav.navigate).not.toHaveBeenCalled();
+  });
+
+  it("sign-in-required alone still navigates once", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/auth/status"
+          ? new Response(JSON.stringify({ mode: "secure", signIn: "ready" }))
+          : new Response(JSON.stringify({ error: "sign-in-required", login }), { status: 401 }),
+      ),
+    );
+    await expect(apiFetch("/api/v1/meta")).rejects.toBeInstanceOf(ApiError);
+    await vi.waitFor(() => expect(nav.navigate).toHaveBeenCalledWith(login));
+    expect(nav.navigate).toHaveBeenCalledTimes(1);
+  });
 });

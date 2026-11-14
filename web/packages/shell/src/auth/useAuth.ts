@@ -1,16 +1,10 @@
 import useSWR from "swr";
 import { type ApiError, apiFetch } from "../api/client";
+import { type StatusResponse, signInStatus } from "./authState";
 
-export type SignInState = "ready" | "not-configured" | "unavailable";
-
-interface StatusResponse {
-  mode: "local" | "secure";
-  signIn?: SignInState;
-}
-
-/** GET /auth/status once, in secure mode only; undefined until it answers. */
+/** /auth/status, in secure mode only; undefined until it answers. Shares the one request the API client waits for. */
 export function useSignInStatus(enabled: boolean) {
-  return useSWR<StatusResponse, ApiError>(enabled ? "/auth/status" : null, apiFetch, {
+  return useSWR<StatusResponse, Error>(enabled ? "/auth/status" : null, signInStatus, {
     revalidateOnFocus: false,
     revalidateOnReconnect: false,
     shouldRetryOnError: false,

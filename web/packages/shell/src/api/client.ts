@@ -1,4 +1,5 @@
-import { handleUnauthorized } from "../auth/authState";
+import { handleUnauthorized, signInStatus, trackAuthRequest } from "../auth/authState";
+import { isSecureMode } from "../auth/mode";
 import { observeServerDate, trackRequest } from "./clock";
 /** Error thrown for non-2xx API responses. */
 export class ApiError extends Error {
@@ -20,10 +21,14 @@ export async function apiFetch<T>(path: string): Promise<T> {
 /** apiFetch, plus the response headers. */
 export async function apiFetchWithHeaders<T>(path: string): Promise<{ body: T; headers: Headers }> {
   const settled = trackRequest();
+  const authSettled = trackAuthRequest();
   try {
+    // In secure mode, protected paths wait for /auth/status, so a 401 never outruns the sign-in pages.
+    if (isSecureMode() && (path.startsWith("/api/") || path === "/auth/me")) await signInStatus().catch(() => {});
     return await request<T>(path);
   } finally {
     settled();
+    authSettled();
   }
 }
 

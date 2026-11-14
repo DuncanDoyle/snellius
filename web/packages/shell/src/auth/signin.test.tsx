@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SWRConfig } from "swr";
 import { authCopy, SECURE_MODE_DOCS } from "../copy/auth";
@@ -24,6 +24,7 @@ const me = { username: "alice@example.com", groups: ["system:authenticated", "pl
 
 beforeEach(() => {
   resetAuthForTests();
+  sessionStorage.clear();
   vi.spyOn(nav, "navigate").mockImplementation(() => {});
 });
 afterEach(() => {
@@ -60,6 +61,51 @@ describe("status pages", () => {
     expect(screen.getByText(authCopy.unavailableBody)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: authCopy.tryAgain }));
     expect(reload).toHaveBeenCalled();
+  });
+
+  describe.each(["not-configured", "unavailable"])("signIn %s with real 401s from /api", (signIn) => {
+    const heading = signIn === "not-configured" ? authCopy.notConfiguredTitle : authCopy.unavailableTitle;
+    const denied = [401, { error: "sign-in-required", login }];
+    // /auth/status answers when release runs; every other path answers at once.
+    const stub = () => {
+      let release = () => {};
+      const status = new Promise<void>((r) => {
+        release = r;
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          if (url === "/auth/status") {
+            await status;
+            return new Response(JSON.stringify({ mode: "secure", signIn }));
+          }
+          const [code, body] = url === "/auth/me" || url.startsWith("/api/") ? denied : [404, {}];
+          return new Response(JSON.stringify(body), { status: code as number });
+        }),
+      );
+      return release;
+    };
+
+    it("status answers first: shows its page and never goes to sign-in", async () => {
+      stub()();
+      mount();
+      expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
+      await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/v1/installs", expect.anything()));
+      await act(() => new Promise((r) => setTimeout(r, 20)));
+      expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
+      expect(nav.navigate).not.toHaveBeenCalled();
+    });
+
+    it("status answers last: shows its page and never goes to sign-in", async () => {
+      const release = stub();
+      mount();
+      await act(() => new Promise((r) => setTimeout(r, 20)));
+      release();
+      expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
+      await act(() => new Promise((r) => setTimeout(r, 20)));
+      expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
+      expect(nav.navigate).not.toHaveBeenCalled();
+    });
   });
 
   it("a 401 sign-in-required shows Taking you to sign-in with the redirect started", async () => {

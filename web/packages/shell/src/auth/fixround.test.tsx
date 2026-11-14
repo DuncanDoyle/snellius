@@ -174,18 +174,20 @@ describe("sign-in redirect loop", () => {
     expect(nav.navigate).not.toHaveBeenCalled();
   });
 
-  it("a redirect after 10 s goes ahead", () => {
+  it("a redirect after 10 s goes ahead", async () => {
+    stubApi(routes);
     sessionStorage.setItem("snellius.signinRedirectAt", String(Date.now() - 11_000));
     handleUnauthorized("sign-in-required", login);
-    expect(nav.navigate).toHaveBeenCalledWith(login);
+    await vi.waitFor(() => expect(nav.navigate).toHaveBeenCalledWith(login));
   });
 
-  it("works when storage throws", () => {
+  it("works when storage throws", async () => {
+    stubApi(routes);
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("blocked");
     });
     handleUnauthorized("sign-in-required", login);
-    expect(nav.navigate).toHaveBeenCalledWith(login);
+    await vi.waitFor(() => expect(nav.navigate).toHaveBeenCalledWith(login));
   });
 });
 
