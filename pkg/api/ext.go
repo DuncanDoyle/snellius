@@ -46,6 +46,14 @@ type handlerConfig struct {
 	scoped endpoints.ScopedReader
 	// consumersFor, if set, gives an install's non-route backend consumers.
 	consumersFor func(install.Install, *install.Owned) []objects.Consumer
+	// secure marks secure mode; complete says its identity and authorisation are fully wired.
+	secure, complete bool
+}
+
+// WithSecureMode marks the handler secure. Until complete is true, every /api/
+// route answers 503 and nothing behind the gate runs.
+func WithSecureMode(complete bool) HandlerOption {
+	return func(c *handlerConfig) { c.secure, c.complete = true, complete }
 }
 
 // WithExtMounts serves m under /api/ext/{name}/. Callers check them with

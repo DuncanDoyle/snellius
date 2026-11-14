@@ -242,6 +242,8 @@ type App struct {
 	cache *cache.Cache
 	kinds *kinds.Monitor
 	opts  Options
+	// authz is the authoriser the handler was built with.
+	authz api.Authorizer
 	// reg starts the extension collectors; packs runs the pack collectors; collected is their store.
 	reg, packs *extension.Registry
 	collectors []extension.Collector
@@ -320,9 +322,18 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		}
 		scoped = endpoints.Bounded(cache.NewScopedReader(c.Kube, clk), endpoints.DefaultBounds, clk)
 	}
-	h := api.NewHandler(eng, o.UI, reg.Authorizer, api.WithExtMounts(mounts...), api.WithCoreCapabilities(core), api.WithCapabilitySources(reg.CapabilityStates),
+	// The registry defaults to AllowAll; secure mode never serves with it.
+	authz := reg.Authorizer
+	if _, isAll := authz.(api.AllowAll); o.AuthMode == ModeSecure && (authz == nil || isAll) {
+		authz = api.DenyAll{}
+	}
+	hopts := []api.HandlerOption{api.WithExtMounts(mounts...), api.WithCoreCapabilities(core), api.WithCapabilitySources(reg.CapabilityStates),
 		api.WithCommands(reg.Commands), api.WithInstallCommands(commands), api.WithInstallFeatures(reg.FeaturesFor),
-		api.WithPacks(reg.Packs()...), api.WithInstallKinds(reg.KindAppliesTo), api.WithScopedReader(scoped), api.WithBackendConsumers(consumers))
+		api.WithPacks(reg.Packs()...), api.WithInstallKinds(reg.KindAppliesTo), api.WithScopedReader(scoped), api.WithBackendConsumers(consumers)}
+	if o.AuthMode == ModeSecure {
+		hopts = append(hopts, api.WithSecureMode(false))
+	}
+	h := api.NewHandler(eng, o.UI, authz, hopts...)
 	levels, err := audit.ParseLevels(o.AuditLevels)
 	if err != nil {
 		return nil, err
@@ -337,7 +348,7 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		mode = ModeLocal
 	}
 	metrics.Gauge("snellius_auth_mode", "Authentication mode of this process; 1 for the active mode.", "mode").Set(1, mode)
-	return &App{Engine: eng, Handler: h, Metrics: metrics, Audit: audit.New(auditOut, levels, metrics), cfg: cfg, cache: ca, kinds: mon, opts: o, discovered: discovered, reg: reg,
+	return &App{Engine: eng, Handler: h, Metrics: metrics, Audit: audit.New(auditOut, levels, metrics), cfg: cfg, cache: ca, kinds: mon, opts: o, authz: authz, discovered: discovered, reg: reg,
 		packs: extension.NewCore(extension.WithCollectors(packCols...)), collectors: packCols, collected: collected, deps: deps}, nil
 }
 

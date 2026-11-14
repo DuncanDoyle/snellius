@@ -40,14 +40,16 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 	for _, o := range opts {
 		o(&cfg)
 	}
-	if authz == nil {
+	if authz == nil && cfg.secure {
+		authz = DenyAll{}
+	} else if authz == nil {
 		authz = AllowAll{}
 	}
 	if cfg.commands == nil {
 		cfg.commands = diagnose.Kubectl{}
 	}
 	h := &handler{src: src, authz: authz, capSources: cfg.capSources, coreSource: cfg.coreSource, commands: cfg.commands, commandsFor: cfg.commandsFor,
-		featuresFor: cfg.featuresFor, packs: cfg.packs, kindFor: cfg.kindFor, pathMemo: cfg.pathMemo, scoped: cfg.scoped, consumersFor: cfg.consumersFor}
+		featuresFor: cfg.featuresFor, packs: cfg.packs, kindFor: cfg.kindFor, pathMemo: cfg.pathMemo, scoped: cfg.scoped, consumersFor: cfg.consumersFor, secure: cfg.secure}
 	if h.pathMemo == nil {
 		h.pathMemo = paths.NewMemo(nil)
 	}
@@ -81,7 +83,21 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 	// Unknown /api/ paths, extension ones included, get a JSON 404, never the SPA.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { writeErr(w, http.StatusNotFound, "not found") })
 	mux.Handle("/", spa(ui))
+	if cfg.secure && !cfg.complete {
+		return secureGate(mux)
+	}
 	return mux
+}
+
+// secureGate answers every /api/ path with 503 and passes the rest (SPA, probes) on.
+func secureGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			writeErr(w, http.StatusServiceUnavailable, "secure-mode-incomplete")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type handler struct {
@@ -103,6 +119,8 @@ type handler struct {
 	scoped endpoints.ScopedReader
 	// consumersFor, if set, gives an install's non-route backend consumers.
 	consumersFor func(install.Install, *install.Owned) []objects.Consumer
+	// secure is true when the handler was built with WithSecureMode.
+	secure bool
 }
 
 // WithScopedReader reads one Service's endpoints for backend detail (design

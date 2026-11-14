@@ -21,6 +21,12 @@ type AllowAll struct{}
 // Authorize implements Authorizer.
 func (AllowAll) Authorize(*http.Request, objects.Ref) bool { return true }
 
+// DenyAll denies every ref; secure mode uses it until a real authoriser is wired.
+type DenyAll struct{}
+
+// Authorize implements Authorizer.
+func (DenyAll) Authorize(*http.Request, objects.Ref) bool { return false }
+
 // AuthorizerFunc adapts a function to Authorizer.
 type AuthorizerFunc func(r *http.Request, ref objects.Ref) bool
 
