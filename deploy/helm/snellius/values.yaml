@@ -34,7 +34,9 @@ rbac:
 extraEnv: []            # env of the UI container
 extraVolumes: []        # pod volumes
 extraVolumeMounts: []   # mounts of the UI container
-extraContainers: []     # sidecars added to the pod
+# Sidecars added to the pod. They share its network, so in local mode they
+# can reach the loopback UI and API and see everything Snellius reads.
+extraContainers: []
 auth:
   # local: loopback only, reached with kubectl port-forward, no sign-in.
   # secure: listens on the Pod IP for a gateway route; needs sign-in values (later release step).

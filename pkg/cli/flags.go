@@ -19,7 +19,7 @@ func Parse(fs *flag.FlagSet, args []string) (kubeconfig string, o app.Options, e
 	o.UI = webui.FS()
 	fs.StringVar(&kubeconfig, "kubeconfig", "", "path to a kubeconfig; empty: in-cluster config, else default kubeconfig loading rules")
 	fs.StringVar(&o.Pinned, "install", "", "pin the UI to one controller install (install ID or namespace/name)")
-	fs.StringVar(&o.Listen, "listen", "", "listen address (default :8080 in-cluster, 127.0.0.1:8080 locally)")
+	fs.StringVar(&o.Listen, "listen", "", "listen address (default 127.0.0.1:8080; :8080 in-cluster in secure mode)")
 	fs.StringVar(&o.AuthMode, "auth-mode", app.ModeLocal, `"local": loopback only, Host-guarded; "secure": serve on the network behind an identity gate`)
 	allowedHosts := fs.String("allowed-hosts", "", "comma-separated extra Host names local mode serves (any port)")
 	fs.StringVar(&o.AuditLevels, "audit-levels", audit.DefaultLevels, "comma-separated audit levels to write: security, agent, reads, summaries, disclosure, requests")

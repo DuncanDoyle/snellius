@@ -24,11 +24,13 @@ Snellius runs in one of two modes. Set it with `--auth-mode` or the chart value 
 
 **Local mode (the default).** There is no sign-in.
 
-- The UI and API listen on `127.0.0.1:8080` inside the pod. Only `kubectl port-forward`, to the Service or the pod, reaches them.
+- The UI and API listen on `127.0.0.1:8080` inside the pod. From outside the pod, only `kubectl port-forward`, to the Service or the pod, reaches them.
+- Containers in the pod share its network, so a sidecar or a chart `extraContainers` entry can reach the local-mode listener too. Add only containers you trust with everything Snellius can read.
 - Whoever can port-forward to Snellius sees everything Snellius can read. Port-forwarding needs `pods/portforward` in the Snellius namespace.
 - That is everything its ServiceAccount can read across the cluster, Deployments included. It can be more than that person's own Kubernetes RBAC allows.
-- A request whose Host is not `localhost`, `127.0.0.1` or `[::1]` gets 421. Add other names with `auth.allowedHosts` (`--allowed-hosts`). A cross-origin request gets 403.
+- A request whose Host is not `localhost`, `127.0.0.1` or `[::1]` gets 421. Add other names with `auth.allowedHosts` (`--allowed-hosts`). A request whose Origin is not its own scheme, host and port gets 403.
 - Every page shows the banner "Local mode: no sign-in. Anyone with port-forward access sees everything Snellius can read."
+- At startup, local mode logs a warning with the bind address that anyone who can port-forward sees everything Snellius reads.
 - The binary refuses a non-loopback `--listen` and a pod on host networking in local mode. The chart refuses `httpRoute.enabled` in local mode.
 
 **Secure mode.** OIDC sign-in, with visibility per user that follows Kubernetes RBAC, is available from `v0.8.0`. Before that, a build started with `--auth-mode=secure` answers every `/api/` request with 503 `secure-mode-incomplete`. Main is a development build until `v0.8.0`.
@@ -286,7 +288,7 @@ Saved theme choices carry over. Finding codes keep the `KGWUI-` prefix, so API v
 ### Unreleased: identity and access (Phase 7)
 
 - **Upgrade break.** An install with `httpRoute.enabled` fails to render until it sets `auth.mode: secure`. Secure mode serves data only from `v0.8.0`. Do not upgrade such an install to a development build.
-- **Default mode is `local`.** The UI listens on `127.0.0.1:8080` in the pod, so only `kubectl port-forward` reaches it. Upgrades with `--reuse-values` from older releases work.
+- **Default mode is `local`.** The UI listens on `127.0.0.1:8080` in the pod, so from outside the pod only `kubectl port-forward` reaches it. Upgrades with `--reuse-values` from older releases work.
 - **Probe port.** Liveness and readiness probes use the new `probe` port (8081). `/readyz` no longer lists install IDs; they go to the log.
 - **`/metrics`.** The probe listener serves Prometheus text: `snellius_auth_mode{mode}`, `snellius_audit_records_total{level}` and `snellius_audit_dropped_total{level}`.
 - **Audit stream.** JSON lines on stdout, set with `--audit-levels` (chart `audit.levels`). Every response from the UI and API listener carries an `X-Request-Id`.

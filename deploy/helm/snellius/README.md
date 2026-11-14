@@ -6,7 +6,7 @@ Installs Snellius, a read-only UI for Kubernetes Gateway API, built for kgateway
 
 Snellius runs in one of two modes, set with `auth.mode` (default `local`).
 
-- **Local mode.** There is no sign-in. The UI and API listen on `127.0.0.1:8080` in the pod, so only `kubectl port-forward` reaches them. Whoever can port-forward to Snellius sees everything its ServiceAccount can read, which can be more than their own Kubernetes RBAC allows. A request with an unknown Host gets 421, a cross-origin request 403. Add Host names with `auth.allowedHosts`. The chart refuses `httpRoute.enabled` in local mode.
+- **Local mode.** There is no sign-in. The UI and API listen on `127.0.0.1:8080` in the pod, so only `kubectl port-forward` and other containers in the pod reach them. Sidecars and `extraContainers` share the pod network and can call the API, so add only containers you trust with everything Snellius can read. Whoever can port-forward to Snellius sees everything its ServiceAccount can read, which can be more than their own Kubernetes RBAC allows. A request with an unknown Host gets 421, a cross-origin request 403. Add Host names with `auth.allowedHosts`. The chart refuses `httpRoute.enabled` in local mode.
 - **Secure mode.** OIDC sign-in with per-user visibility arrives with `v0.8.0`. Until then, `auth.mode: secure` answers every `/api/` request with 503 `secure-mode-incomplete`.
 - The ClusterRole never grants Secrets. That is the UI's whole secret-handling guarantee: no other field is redacted, and Deployments and other objects are shown as stored.
 
@@ -55,7 +55,7 @@ helm install ui ./deploy/helm/snellius -n snellius --create-namespace \
 | `extraEnv` | `[]` | Extra env vars for the UI container, after the chart's own. |
 | `extraVolumes` | `[]` | Extra pod volumes. |
 | `extraVolumeMounts` | `[]` | Extra volume mounts for the UI container. |
-| `extraContainers` | `[]` | Extra containers (sidecars) in the pod. Bind add-ons to the UI's identity through `serviceAccount.name`. |
+| `extraContainers` | `[]` | Extra containers (sidecars) in the pod. They share the pod network, so in local mode they can reach the UI and API. Bind add-ons to the UI's identity through `serviceAccount.name`. |
 | `memoryLimit` | `""` | Opt-in Go soft memory limit, set as `GOMEMLIMIT` (for example `300MiB`). Empty sets none, so the binary uses 90 % of the pod's memory limit. |
 | `resources` | 50m CPU / 128Mi requested, 512Mi memory limit | Container resources. The chart sets `GOMEMLIMIT` only from `memoryLimit`: the binary uses 90 % of the pod's memory limit unless `GOMEMLIMIT` is set. |
 | `podSecurityContext` | `runAsNonRoot`, `RuntimeDefault` seccomp | Pod security context. |
