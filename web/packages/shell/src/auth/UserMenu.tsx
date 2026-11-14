@@ -1,13 +1,16 @@
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
 import { ChevronDown, CircleUser, LogOut, UserRound } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
+import { ApiError } from "../api/client";
 import { authCopy } from "../copy/auth";
 import { Anchor, Menu, MenuButton, useMenu } from "../shell/menu";
 import { Tooltip } from "../shell/Tooltip";
+import { PageNotice } from "../states/PageNotice";
 import { Shimmer } from "../states/Shimmer";
 import { AccountDetails } from "./AccountDetails";
-import { navigate } from "./navigate";
+import { useAuthState } from "./authState";
+import { navigate, safeNext } from "./navigate";
 import { useMe } from "./useAuth";
 
 // region Styles
@@ -24,30 +27,48 @@ const Name = styled.span`
   white-space: nowrap;
 `;
 
+const noticePos = css`
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: max-content;
+  max-width: 320px;
+  margin: 0;
+`;
 const fill = css`
   width: 100%;
 `;
 
 // region Component
-/** Header control for secure mode: the username opening a menu with Account details and Sign out. */
-/** signedIn is undefined while /auth/status is unknown. */
+/** Header control for secure mode: the username opening a menu with Account details and Sign out. signedIn is undefined while /auth/status is unknown. */
 export function UserMenu({ signedIn }: { signedIn: boolean | undefined }) {
-  const { data: me } = useMe(signedIn === true);
+  // An ended session drops the cached identity, so the old name does not stay in the header.
+  const ended = useAuthState().kind === "ended";
+  const { data: me } = useMe(signedIn === true && !ended);
   const menu = useMenu();
   const [details, setDetails] = useState(false);
+  const [logoutError, setLogoutError] = useState<ApiError | null>(null);
+  const { buttonRef } = menu;
+  const closeDetails = useCallback(() => {
+    setDetails(false);
+    buttonRef.current?.focus();
+  }, [buttonRef]);
 
   const signOut = async () => {
     menu.close(false);
+    setLogoutError(null);
     try {
       const res = await fetch("/auth/logout", { method: "POST", headers: { Accept: "application/json" } });
+      if (!res.ok) return setLogoutError(new ApiError(res.status, res.statusText || `status ${res.status}`));
       const { next } = (await res.json()) as { next?: string };
-      navigate(next ?? "/");
-    } catch {
-      // The server did not answer; the page stays as it was.
+      navigate(safeNext(next));
+    } catch (e) {
+      setLogoutError(new ApiError(0, (e as Error).message));
     }
   };
 
-  if (!me) return <Slot>{signedIn !== false ? <Shimmer h={32} stylesOverride={fill} /> : null}</Slot>;
+  if (!me) return <Slot>{signedIn !== false && !ended ? <Shimmer h={32} stylesOverride={fill} /> : null}</Slot>;
   return (
     <Slot ref={menu.anchorRef}>
       <Tooltip label={me.username} placement="end">
@@ -84,7 +105,10 @@ export function UserMenu({ signedIn }: { signedIn: boolean | undefined }) {
           </button>
         </Menu>
       ) : null}
-      {details ? <AccountDetails me={me} onClose={() => setDetails(false)} /> : null}
+      {logoutError ? (
+        <PageNotice error={logoutError} title={authCopy.signOutFailed} stylesOverride={noticePos} />
+      ) : null}
+      {details ? <AccountDetails me={me} onClose={closeDetails} /> : null}
     </Slot>
   );
 }

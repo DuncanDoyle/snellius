@@ -74,21 +74,38 @@ const CloseButton = styled.button`
 /** Modal listing the signed-in username and Kubernetes groups; Escape, the close button or the backdrop closes it. */
 export function AccountDetails({ me, onClose }: { me: Me; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => closeRef.current?.focus(), []);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    closeRef.current?.focus();
+    // On the document, so Escape works after a press on non-focusable panel text; Tab stays inside the panel.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") return onClose();
+      if (e.key !== "Tab") return;
+      const items = Array.from(panelRef.current?.querySelectorAll<HTMLElement>("button, [href], [tabindex]") ?? []);
+      const first = items[0];
+      const last = items[items.length - 1];
+      const at = document.activeElement;
+      if (!first || !last || !panelRef.current?.contains(at)) {
+        e.preventDefault();
+        first?.focus();
+      } else if (e.shiftKey && at === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && at === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
   return createPortal(
     <Backdrop
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <Panel
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="account-details-title"
-        onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
-        }}
-      >
+      <Panel role="dialog" aria-modal="true" aria-labelledby="account-details-title" ref={panelRef}>
         <Head>
           <h2 id="account-details-title">{authCopy.accountDetails}</h2>
           <CloseButton ref={closeRef} type="button" aria-label={authCopy.close} onClick={onClose}>

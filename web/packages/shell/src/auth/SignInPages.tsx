@@ -80,7 +80,11 @@ export function UnavailablePage() {
 /** The /signin-failed route; the callback's reason picks the page. */
 export function SignInFailedPage() {
   const [params] = useSearchParams();
-  const reason = params.get("reason");
+  return <FailedPage reason={params.get("reason")} />;
+}
+
+/** The failure page for a reason: audience and unauthenticated mean the cluster refuses the sign-in. */
+export function FailedPage({ reason }: { reason: string | null }) {
   const notAccepted = reason === "audience" || reason === "unauthenticated";
   return (
     <PageState
