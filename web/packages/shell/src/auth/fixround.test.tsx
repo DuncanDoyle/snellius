@@ -106,27 +106,52 @@ describe("sign-out", () => {
     await user.click(screen.getByRole("menuitem", { name: authCopy.signOut }));
   };
 
-  it.each(["javascript:alert(1)", "//evil.test/x", "data:text/html,x", "not a url"])(
-    "refuses next=%s and goes to /",
-    async (next) => {
-      withLogout(() => new Response(JSON.stringify({ next }), { status: 200 }));
-      mount();
-      await signOut();
-      await waitFor(() => expect(nav.navigate).toHaveBeenCalledWith("/"));
-    },
-  );
+  it.each([
+    "javascript:alert(1)",
+    "JavaScript:alert(1)",
+    "//evil.test/x",
+    "data:text/html,x",
+    "not a url",
+    "/\t/evil.com",
+    "/\n/evil.com",
+    "/\r/evil.com",
+    " /evil",
+  ])("refuses next=%s and goes to /", async (next) => {
+    withLogout(() => new Response(JSON.stringify({ next }), { status: 200 }));
+    mount();
+    await signOut();
+    await waitFor(() => expect(nav.navigate).toHaveBeenCalledWith("/"));
+  });
 
   it("follows an https next and a relative one", () => {
     expect(nav.safeNext("https://idp.example.com/out?x=1")).toBe("https://idp.example.com/out?x=1");
     expect(nav.safeNext("/")).toBe("/");
+    // Percent-encoded whitespace stays a local path; the parser does not decode it into "//".
+    expect(nav.safeNext("/%09/evil.com")).toBe("/%09/evil.com");
+    expect(new URL("/%09/evil.com", window.location.origin).origin).toBe(window.location.origin);
+  });
+
+  it.each(["/\t/evil.com", "/\n/evil.com", "/\r/evil.com", " /evil", "//evil.com", "/\\evil.com", "x"])(
+    "isLocalPath rejects %j",
+    (v) => {
+      expect(nav.isLocalPath(v)).toBe(false);
+    },
+  );
+
+  it("isLocalPath accepts plain and percent-encoded paths", () => {
+    expect(nav.isLocalPath("/auth/login?return=%2Fi%2Fa")).toBe(true);
+    expect(nav.isLocalPath("/%09/evil.com")).toBe(true);
   });
 
   it("shows an error and stays put on a non-2xx logout", async () => {
     withLogout(() => new Response(JSON.stringify({ error: "origin-refused" }), { status: 403 }));
     mount();
     await signOut();
-    expect(await screen.findByText(new RegExp(authCopy.signOutFailed))).toBeInTheDocument();
+    expect(await screen.findByText("You're still signed in. Try signing out again.")).toBeInTheDocument();
     expect(nav.navigate).not.toHaveBeenCalled();
+    // Reopening the menu clears the notice.
+    await userEvent.click(screen.getByRole("button", { name: me.username }));
+    expect(screen.queryByText(authCopy.signOutFailed)).toBeNull();
   });
 });
 
@@ -141,6 +166,11 @@ describe("sign-in redirect loop", () => {
     });
     mount();
     expect(await screen.findByRole("heading", { name: authCopy.failedTitle })).toBeInTheDocument();
+    expect(nav.navigate).not.toHaveBeenCalled();
+  });
+
+  it.each(["/\t/evil.com", "/\n/evil.com"])("a login URL of %j is not followed", (u) => {
+    handleUnauthorized("sign-in-required", u);
     expect(nav.navigate).not.toHaveBeenCalled();
   });
 

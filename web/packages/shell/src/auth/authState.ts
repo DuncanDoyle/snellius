@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { navigate } from "./navigate";
+import { isLocalPath, navigate } from "./navigate";
 
 /** What the server last told the page about the sign-in: nothing, a redirect under way, or a session that ended. */
 export type AuthState =
@@ -32,9 +32,6 @@ export function useAuthState(): AuthState {
     () => state,
   );
 }
-
-/** Only a path on this origin is followed: "/x", never "//host" or "/\host". */
-const isLocalPath = (u: string) => u.startsWith("/") && !u.startsWith("//") && !u.startsWith("/\\");
 
 const LAST_REDIRECT_KEY = "snellius.signinRedirectAt";
 const LOOP_WINDOW_MS = 10_000;

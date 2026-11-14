@@ -28,11 +28,13 @@ interface PageNoticeProps {
   error: ApiError;
   /** The page's error title, e.g. "Cannot load findings". */
   title: string;
+  /** Replaces the "title: error" text with fixed wording. */
+  text?: string;
   stylesOverride?: SerializedStyles;
 }
 
 /** Inline notice over data that is still shown after a poll failed. */
-export function PageNotice({ error, title, stylesOverride }: PageNoticeProps) {
+export function PageNotice({ error, title, text, stylesOverride }: PageNoticeProps) {
   const connecting = error.status === 503;
   const { connecting: waiting } = useVocabulary();
   return (
@@ -43,7 +45,7 @@ export function PageNotice({ error, title, stylesOverride }: PageNoticeProps) {
       stylesOverride={stylesOverride}
     >
       <HealthIcon state={connecting ? "unknown" : "error"} notice />
-      {connecting ? `${waiting}: ${error.message}` : `${title}: ${error.message}`}
+      {text ?? (connecting ? `${waiting}: ${error.message}` : `${title}: ${error.message}`)}
     </Box>
   );
 }

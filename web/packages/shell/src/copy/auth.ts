@@ -18,7 +18,7 @@ export const authCopy = {
   usernameLabel: "Username",
   noGroups: "None",
   close: "Close",
-  signOutFailed: "Couldn't sign you out",
+  signOutFailed: "You're still signed in. Try signing out again.",
 };
 
 /** The README section Task 15 writes. */

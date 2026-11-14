@@ -78,7 +78,10 @@ export function UserMenu({ signedIn }: { signedIn: boolean | undefined }) {
           aria-label={me.username}
           aria-haspopup="menu"
           aria-expanded={menu.open}
-          onClick={menu.toggle}
+          onClick={() => {
+            setLogoutError(null);
+            menu.toggle();
+          }}
         >
           <CircleUser size={14} aria-hidden="true" />
           <Name>{me.username}</Name>
@@ -106,7 +109,7 @@ export function UserMenu({ signedIn }: { signedIn: boolean | undefined }) {
         </Menu>
       ) : null}
       {logoutError ? (
-        <PageNotice error={logoutError} title={authCopy.signOutFailed} stylesOverride={noticePos} />
+        <PageNotice error={logoutError} title="" text={authCopy.signOutFailed} stylesOverride={noticePos} />
       ) : null}
       {details ? <AccountDetails me={me} onClose={closeDetails} /> : null}
     </Slot>
