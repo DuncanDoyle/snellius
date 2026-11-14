@@ -427,9 +427,11 @@ func serve(ctx context.Context, a *App, addr, probeAddr string, onListen func(ma
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	a.Start(ctx)
+	// The writer outlives the servers so records from draining requests are written.
+	auditCtx, stopAudit := context.WithCancel(context.Background())
 	auditDone := make(chan struct{})
-	go func() { a.Audit.Run(ctx); close(auditDone) }()
-	defer func() { cancel(); <-auditDone }()
+	go func() { a.Audit.Run(auditCtx); close(auditDone) }()
+	defer func() { stopAudit(); <-auditDone }()
 	a.Audit.Emit(ctx, audit.Record{Level: audit.LevelSecurity, Action: "startup", Outcome: "success", Mode: a.mode(), Listen: addr})
 	probe := a.probe
 	if probe == nil {

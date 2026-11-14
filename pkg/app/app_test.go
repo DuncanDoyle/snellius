@@ -565,7 +565,7 @@ func build(t *testing.T, objs ...runtime.Object) *App {
 	t.Helper()
 	dyn, kube := testutil.Clients(t, objs...)
 	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}},
-		Options{PollInterval: 10 * time.Millisecond, MetricsInterval: time.Hour, UI: ui}, extension.New())
+		Options{PollInterval: 10 * time.Millisecond, MetricsInterval: time.Hour, UI: ui, AuditOut: io.Discard}, extension.New())
 	if err != nil {
 		t.Fatal(err)
 	}

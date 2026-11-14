@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
+	"github.com/DuncanDoyle/snellius/pkg/audit"
 	"github.com/DuncanDoyle/snellius/pkg/extension"
 )
 
@@ -74,5 +76,51 @@ func TestServeAuditsStartupAndTagsRequests(t *testing.T) {
 func TestBuildRejectsUnknownAuditLevel(t *testing.T) {
 	if _, _, err := buildAudit(t, Options{AuditLevels: "security,bogus"}); err == nil {
 		t.Fatal("want error")
+	}
+}
+
+// A record emitted by a request that is still draining at shutdown is written.
+func TestServeWritesRecordsFromDrainingRequests(t *testing.T) {
+	a, out, err := buildAudit(t, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	a.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		a.Audit.Emit(r.Context(), audit.Record{Level: audit.LevelSecurity, Action: "drained"})
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ls, served := startServe(t, a, ctx)
+	go func() {
+		if r, err := http.Get("http://" + ls.main.Addr().String() + "/"); err == nil {
+			_ = r.Body.Close()
+		}
+	}()
+	testutil.Recv(t, started, "request to start")
+	cancel()
+	// Once the listener refuses connections, shutdown is draining the request.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c, err := net.DialTimeout("tcp", ls.main.Addr().String(), 100*time.Millisecond)
+		if err != nil {
+			break
+		}
+		_ = c.Close()
+		if time.Now().After(deadline) {
+			t.Fatal("listener never closed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The audit context must outlive the cancelled serve context.
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	if err := testutil.Recv(t, served, "serve to return"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"action":"drained"`) {
+		t.Fatalf("drained record lost: %q", out.String())
 	}
 }
