@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,14 +12,13 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
-	"time"
 )
 
 const uiNamespace = "snellius"
 
 // forward port-forwards target (for example "pod/x") port 8080 to a free local
 // port, waits until /api/v1/meta answers, and returns the base URL.
-func forward(t *testing.T, target string) string {
+func forward(t *testing.T, target string, remote int) string {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -29,18 +29,28 @@ func forward(t *testing.T, target string) string {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, "kubectl", "--kubeconfig", harnessKubeconfig(t), "-n", uiNamespace,
-		"port-forward", target, fmt.Sprintf("%d:8080", port))
+		"port-forward", target, fmt.Sprintf("%d:%d", port, remote))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	cmd.Stdout = &stderr
 	if err := cmd.Start(); err != nil {
 		cancel()
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { cancel(); _ = cmd.Wait() })
+	exited := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(exited) }()
+	t.Cleanup(func() { cancel(); <-exited })
 
 	u := fmt.Sprintf("http://127.0.0.1:%d", port)
 	eventually(t, func() error {
+		select {
+		case <-exited:
+			t.Fatalf("port-forward %s exited: %s", target, stderr.String())
+		default:
+		}
 		resp, err := http.Get(u + "/api/v1/meta")
 		if err != nil {
-			return err
+			return fmt.Errorf("%w; kubectl: %s", err, stderr.String())
 		}
 		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusOK {
@@ -90,12 +100,15 @@ func jsonpath(t *testing.T, kind, name, path string) string {
 
 func TestLocalModeReachableThroughForwards(t *testing.T) {
 	pod := uiPod(t)
-	for name, target := range map[string]string{
-		"service": "svc/ui-snellius",
-		"pod":     "pod/" + pod,
+	for name, tc := range map[string]struct {
+		target string
+		port   int
+	}{
+		"service": {"svc/ui-snellius", 80},
+		"pod":     {"pod/" + pod, 8080},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := meta(t, forward(t, target)); got != "local" {
+			if got := meta(t, forward(t, tc.target, tc.port)); got != "local" {
 				t.Fatalf("authMode = %q, want local", got)
 			}
 		})
@@ -103,7 +116,7 @@ func TestLocalModeReachableThroughForwards(t *testing.T) {
 }
 
 func TestLocalModeRejectsForeignHostAndOrigin(t *testing.T) {
-	u := forward(t, "svc/ui-snellius")
+	u := forward(t, "svc/ui-snellius", 80)
 	for name, tc := range map[string]struct {
 		header, value string
 		want          int
@@ -133,9 +146,9 @@ func TestLocalModeRejectsForeignHostAndOrigin(t *testing.T) {
 	}
 }
 
-// probe is curl's "<url>=<http code>" output, 000 when the connection failed.
+// probeScript prints one "R:<url>=<http code>" line per URL, 000 when the connection failed.
 const probeScript = `for u in "$@"; do
-  c=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$u"); echo "$u=$c"
+  c=$(curl -s -m 5 -o /dev/null -w "%{http_code}" "$u"); echo "R:$u=$c"
 done`
 
 // TestLocalModeUnreachableInCluster checks from a throwaway pod that the main
@@ -153,25 +166,36 @@ func TestLocalModeUnreachableInCluster(t *testing.T) {
 	}
 	want := []string{"000", "000", "200", "200", "200", "404"}
 
-	var got map[string]string
+	// A detached pod whose logs are read once it succeeds: attaching to a --rm pod loses output.
+	kc := harnessKubeconfig(t)
+	k := func(args ...string) ([]byte, error) {
+		return exec.Command("kubectl", append([]string{"--kubeconfig", kc, "-n", uiNamespace}, args...)...).CombinedOutput()
+	}
+	del := func() { _, _ = k("delete", "pod", "probe-modes", "--ignore-not-found", "--wait=true") }
+	del()
+	t.Cleanup(del)
+	args := append([]string{"run", "probe-modes", "--restart=Never", "--image=curlimages/curl:8.10.1",
+		"--command", "--", "sh", "-c", probeScript, "sh"}, urls...)
+	if out, err := k(args...); err != nil {
+		t.Fatalf("run probe pod: %v: %s", err, out)
+	}
 	eventually(t, func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		defer cancel()
-		args := append([]string{"--kubeconfig", harnessKubeconfig(t), "-n", uiNamespace,
-			"run", "probe-modes", "--rm", "-i", "--restart=Never", "--quiet",
-			"--image=curlimages/curl:8.10.1", "--command", "--", "sh", "-c", probeScript, "sh"}, urls...)
-		out, err := exec.CommandContext(ctx, "kubectl", args...).Output()
-		if err != nil {
-			return fmt.Errorf("probe pod: %w", err)
-		}
-		got = map[string]string{}
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if u, code, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
-				got[u] = code
-			}
+		out, err := k("get", "pod", "probe-modes", "-o", "jsonpath={.status.phase}")
+		if err != nil || string(out) != "Succeeded" {
+			return fmt.Errorf("probe pod phase %q: %v", out, err)
 		}
 		return nil
 	})
+	out, err := k("logs", "probe-modes")
+	if err != nil {
+		t.Fatalf("probe logs: %v: %s", err, out)
+	}
+	got := map[string]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if u, code, ok := strings.Cut(strings.TrimSpace(line), "="); ok && strings.HasPrefix(u, "R:") {
+			got[strings.TrimPrefix(u, "R:")] = code
+		}
+	}
 	for i, u := range urls {
 		if got[u] != want[i] {
 			t.Errorf("GET %s = %q, want %q", u, got[u], want[i])
