@@ -110,6 +110,8 @@ func (s *Store) logoutURL() string {
 		return "/"
 	}
 	q := u.Query()
+	// No ID token reaches the browser, even one written into the discovered endpoint.
+	q.Del("id_token_hint")
 	q.Set("client_id", s.o.ClientID)
 	q.Set("post_logout_redirect_uri", s.origin+"/")
 	u.RawQuery = q.Encode()

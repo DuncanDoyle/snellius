@@ -2,6 +2,7 @@ package session
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -149,6 +150,49 @@ func TestLogoutDuringRefresh(t *testing.T) {
 			}
 			if g := f.gauge(); g != "0" {
 				t.Fatalf("gauge = %s", g)
+			}
+		})
+	}
+}
+
+// Refresh failures log a fixed category, never the refresher's error text.
+func TestRefreshFailureLogsCategoryOnly(t *testing.T) {
+	cases := map[string]struct {
+		err  func(cookie string) error
+		edit func(f *fixture)
+		want string
+	}{
+		"unknown error": {err: func(c string) error {
+			return errors.New("id-token-value access-token-value " + testRefresh + " " + c)
+		}, want: "category=refresh-failed"},
+		"review failed": {err: func(c string) error { return fmt.Errorf("%s: %w", c, oidc.ErrTokenReviewFailed) }, want: "category=token-review-failed"},
+		"subject changed": {edit: func(f *fixture) {
+			f.refresh.result = func() oidc.Result { r := f.result(); r.Subject = "mallory-sub"; return r }
+		}, want: "category=subject-changed"},
+		"issuer changed": {edit: func(f *fixture) {
+			f.refresh.result = func() oidc.Result { r := f.result(); r.Issuer = "https://other.example.com"; return r }
+		}, want: "category=issuer-changed"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, nil)
+			c := f.signIn(f.result("oidc:dev"))
+			if tc.err != nil {
+				f.refresh.err = tc.err(c.Value)
+			}
+			if tc.edit != nil {
+				tc.edit(f)
+			}
+			f.clk.Step(16 * time.Minute)
+			f.wantMe(c, 401, endedBody)
+			logs := f.logs.String()
+			if !strings.Contains(logs, tc.want) {
+				t.Fatalf("logs = %s; want %s", logs, tc.want)
+			}
+			for _, secret := range []string{"id-token-value", "access-token-value", testRefresh, c.Value} {
+				if strings.Contains(logs, secret) {
+					t.Fatalf("logs carry %q: %s", secret, logs)
+				}
 			}
 		})
 	}

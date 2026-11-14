@@ -3,48 +3,59 @@ package oidc
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"golang.org/x/oauth2"
 )
 
-// ErrNoRefreshToken means the sign-in returned no refresh token, so the identity cannot be renewed.
-var ErrNoRefreshToken = errors.New("no refresh token")
+// Refresh failure categories. Refresh returns only these, so no issuer or
+// cluster error text, which could quote a token, reaches a caller or a log.
+var (
+	// ErrNoRefreshToken means the sign-in returned no refresh token, so the identity cannot be renewed.
+	ErrNoRefreshToken     = errors.New("no-refresh-token")
+	ErrRefreshUnavailable = errors.New("refresh-unavailable")
+	ErrTokenRefresh       = errors.New("token-refresh-failed")
+	ErrIDTokenInvalid     = errors.New("id-token-invalid")
+	ErrTokenReviewRefused = errors.New("token-review-refused")
+	ErrTokenReviewFailed  = errors.New("token-review-failed")
+)
 
 // Refresh redeems refreshToken at the token endpoint (OIDC Core §12), checks the
 // new ID token's claims and reviews it. The caller compares iss and sub with the
-// session's. Errors name the failed step, never a token.
+// session's. Every error is one of the categories above.
 func (f *Flow) Refresh(ctx context.Context, refreshToken string) (Result, error) {
 	if refreshToken == "" {
 		return Result{}, ErrNoRefreshToken
 	}
 	eps := f.prov.Endpoints()
 	if eps == nil {
-		return Result{}, errors.New("refresh: the issuer is not discovered")
+		return Result{}, ErrRefreshUnavailable
 	}
 	secret, err := f.clientSecret()
 	if err != nil {
-		return Result{}, fmt.Errorf("refresh: %w", err)
+		return Result{}, ErrRefreshUnavailable
 	}
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, f.prov.HTTPClient())
 	// An expired token makes the source redeem the refresh token.
 	old := &oauth2.Token{RefreshToken: refreshToken, Expiry: time.Unix(1, 0)}
 	tok, err := f.oauth(eps, secret).TokenSource(ctx, old).Token()
 	if err != nil {
-		return Result{}, errors.New("refresh: the token endpoint refused the refresh token")
+		return Result{}, ErrTokenRefresh
 	}
 	raw, _ := tok.Extra("id_token").(string)
 	if raw == "" {
-		return Result{}, errors.New("refresh: the issuer returned no ID token")
+		return Result{}, ErrIDTokenInvalid
 	}
 	cl, err := f.checkTokenClaims(raw)
 	if err != nil {
-		return Result{}, fmt.Errorf("refresh: ID token %w", err)
+		return Result{}, ErrIDTokenInvalid
 	}
 	id, err := f.reviewer.Review(ctx, raw)
-	if err != nil {
-		return Result{}, fmt.Errorf("refresh: %w", err)
+	switch {
+	case errors.Is(err, ErrUnauthenticated), errors.Is(err, ErrAudience):
+		return Result{}, ErrTokenReviewRefused
+	case err != nil:
+		return Result{}, ErrTokenReviewFailed
 	}
 	rt := tok.RefreshToken
 	if rt == "" {

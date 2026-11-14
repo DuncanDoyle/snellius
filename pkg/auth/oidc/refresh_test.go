@@ -3,6 +3,7 @@ package oidc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -67,4 +68,26 @@ func TestRefreshFailures(t *testing.T) {
 			t.Fatal("asked the issuer without a refresh token")
 		}
 	})
+}
+
+// A reviewer error is reduced to a fixed category; its text never reaches the caller.
+func TestRefreshErrorsAreCategories(t *testing.T) {
+	const leak = "id=eyJleak access=access-leak refresh=refresh-leak cookie=cookie-leak"
+	for name, c := range map[string]struct {
+		err  error
+		want error
+	}{
+		"unknown":  {errors.New(leak), ErrTokenReviewFailed},
+		"refused":  {fmt.Errorf("%s: %w", leak, ErrUnauthenticated), ErrTokenReviewRefused},
+		"audience": {fmt.Errorf("%s: %w", leak, ErrAudience), ErrTokenReviewRefused},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFlowFixture(t, "")
+			f.reviewer.err = c.err
+			_, err := f.flow.Refresh(context.Background(), testRefreshToken)
+			if !errors.Is(err, c.want) || strings.Contains(err.Error(), "leak") {
+				t.Fatalf("err = %v, want %v", err, c.want)
+			}
+		})
+	}
 }

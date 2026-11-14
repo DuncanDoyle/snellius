@@ -127,3 +127,21 @@ func TestMiddleware(t *testing.T) {
 		t.Fatalf("after ended = %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// An end-session endpoint's own id_token_hint, single or repeated, never reaches the browser.
+func TestLogoutDropsIDTokenHint(t *testing.T) {
+	for _, ep := range []string{"https://idp.example.com/logout?id_token_hint=abc&realm=x",
+		"https://idp.example.com/logout?id_token_hint=a&id_token_hint=b&realm=x"} {
+		f := newFixture(t, nil)
+		f.endSession = ep
+		rec := f.logout(nil, "https://snellius.example.com")
+		var body struct{ Next string }
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		u, _ := url.Parse(body.Next)
+		if q := u.Query(); q.Has("id_token_hint") || q.Get("realm") != "x" || q.Get("client_id") != "snellius" {
+			t.Fatalf("%s: next = %s", ep, body.Next)
+		}
+	}
+}

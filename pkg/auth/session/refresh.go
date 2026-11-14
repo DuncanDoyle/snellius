@@ -1,6 +1,11 @@
 package session
 
-import "context"
+import (
+	"context"
+	"errors"
+
+	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
+)
 
 // state is what a request's cookie resolves to.
 type state int
@@ -90,12 +95,13 @@ func (s *Store) refresh(sess *session, refreshToken string, done chan struct{}) 
 	now := s.clk.Now()
 	switch {
 	case err != nil:
-		s.log.Warn("session refresh failed; the session ends", "step", err.Error(), "session", sess.auditID)
-		s.end(context.Background(), sess, reasonRefresh)
+		s.endRefresh(sess, failureCategory(err))
 		return
-	case res.Issuer != sess.info.Issuer || res.Subject != sess.info.Subject:
-		s.log.Warn("session refresh returned another iss or sub; the session ends", "session", sess.auditID)
-		s.end(context.Background(), sess, reasonRefresh)
+	case res.Issuer != sess.info.Issuer:
+		s.endRefresh(sess, "issuer-changed")
+		return
+	case res.Subject != sess.info.Subject:
+		s.endRefresh(sess, "subject-changed")
 		return
 	}
 	sess.info.Identity = res.Identity
@@ -104,7 +110,26 @@ func (s *Store) refresh(sess *session, refreshToken string, done chan struct{}) 
 		sess.refreshToken = res.RefreshToken
 	}
 	if !now.Before(freshUntil(sess)) {
-		s.log.Warn("session refresh returned an expired ID token; the session ends", "session", sess.auditID)
-		s.end(context.Background(), sess, reasonRefresh)
+		s.endRefresh(sess, "token-expired")
 	}
+}
+
+// endRefresh ends sess after a failed refresh, logging only a fixed category. s.mu is held.
+func (s *Store) endRefresh(sess *session, category string) {
+	s.log.Warn("session refresh failed; the session ends", "category", category, "session", sess.auditID)
+	s.end(context.Background(), sess, reasonRefresh)
+}
+
+// refreshCategories are the oidc failures logged by name; any other error is "refresh-failed".
+var refreshCategories = []error{oidc.ErrNoRefreshToken, oidc.ErrRefreshUnavailable, oidc.ErrTokenRefresh, oidc.ErrIDTokenInvalid,
+	oidc.ErrTokenReviewRefused, oidc.ErrTokenReviewFailed}
+
+// failureCategory names err by its category, never by its text.
+func failureCategory(err error) string {
+	for _, c := range refreshCategories {
+		if errors.Is(err, c) {
+			return c.Error()
+		}
+	}
+	return "refresh-failed"
 }
