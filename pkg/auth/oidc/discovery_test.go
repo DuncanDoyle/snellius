@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/utils/clock"
 	clocktesting "k8s.io/utils/clock/testing"
 )
 
@@ -81,18 +82,35 @@ func goodDoc(issuer string) map[string]any {
 		"end_session_endpoint": issuer + "/logout"}
 }
 
-func provider(t *testing.T, srv *httptest.Server) *Provider {
+// providerFor builds a production Provider that trusts srv through Config.CAFile.
+func providerFor(t *testing.T, srv *httptest.Server, clk clock.Clock) *Provider {
 	t.Helper()
-	p, err := NewProvider(Config{IssuerURL: srv.URL, ClientID: "c", RedirectURL: "https://s.example.com/auth/callback"}, clocktesting.NewFakeClock(time.Now()))
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := NewProvider(Config{IssuerURL: srv.URL, ClientID: "c", RedirectURL: "https://s.example.com/auth/callback", CAFile: ca}, clk)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return p
 }
 
+func provider(t *testing.T, srv *httptest.Server) *Provider {
+	t.Helper()
+	return providerFor(t, srv, clocktesting.NewFakeClock(time.Now()))
+}
+
+// discover runs one discovery through the production client.
+func discover(t *testing.T, srv *httptest.Server) (*Endpoints, error) {
+	t.Helper()
+	p := provider(t, srv)
+	return p.Discover(context.Background(), p.HTTPClient())
+}
+
 func TestDiscovery(t *testing.T) {
 	srv, _ := idp(t, goodDoc, 0)
-	ep, err := provider(t, srv).Discover(context.Background(), srv.Client())
+	ep, err := discover(t, srv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +126,7 @@ func TestDiscoveryIssuerMismatch(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv, _ := idp(t, func(s string) map[string]any { d := goodDoc(s); d["issuer"] = issuer(s); return d }, 0)
-			if _, err := provider(t, srv).Discover(context.Background(), srv.Client()); err == nil || !strings.Contains(err.Error(), "issuer") {
+			if _, err := discover(t, srv); err == nil || !strings.Contains(err.Error(), "issuer") {
 				t.Fatalf("Discover() = %v, want an issuer mismatch error", err)
 			}
 		})
@@ -119,14 +137,14 @@ func TestDiscoveryRejectsHTTPEndpoints(t *testing.T) {
 	for _, field := range []string{"authorization_endpoint", "token_endpoint"} {
 		t.Run(field, func(t *testing.T) {
 			srv, _ := idp(t, func(s string) map[string]any { d := goodDoc(s); d[field] = "http://idp.example.com/x"; return d }, 0)
-			if _, err := provider(t, srv).Discover(context.Background(), srv.Client()); err == nil || !strings.Contains(err.Error(), field) {
+			if _, err := discover(t, srv); err == nil || !strings.Contains(err.Error(), field) {
 				t.Fatalf("Discover() = %v, want an error naming %s", err, field)
 			}
 		})
 	}
 	t.Run("missing token endpoint", func(t *testing.T) {
 		srv, _ := idp(t, func(s string) map[string]any { d := goodDoc(s); delete(d, "token_endpoint"); return d }, 0)
-		if _, err := provider(t, srv).Discover(context.Background(), srv.Client()); err == nil {
+		if _, err := discover(t, srv); err == nil {
 			t.Fatal("Discover() = nil, want error")
 		}
 	})
@@ -134,7 +152,7 @@ func TestDiscoveryRejectsHTTPEndpoints(t *testing.T) {
 		t.Run("rejects "+bad, func(t *testing.T) {
 			for _, field := range []string{"authorization_endpoint", "token_endpoint", "end_session_endpoint"} {
 				srv, _ := idp(t, func(s string) map[string]any { d := goodDoc(s); d[field] = bad; return d }, 0)
-				if _, err := provider(t, srv).Discover(context.Background(), srv.Client()); err == nil {
+				if _, err := discover(t, srv); err == nil {
 					t.Errorf("%s = %s accepted", field, bad)
 				}
 			}
@@ -143,32 +161,23 @@ func TestDiscoveryRejectsHTTPEndpoints(t *testing.T) {
 }
 
 func TestDiscoveryRefusesRedirects(t *testing.T) {
-	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(goodDoc("x"))
-	}))
+	var followed atomic.Bool
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { followed.Store(true) }))
 	defer target.Close()
 	srv := httptest.NewTLSServer(http.RedirectHandler(target.URL, http.StatusFound))
 	defer srv.Close()
-	p := provider(t, srv)
-	// The provider's own client, with the test server's roots, must not follow.
-	c := *srv.Client()
-	c.CheckRedirect = p.HTTPClient().CheckRedirect
-	if _, err := p.Discover(context.Background(), &c); err == nil || !strings.Contains(err.Error(), "302") {
+	if _, err := discover(t, srv); err == nil || !strings.Contains(err.Error(), "302") {
 		t.Fatalf("Discover() = %v, want a status 302 error", err)
 	}
-	if p.HTTPClient().CheckRedirect == nil {
-		t.Fatal("provider client follows redirects")
+	if followed.Load() {
+		t.Error("the redirect target was requested")
 	}
 }
 
 func TestDiscoveryRetries(t *testing.T) {
 	srv, calls := idp(t, goodDoc, 2)
 	clk := clocktesting.NewFakeClock(time.Now())
-	p, err := NewProvider(Config{IssuerURL: srv.URL, ClientID: "c", RedirectURL: "https://s.example.com/auth/callback"}, clk)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.client = srv.Client()
+	p := providerFor(t, srv, clk)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { p.Run(ctx); close(done) }()
@@ -194,8 +203,7 @@ func TestDiscoveryRetries(t *testing.T) {
 func TestRunStopsOnCancel(t *testing.T) {
 	srv, _ := idp(t, goodDoc, 1<<30)
 	clk := clocktesting.NewFakeClock(time.Now())
-	p, _ := NewProvider(Config{IssuerURL: srv.URL}, clk)
-	p.client = srv.Client()
+	p := providerFor(t, srv, clk)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { p.Run(ctx); close(done) }()
