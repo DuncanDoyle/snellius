@@ -43,6 +43,8 @@ type testIdP struct {
 	form      url.Values             // the last token request
 	basicAuth bool                   // the last token request used HTTP basic auth
 	tokenErr  map[string]string      // when set, the token endpoint answers 400 with it
+	refreshes int                    // refresh_token grants seen
+	noIDToken bool                   // a refresh answers without an ID token
 }
 
 func newTestIdP(t *testing.T, clk *clocktesting.FakeClock) *testIdP {
@@ -67,6 +69,28 @@ func (p *testIdP) serve(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(p.tokenErr)
+			return
+		}
+		if r.PostForm.Get("grant_type") == "refresh_token" {
+			p.refreshes++
+			if r.PostForm.Get("refresh_token") != testRefreshToken {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+				return
+			}
+			now := p.clk.Now()
+			c := map[string]any{"iss": p.srv.URL, "sub": "alice-sub", "aud": testClientID, "exp": now.Add(5 * time.Minute).Unix(), "iat": now.Unix()}
+			if p.claims != nil {
+				p.claims(c)
+			}
+			resp := map[string]any{"access_token": "refreshed-access", "token_type": "Bearer", "expires_in": 300}
+			if !p.noIDToken {
+				p.idToken = jwt(c)
+				resp["id_token"] = p.idToken
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
 		if r.PostForm.Get("code") != "good-code" || oauth2.S256ChallengeFromVerifier(r.PostForm.Get("code_verifier")) != p.challenge {

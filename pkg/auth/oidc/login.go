@@ -303,6 +303,18 @@ func (a *audience) UnmarshalJSON(b []byte) error {
 // checkClaims decodes the ID token's payload without verifying its signature
 // (TokenReview does that) and checks it per OIDC Core §3.1.3.7. Errors name the claim only.
 func (f *Flow) checkClaims(raw, nonce string) (*idClaims, error) {
+	c, err := f.checkTokenClaims(raw)
+	if err != nil {
+		return nil, err
+	}
+	if subtle.ConstantTimeCompare([]byte(c.Nonce), []byte(nonce)) != 1 {
+		return nil, errors.New("nonce does not match")
+	}
+	return c, nil
+}
+
+// checkTokenClaims is checkClaims without the nonce, which a refreshed ID token need not carry.
+func (f *Flow) checkTokenClaims(raw string) (*idClaims, error) {
 	parts := strings.Split(raw, ".")
 	if raw == "" || len(raw) > maxIDToken || len(parts) != 3 {
 		return nil, errors.New("is missing or malformed")
@@ -334,8 +346,6 @@ func (f *Flow) checkClaims(raw, nonce string) (*idClaims, error) {
 	// iat has no lower bound: some issuers backdate it, and exp bounds the token's age.
 	case unix(*c.Iat).After(now.Add(clockSkew)):
 		return nil, errors.New("iat is in the future")
-	case subtle.ConstantTimeCompare([]byte(c.Nonce), []byte(nonce)) != 1:
-		return nil, errors.New("nonce does not match")
 	}
 	return &c, nil
 }
