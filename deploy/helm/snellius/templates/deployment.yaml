@@ -9,7 +9,15 @@ spec:
     matchLabels: {{- include "snellius.selector" . | nindent 6 }}
   template:
     metadata:
-      labels: {{- include "snellius.selector" . | nindent 8 }}
+      labels:
+        {{- include "snellius.selector" . | nindent 8 }}
+        {{- if eq .Values.auth.mode "local" }}
+        istio.io/dataplane-mode: none
+        {{- end }}
+      {{- if eq .Values.auth.mode "local" }}
+      annotations:
+        sidecar.istio.io/inject: "false"
+      {{- end }}
     spec:
       serviceAccountName: {{ include "snellius.sa" . }}
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
@@ -18,7 +26,13 @@ spec:
           image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-            - --listen=:8080
+            - --listen={{ if eq .Values.auth.mode "local" }}127.0.0.1:8080{{ else }}:8080{{ end }}
+            - --probe-listen=:8081
+            - --auth-mode={{ .Values.auth.mode }}
+            {{- with .Values.auth.allowedHosts }}
+            - --allowed-hosts={{ join "," . }}
+            {{- end }}
+            - --audit-levels={{ join "," .Values.audit.levels }}
             {{- with .Values.install.pin }}
             - --install={{ . }}
             {{- end }}
@@ -46,8 +60,14 @@ spec:
             {{- range .Values.extraArgs }}
             - {{ . | quote }}
             {{- end }}
-          {{- if or (dig "limits" "memory" "" .Values.resources) .Values.memoryLimit .Values.extraEnv }}
           env:
+            # The binary compares these to refuse local mode on the host network.
+            - name: POD_IP
+              valueFrom:
+                fieldRef: { fieldPath: status.podIP }
+            - name: HOST_IP
+              valueFrom:
+                fieldRef: { fieldPath: status.hostIP }
             {{- if dig "limits" "memory" "" .Values.resources }}
             # The container's memory limit in bytes; the binary sets the Go memory target to 90 % of it (D-025).
             - name: SNELLIUS_MEMORY_LIMIT
@@ -61,11 +81,11 @@ spec:
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- end }}
           ports:
             - { name: http, containerPort: 8080 }
-          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 5 }
-          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+            - { name: probe, containerPort: 8081 }
+          readinessProbe: { httpGet: { path: /readyz, port: probe }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: probe }, periodSeconds: 10 }
           resources: {{- toYaml .Values.resources | nindent 12 }}
           securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
           {{- with .Values.extraVolumeMounts }}

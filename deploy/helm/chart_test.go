@@ -214,17 +214,21 @@ func TestEndpointsRulesFollowToggle(t *testing.T) {
 	}
 }
 
+// Args every default (local mode) render starts with.
+var localBase = []string{"--listen=127.0.0.1:8080", "--probe-listen=:8081", "--auth-mode=local",
+	"--audit-levels=security,agent,reads,summaries"}
+
 // Defaults match the binary's, so only a non-default toggle becomes a flag.
 func TestTogglesPassedAsFlags(t *testing.T) {
-	if got, want := containerArgs(t), []string{"--listen=:8080"}; !slices.Equal(got, want) {
+	if got, want := containerArgs(t), localBase; !slices.Equal(got, want) {
 		t.Errorf("default args = %v, want %v", got, want)
 	}
 	got := containerArgs(t,
 		"--set", "diagnostics.events=false", "--set", "diagnostics.crds=false",
 		"--set", "diagnostics.proxyStats=false", "--set", "diagnostics.endpoints=false",
 		"--set", "diagnostics.controllerLogs=true")
-	want := []string{"--listen=:8080", "--diagnostics-events=false", "--diagnostics-crds=false",
-		"--diagnostics-proxy-stats=false", "--diagnostics-endpoints=false", "--diagnostics-controller-logs=true"}
+	want := append(slices.Clone(localBase), "--diagnostics-events=false", "--diagnostics-crds=false",
+		"--diagnostics-proxy-stats=false", "--diagnostics-endpoints=false", "--diagnostics-controller-logs=true")
 	if !slices.Equal(got, want) {
 		t.Errorf("args = %v, want %v", got, want)
 	}
@@ -286,7 +290,7 @@ func TestHTTPRouteIsOptIn(t *testing.T) {
 	if n := len(kind(render(t), "HTTPRoute")); n != 0 {
 		t.Fatalf("HTTPRoute must be off by default, got %d", n)
 	}
-	docs := render(t, "--set", "httpRoute.enabled=true", "--set", "httpRoute.parentRefs[0].name=edge",
+	docs := render(t, "--set", "auth.mode=secure", "--set", "httpRoute.enabled=true", "--set", "httpRoute.parentRefs[0].name=edge",
 		"--set", "httpRoute.parentRefs[0].namespace=infra", "--set", "httpRoute.hostnames[0]=ui.example.com")
 	routes := kind(docs, "HTTPRoute")
 	if len(routes) != 1 {
@@ -302,7 +306,7 @@ func TestHTTPRouteIsOptIn(t *testing.T) {
 
 func TestHTTPRouteRequiresParentRefs(t *testing.T) {
 	render(t) // skips without helm
-	out, err := exec.Command("helm", "template", "ui", "./snellius", "-n", "snellius", "--set", "httpRoute.enabled=true").CombinedOutput()
+	out, err := exec.Command("helm", "template", "ui", "./snellius", "-n", "snellius", "--set", "auth.mode=secure", "--set", "httpRoute.enabled=true").CombinedOutput()
 	if err == nil {
 		t.Fatalf("want render failure without parentRefs, got:\n%s", out)
 	}
@@ -371,7 +375,7 @@ func TestPodIsHardened(t *testing.T) {
 		t.Fatalf("want 1 Deployment, got %d", len(ds))
 	}
 	b, _ := yaml.Marshal(ds[0])
-	for _, want := range []string{"runAsNonRoot: true", "readOnlyRootFilesystem: true", "allowPrivilegeEscalation: false", "type: RuntimeDefault", "- ALL", "path: /readyz", "path: /healthz", "--listen=:8080", "containerPort: 8080"} {
+	for _, want := range []string{"runAsNonRoot: true", "readOnlyRootFilesystem: true", "allowPrivilegeEscalation: false", "type: RuntimeDefault", "- ALL", "path: /readyz", "path: /healthz", "--listen=127.0.0.1:8080", "containerPort: 8080", "containerPort: 8081"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("deployment lacks %q", want)
 		}
@@ -400,11 +404,11 @@ func containerArgs(t *testing.T, args ...string) []string {
 }
 
 func TestExtraArgsAppended(t *testing.T) {
-	if got, want := containerArgs(t), []string{"--listen=:8080"}; !slices.Equal(got, want) {
+	if got, want := containerArgs(t), localBase; !slices.Equal(got, want) {
 		t.Errorf("default args = %v, want %v", got, want)
 	}
 	got := containerArgs(t, "--set", "install.pin=kgw/kgateway", "--set", "extraArgs={--poll-interval=10m}")
-	if want := []string{"--listen=:8080", "--install=kgw/kgateway", "--poll-interval=10m"}; !slices.Equal(got, want) {
+	if want := append(slices.Clone(localBase), "--install=kgw/kgateway", "--poll-interval=10m"); !slices.Equal(got, want) {
 		t.Errorf("args = %v, want %v", got, want)
 	}
 }
@@ -414,7 +418,7 @@ func TestDelegationEdgeCapPassedAsFlag(t *testing.T) {
 		t.Errorf("no edge cap flag by default: %v", got)
 	}
 	got := containerArgs(t, "--set", "delegation.edgeCap=20000", "--set", "extraArgs={--poll-interval=10m}")
-	if want := []string{"--listen=:8080", "--delegation-edge-cap=20000", "--poll-interval=10m"}; !slices.Equal(got, want) {
+	if want := append(slices.Clone(localBase), "--delegation-edge-cap=20000", "--poll-interval=10m"); !slices.Equal(got, want) {
 		t.Errorf("args = %v, want %v", got, want)
 	}
 }
@@ -526,9 +530,109 @@ func TestExtraEnvVolumesAndContainers(t *testing.T) {
 	if len(d.Volumes) != 1 || d.Volumes[0].Name != "data" {
 		t.Errorf("volumes = %+v", d.Volumes)
 	}
-	// extraEnv alone, without a memory limit, still renders an env list.
+	// extraEnv alone, without a memory limit, follows the two downward-API vars.
 	env := containerEnv(t, "--set", "resources.limits.memory=null", "--set-json", `extraEnv=[{"name":"ADDON","value":"1"}]`)
-	if len(env) != 1 || env[0].Name != "ADDON" {
+	if len(env) != 3 || env[2].Name != "ADDON" {
 		t.Errorf("env = %+v", env)
+	}
+}
+
+// deployment is the rendered Deployment, decoded.
+func deployment(t *testing.T, args ...string) appsv1.Deployment {
+	t.Helper()
+	ds := kind(render(t, args...), "Deployment")
+	if len(ds) != 1 {
+		t.Fatalf("want 1 Deployment, got %d", len(ds))
+	}
+	b, _ := yaml.Marshal(ds[0])
+	var d appsv1.Deployment
+	if err := yaml.Unmarshal(b, &d); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func TestLocalModeDefaults(t *testing.T) {
+	d := deployment(t)
+	c := d.Spec.Template.Spec.Containers[0]
+	if !slices.Equal(c.Args, localBase) {
+		t.Errorf("args = %v, want %v", c.Args, localBase)
+	}
+	ports := map[string]int32{}
+	for _, p := range c.Ports {
+		ports[p.Name] = p.ContainerPort
+	}
+	if ports["http"] != 8080 || ports["probe"] != 8081 {
+		t.Errorf("ports = %v, want http 8080 and probe 8081", ports)
+	}
+	if c.ReadinessProbe.HTTPGet.Port.String() != "probe" || c.ReadinessProbe.HTTPGet.Path != "/readyz" {
+		t.Errorf("readiness = %+v", c.ReadinessProbe.HTTPGet)
+	}
+	if c.LivenessProbe.HTTPGet.Port.String() != "probe" || c.LivenessProbe.HTTPGet.Path != "/healthz" {
+		t.Errorf("liveness = %+v", c.LivenessProbe.HTTPGet)
+	}
+	field := map[string]string{}
+	for _, e := range c.Env {
+		if e.ValueFrom != nil && e.ValueFrom.FieldRef != nil {
+			field[e.Name] = e.ValueFrom.FieldRef.FieldPath
+		}
+	}
+	if field["POD_IP"] != "status.podIP" || field["HOST_IP"] != "status.hostIP" {
+		t.Errorf("downward env = %v", field)
+	}
+	svc := kind(render(t), "Service")
+	b, _ := yaml.Marshal(svc[0])
+	if !strings.Contains(string(b), "port: 80") || !strings.Contains(string(b), "targetPort: http") {
+		t.Errorf("service keeps port 80 -> http:\n%s", b)
+	}
+}
+
+func TestLocalModeRefusesHTTPRoute(t *testing.T) {
+	render(t) // skips without helm
+	out, err := exec.Command("helm", "template", "ui", "./snellius", "-n", "snellius", "--set", "httpRoute.enabled=true",
+		"--set", "httpRoute.parentRefs[0].name=edge").CombinedOutput()
+	if err == nil {
+		t.Fatalf("want render failure in local mode, got:\n%s", out)
+	}
+	if !strings.Contains(string(out), "auth.mode: secure") {
+		t.Fatalf("error does not name auth.mode: secure:\n%s", out)
+	}
+}
+
+func TestSecureModeArgs(t *testing.T) {
+	got := containerArgs(t, "--set", "auth.mode=secure", "--set", "extraArgs={--poll-interval=10m}")
+	want := []string{"--listen=:8080", "--probe-listen=:8081", "--auth-mode=secure",
+		"--audit-levels=security,agent,reads,summaries", "--poll-interval=10m"}
+	if !slices.Equal(got, want) {
+		t.Errorf("args = %v, want %v", got, want)
+	}
+}
+
+// The mesh opt-out is on the pod template only; the selector must not change.
+func TestMeshOptOutInLocalMode(t *testing.T) {
+	d := deployment(t)
+	pod := d.Spec.Template.ObjectMeta
+	if pod.Annotations["sidecar.istio.io/inject"] != "false" || pod.Labels["istio.io/dataplane-mode"] != "none" {
+		t.Errorf("local pod meta = %v %v", pod.Annotations, pod.Labels)
+	}
+	if _, ok := d.Spec.Selector.MatchLabels["istio.io/dataplane-mode"]; ok {
+		t.Errorf("selector must not carry the mesh label: %v", d.Spec.Selector.MatchLabels)
+	}
+	s := deployment(t, "--set", "auth.mode=secure").Spec.Template.ObjectMeta
+	if _, ok := s.Annotations["sidecar.istio.io/inject"]; ok {
+		t.Errorf("secure mode must not opt out: %v", s.Annotations)
+	}
+	if _, ok := s.Labels["istio.io/dataplane-mode"]; ok {
+		t.Errorf("secure mode must not opt out: %v", s.Labels)
+	}
+}
+
+func TestValuesWiredToFlags(t *testing.T) {
+	got := containerArgs(t, "--set", "auth.allowedHosts={a.example.com,b.example.com}",
+		"--set", "audit.levels={security,reads}")
+	want := []string{"--listen=127.0.0.1:8080", "--probe-listen=:8081", "--auth-mode=local",
+		"--allowed-hosts=a.example.com,b.example.com", "--audit-levels=security,reads"}
+	if !slices.Equal(got, want) {
+		t.Errorf("args = %v, want %v", got, want)
 	}
 }

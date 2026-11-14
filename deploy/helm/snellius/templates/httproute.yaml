@@ -1,4 +1,7 @@
 {{- if .Values.httpRoute.enabled }}
+{{- if eq .Values.auth.mode "local" }}
+{{- fail "httpRoute.enabled needs auth.mode: secure; local mode serves only the loopback" }}
+{{- end }}
 {{- if not .Values.httpRoute.parentRefs }}
 {{- fail "httpRoute.parentRefs is required when httpRoute.enabled is true" }}
 {{- end }}
