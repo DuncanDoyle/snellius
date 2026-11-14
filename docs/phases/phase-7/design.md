@@ -81,7 +81,7 @@ The people:
 - The API and UI listener binds to `:8080` on the pod IP, behind the Service.
 - Every API request needs a session (§5) or, for MCP later, an OAuth access token (§10). Without one: `401` with a login URL.
 - Missing or invalid OIDC configuration: Snellius starts, serves the probe listener, reports not ready, and the UI shows "Sign-in is not configured" with the missing values. No data.
-- **Fail-closed invariant (Codex #12).** Secure mode serves data only when every security component is in place: identity, sessions, the SAR authoriser and the secure-mode projection of every endpoint. Until the sub-phase that completes them (7.4), a build started in secure mode answers every data request, extension routes included, with `503 secure-mode-incomplete`. A nil `Authorizer` never becomes `AllowAll` in secure mode (today it does, `handlers.go:43`).
+- **Fail-closed invariant (Codex #12).** Secure mode serves data only when every security component is in place: identity, sessions, the SAR authoriser and the secure-mode projection of every endpoint. Until the sub-phase that completes them (7.5, after the restricted-viewer summary of §8.3), a build started in secure mode answers every data request, extension routes included, with `503 secure-mode-incomplete`. A nil `Authorizer` never becomes `AllowAll` in secure mode (today it does, `handlers.go:43`).
 
 ### 3.3 Probe listener (our call)
 
@@ -337,8 +337,8 @@ kgwctl reads with the user's kubeconfig. Phase 7 changes nothing in kgwctl; the 
 | 7.1 | Modes and groundwork: loopback and Host enforcement, probe listener and `/metrics`, request IDs and audit stream skeleton (security level), chart modes and refusals, local-mode banner, the secure-mode `503 secure-mode-incomplete` gate |
 | 7.2 | Identity and sessions: OIDC flow, TokenReview, refresh, logout, web sign-in states and user menu, test issuer, e2e sign-in (data still gated) |
 | 7.3 | Authoriser: SAR, cache, full-read fast path, `ErrAuthorizer` and the response-commit wrapper, bench case (data still gated) |
-| 7.4 | Visibility everywhere: §7.2 table, finding and check basis, installs, permissions note, EndpointSlices, path incompleteness; the rule test per surface; the gate opens |
-| 7.5 | Two signals: `pkg/` model, API compatibility matrix, route list, detail, map, Gateway and ListenerSet tables |
+| 7.4 | Visibility everywhere: §7.2 table, finding and check basis, installs, permissions note, EndpointSlices, path incompleteness; the rule test per surface (data still gated) |
+| 7.5 | Two signals: `pkg/` model, API compatibility matrix, route list, detail, map, Gateway and ListenerSet tables; the gate opens |
 | 7.6 | Audit levels complete, docs (README trust model, chart README, upgrade notes, snellius.dev), phase review, `v0.8.0` |
 | 7.7 (if approved) | Claim-mapping fallback with the approved JWT library |
 
