@@ -72,7 +72,7 @@ Flags:
 
 - `--kubeconfig`: path to a kubeconfig; empty uses in-cluster config, else the default loading rules.
 - `--install`: pin the UI to one install (install ID or `namespace/name`).
-- `--listen`: listen address (default `127.0.0.1:8080`). Local mode requires a loopback address.
+- `--listen`: listen address (default `127.0.0.1:8080`; `:8080` in-cluster in secure mode). Local mode requires a loopback address.
 - `--auth-mode`: `local` (default) or `secure`; see [Security and trust model](#security-and-trust-model).
 - `--allowed-hosts`: extra Host names accepted in local mode.
 - `--probe-listen`: listen address of the probe listener (`/healthz`, `/readyz`, `/metrics`). The chart uses container port `probe` (8081).

@@ -63,7 +63,7 @@ helm install ui ./deploy/helm/snellius -n snellius --create-namespace \
 
 ## Probes and metrics
 
-The container has a second port, `probe` (8081), served by `--probe-listen`. Liveness uses `/healthz` and readiness uses `/readyz`; neither lists install IDs. `/metrics` serves Prometheus text: `snellius_auth_mode{mode}`, `snellius_audit_records_total{level}` and `snellius_audit_dropped_total{level}`. The main port also answers `/healthz` and `/readyz` for compatibility, in local mode behind the Host guard. The chart's probes use the `probe` port. `/metrics` is on the probe listener only.
+The container has a second port, `probe` (8081), served by `--probe-listen`. Liveness uses `/healthz` and readiness uses `/readyz`; neither lists install IDs. `/metrics` serves Prometheus text: `snellius_auth_mode{mode}`, `snellius_audit_records_total{level}` and `snellius_audit_dropped_total{level}`. The main port also answers `/healthz` and `/readyz` in local mode behind the Host guard. The chart's probes use the `probe` port. `/metrics` is on the probe listener only.
 
 ## Recompute
 
