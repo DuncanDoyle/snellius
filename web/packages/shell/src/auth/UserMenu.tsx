@@ -45,7 +45,11 @@ const fill = css`
 export function UserMenu({ signedIn }: { signedIn: boolean | undefined }) {
   // An ended session drops the cached identity, so the old name does not stay in the header.
   const ended = useAuthState().kind === "ended";
-  const { data: me } = useMe(signedIn === true && !ended);
+  const { data: me, mutate } = useMe(signedIn === true && !ended);
+  // Opening the menu or Account details re-reads the identity, so refreshed groups show; never while hidden.
+  const revalidate = () => {
+    if (document.visibilityState === "visible") void mutate();
+  };
   const menu = useMenu();
   const [details, setDetails] = useState(false);
   const [logoutError, setLogoutError] = useState<ApiError | null>(null);
@@ -80,6 +84,7 @@ export function UserMenu({ signedIn }: { signedIn: boolean | undefined }) {
           aria-expanded={menu.open}
           onClick={() => {
             setLogoutError(null);
+            if (!menu.open) revalidate();
             menu.toggle();
           }}
         >
@@ -96,6 +101,7 @@ export function UserMenu({ signedIn }: { signedIn: boolean | undefined }) {
             tabIndex={-1}
             onClick={() => {
               menu.close(false);
+              revalidate();
               setDetails(true);
             }}
           >

@@ -16,10 +16,9 @@ export interface Me {
   groups: string[];
 }
 
-/** GET /auth/me while signed in; the key is null (no request) otherwise. */
+/** GET /auth/me while signed in; the key is null (no request) otherwise. SWR revalidates it on focus only while the tab is visible. */
 export function useMe(enabled: boolean) {
   return useSWR<Me, ApiError>(enabled ? "/auth/me" : null, apiFetch, {
-    revalidateOnFocus: false,
     shouldRetryOnError: false,
   });
 }
