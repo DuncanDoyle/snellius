@@ -42,8 +42,14 @@ import (
 
 // Options are the runtime settings.
 type Options struct {
-	// Listen is the HTTP address; empty means :8080 in-cluster and 127.0.0.1:8080 locally.
+	// Listen is the HTTP address; empty means 127.0.0.1:8080, or :8080 in-cluster in secure mode.
 	Listen string
+	// AuthMode is "local" (default: loopback only, Host-guarded) or "secure".
+	AuthMode string
+	// AllowedHosts are extra Host names local mode serves, besides loopback.
+	AllowedHosts []string
+	// ProbeListen is the health-probe address; empty means :8081 in-cluster and 127.0.0.1:8081 locally.
+	ProbeListen string
 	// Pinned restricts the UI to one install: its ID, or namespace/name (D-016).
 	Pinned string
 	// PollInterval is the maximum time between model recomputes: the safety
@@ -332,11 +338,27 @@ func RunWith(ctx context.Context, kubeconfig string, o Options, reg *extension.R
 	if err != nil {
 		return err
 	}
+	if err := validateMode(o.AuthMode); err != nil {
+		return err
+	}
+	if o.AuthMode == "" {
+		o.AuthMode = ModeLocal
+	}
 	if o.Listen == "" {
 		o.Listen = "127.0.0.1:8080"
-		if inCluster {
+		if inCluster && o.AuthMode == ModeSecure {
 			o.Listen = ":8080"
 		}
+	}
+	if o.ProbeListen == "" {
+		o.ProbeListen = "127.0.0.1:8081"
+		if inCluster {
+			o.ProbeListen = ":8081"
+		}
+	}
+	podIP, hostIP := podHostIPs()
+	if err := checkListen(o.AuthMode, o.Listen, podIP, hostIP); err != nil {
+		return err
 	}
 	kube, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
@@ -368,7 +390,7 @@ func serve(ctx context.Context, a *App, addr string, onListen func(net.Addr)) er
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	a.Start(ctx)
-	srv := &http.Server{Handler: a.Handler, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: a.servedHandler(), ReadHeaderTimeout: 10 * time.Second}
 	drained := make(chan struct{})
 	go func() { //nolint:gosec // shutdown must outlive the cancelled serve context
 		defer close(drained)
