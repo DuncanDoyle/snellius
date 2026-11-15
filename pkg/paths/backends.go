@@ -85,8 +85,8 @@ type backends struct {
 	in    BackendsInput
 	set   BackendSet
 	index map[objects.Ref]int
-	// rowRoutes are, per item, the routes with any path row to it, visible or not.
-	rowRoutes [][]objects.Ref
+	// rowRoutes are, per target, the routes with any path row to it, visible or not.
+	rowRoutes map[objects.Ref][]objects.Ref
 	// sets are, per item, the distinct signal sets of its visible rows.
 	sets [][][]Signal
 	// listed is set, per item, by a reason to list it the viewer may see.
@@ -207,7 +207,7 @@ func (b *backends) add(ref objects.Ref) *Backend {
 	}
 	b.index[ref] = len(b.set.Items)
 	b.set.Items = append(b.set.Items, Backend{Ref: ref})
-	b.rowRoutes, b.sets, b.listed = append(b.rowRoutes, nil), append(b.sets, nil), append(b.listed, false)
+	b.sets, b.listed = append(b.sets, nil), append(b.listed, false)
 	return &b.set.Items[len(b.set.Items)-1]
 }
 
@@ -222,12 +222,21 @@ func insert[T any](s []T, v T, compare func(T, T) int) []T {
 
 func compareRefs(a, b objects.Ref) int { return a.Compare(b) }
 
-// rows adds the targets of the path rows.
+// rows adds the targets of the path rows whose routes the viewer may see:
+// a hidden route never asks about its target (D-085).
 func (b *backends) rows() {
 	t := b.t
+	b.rowRoutes = map[objects.Ref][]objects.Ref{}
 	for k, r := range t.Rows {
 		ref, ok := t.target(r)
 		if !ok || !b.wanted(ref) {
+			continue
+		}
+		chain := t.chain(r)
+		route := t.Refs[t.routes[chain[len(chain)-1]].ref]
+		b.rowRoutes[ref] = insert(b.rowRoutes[ref], route, compareRefs)
+		if slices.ContainsFunc(chain, func(ri int32) bool { return !b.can(t.Refs[t.routes[ri].ref]) }) {
+			b.set.Hidden = true
 			continue
 		}
 		it := b.add(ref)
@@ -235,9 +244,6 @@ func (b *backends) rows() {
 			continue
 		}
 		i := b.index[ref]
-		chain := t.chain(r)
-		route := t.Refs[t.routes[chain[len(chain)-1]].ref]
-		b.rowRoutes[i] = insert(b.rowRoutes[i], route, compareRefs)
 		if b.in.Visible != nil && !b.in.Visible(t.Deps(r)) {
 			b.set.Hidden = true
 			continue
@@ -312,19 +318,20 @@ func (b *backends) written() {
 			if !row.Owned {
 				continue
 			}
+			// The route first: a hidden one never asks about its target (D-085).
+			if !b.can(row.Ref) {
+				b.set.Hidden = true
+				continue
+			}
 			if it == nil {
 				if it = b.add(ref); it == nil {
 					return
 				}
 			}
-			if !b.can(row.Ref) {
-				b.set.Hidden = true
-				continue
-			}
 			it.Routes = insert(it.Routes, row.Ref, compareRefs)
 			i := b.index[ref]
 			b.listed[i] = true
-			if _, ok := slices.BinarySearchFunc(b.rowRoutes[i], row.Ref, compareRefs); ok {
+			if _, ok := slices.BinarySearchFunc(b.rowRoutes[ref], row.Ref, compareRefs); ok {
 				continue
 			}
 			for _, port := range writtenPorts(row, ref) {
@@ -412,12 +419,13 @@ func (b *backends) consumers() {
 		if !b.wanted(c.BackendRef) {
 			continue
 		}
-		it := b.add(c.BackendRef)
-		if it == nil {
-			continue
-		}
+		// The consumer first: a hidden one never asks about its backend (D-085).
 		if !b.can(c.Consumer) {
 			b.set.Hidden = true
+			continue
+		}
+		it := b.add(c.BackendRef)
+		if it == nil {
 			continue
 		}
 		b.listed[b.index[c.BackendRef]] = true

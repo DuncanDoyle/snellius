@@ -431,7 +431,9 @@ func TestMixedTrafficSharesLimit(t *testing.T) {
 		return at.Namespace == "" || at.Verb == "get" || at.Namespace[0] == 'b', nil
 	})
 	kinds := &orderedKinds{kinds: kindsN(20), key: "v1"}
-	a := New(Options{Checker: checker, Kinds: mixedKinds{orderedKinds: kinds}, Clock: clk, Metrics: obs.NewRegistry(), IdentityFrom: identityFrom})
+	// A burst of 32, not the default, so the rate binds within this traffic.
+	a := New(Options{Checker: checker, Kinds: mixedKinds{orderedKinds: kinds}, Clock: clk, Metrics: obs.NewRegistry(), IdentityFrom: identityFrom,
+		Burst: 32})
 	var wg sync.WaitGroup
 	for i := range 4 {
 		wg.Go(func() {

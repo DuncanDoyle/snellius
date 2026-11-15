@@ -545,7 +545,8 @@ func TestCommitDenyNotTracked(t *testing.T) {
 		}
 		return false, nil
 	}}
-	srv := serve(t, src, newAuthz(c, clk), api.WithCommitClock(clk.Now))
+	// One SAR at a time: each must start after the previous one moved the clock.
+	srv := serve(t, src, serialOnly{newAuthz(c, clk)}, api.WithCommitClock(clk.Now))
 	if got := routeNames(t, srv, "nobody", base); got != nil {
 		t.Errorf("nobody sees %v", got)
 	}
@@ -819,6 +820,12 @@ func TestHiddenCreateDeleteUnchanged(t *testing.T) {
 // Authorizer over src, after its full read; and the response.
 func coldSARs(t *testing.T, src api.ModelSource, base, path string, decide func(string, sar.Attributes, int) (bool, error)) ([]sar.Attributes, int, string) {
 	t.Helper()
+	return coldSARsOf(t, src, base, path, decide, false)
+}
+
+// coldSARsOf is coldSARs, through an Authorizer without ResolveLists when serial.
+func coldSARsOf(t *testing.T, src api.ModelSource, base, path string, decide func(string, sar.Attributes, int) (bool, error), serial bool) ([]sar.Attributes, int, string) {
+	t.Helper()
 	c := &checker{decide: decide}
 	a := newAuthz(c, clocktesting.NewFakeClock(t0))
 	r, cancel := asUser("v")
@@ -826,8 +833,12 @@ func coldSARs(t *testing.T, src api.ModelSource, base, path string, decide func(
 	if _, err := a.FullRead(r); err != nil {
 		t.Fatal(err)
 	}
+	var az api.Authorizer = a
+	if serial {
+		az = serialOnly{a}
+	}
 	n := len(c.recorded())
-	code, b := call(t, serve(t, src, a), "v", base+path)
+	code, b := call(t, serve(t, src, az), "v", base+path)
 	return c.recorded()[n:], code, string(b)
 }
 
@@ -846,7 +857,7 @@ func TestHiddenRootAddsNoBucket(t *testing.T) {
 		ns := testutil.ScaleNamespace(3)
 		addTo(t, snap, hiddenRoute(t, snap, ns, at, "hidden", firstIn(t, snap, "Gateway", ns).GetName(), "fresh", "be"))
 	}
-	for _, path := range []string{"/routes?limit=200", "/paths?limit=200"} {
+	for _, path := range []string{"/routes?limit=200", "/paths?limit=200", "/backends?limit=200"} {
 		src0, base := worldOf(t, scale.Snapshot(small, 1))
 		sars0, code, want := coldSARs(t, src0, base, path, team)
 		if code != http.StatusOK || len(sars0) >= 400 {
@@ -860,6 +871,11 @@ func TestHiddenRootAddsNoBucket(t *testing.T) {
 			sars, code, got := coldSARs(t, src1, base, path, decide)
 			if code != http.StatusOK || slices.ContainsFunc(sars, fresh) || len(sars) != len(sars0) || masked(t, got) != masked(t, want) {
 				t.Errorf("%s with the hidden route: %d, %d SARs (base %d), fresh asked %v\n%v\n%v", path, code, len(sars), len(sars0), slices.ContainsFunc(sars, fresh), sars, sars0)
+			}
+			// Without the prefetch, a hidden route never asks about its targets either.
+			sars, code, got = coldSARsOf(t, src1, base, path, decide, true)
+			if code != http.StatusOK || slices.ContainsFunc(sars, fresh) || masked(t, got) != masked(t, want) {
+				t.Errorf("%s serial with the hidden route: %d, fresh asked %v", path, code, slices.ContainsFunc(sars, fresh))
 			}
 		}
 		// Padding: hidden routes in new namespaces bring the request to the 500-check cap.

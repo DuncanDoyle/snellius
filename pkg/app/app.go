@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/flowcontrol"
 	"k8s.io/utils/clock"
 
 	"github.com/DuncanDoyle/snellius/pkg/api"
@@ -247,6 +248,9 @@ type Clients struct {
 	InCluster bool
 	// Scraper overrides the metrics scraper InCluster selects; nil keeps it.
 	Scraper ctrlmetrics.Scraper
+	// SAR sends SubjectAccessReviews without a client-side rate limit, so the
+	// authoriser's own limit is the only one; nil means Kube.
+	SAR kubernetes.Interface
 }
 
 // App is a built, not yet started, backend.
@@ -346,7 +350,11 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		if o.Clock != nil {
 			clk = o.Clock
 		}
-		sarAuthz = sar.New(sar.Options{Checker: sar.NewKubeChecker(c.Kube), Kinds: newSARKinds(cfg.Served, mon.Catalog),
+		sarKube := c.SAR
+		if sarKube == nil {
+			sarKube = c.Kube
+		}
+		sarAuthz = sar.New(sar.Options{Checker: sar.NewKubeChecker(sarKube), Kinds: newSARKinds(cfg.Served, mon.Catalog),
 			AllowTTL: o.AuthzCacheTTL, Clock: clk, Metrics: metrics, NamedGetScan: o.AuthzNamedGetScan,
 			MaxInFlight: o.AuthzMaxInFlight, Rate: o.AuthzRate, Burst: o.AuthzBurst})
 		authz = sarAuthz
@@ -488,7 +496,11 @@ func RunWith(ctx context.Context, kubeconfig string, o Options, reg *extension.R
 	if err != nil {
 		return err
 	}
-	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Metadata: md, InCluster: inCluster}, o, reg)
+	sarKube, err := kubernetes.NewForConfig(sarConfig(cfg))
+	if err != nil {
+		return err
+	}
+	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Metadata: md, InCluster: inCluster, SAR: sarKube}, o, reg)
 	if err != nil {
 		return err
 	}
@@ -575,6 +587,14 @@ func serve(ctx context.Context, a *App, addr, probeAddr string, onListen func(ma
 		return fmt.Errorf("serve: %w", failure)
 	}
 	return nil
+}
+
+// sarConfig is a copy of cfg without client-go's default 5 QPS limit, for
+// SubjectAccessReviews only: --authz-rate and --authz-burst bound them (D-100).
+func sarConfig(cfg *rest.Config) *rest.Config {
+	c := rest.CopyConfig(cfg)
+	c.RateLimiter = flowcontrol.NewFakeAlwaysRateLimiter()
+	return c
 }
 
 // restConfig prefers the in-cluster config when kubeconfig is empty, then

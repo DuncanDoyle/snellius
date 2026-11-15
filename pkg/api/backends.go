@@ -63,55 +63,52 @@ func (h *handler) listedBackends(p *engine.Published, i *engine.InstallModel, v 
 	}
 }
 
-// prefetchBackends resolves the buckets of the candidate backends Backends
-// lists from, the roots; then, for the backends not denied, those of the
-// owned routes that write them and of their consumers, and their path rows.
+// prefetchBackends resolves the roots Backends lists from: the routes, the
+// in-scope Backends and the consumers. Then the targets that admitted routes
+// and consumers name, and last the path rows to targets not denied (D-085).
 func (h *handler) prefetchBackends(p *engine.Published, i *engine.InstallModel, v *view, t *paths.Topology, in paths.BackendsInput) {
 	if !v.batching() {
 		return
 	}
 	ix := i.Index
-	written := func(f func(ref objects.Ref, row *explore.RouteRow)) {
-		if ix == nil {
-			return
-		}
-		for ref, uses := range ix.ByBackend {
-			for _, u := range uses {
-				if row := &ix.Routes[u.Row]; row.Owned {
-					f(ref, row)
-				}
-			}
-		}
-	}
 	v.prefetch(func(add func(objects.Ref)) {
-		for _, r := range t.Rows {
-			if ref, ok := t.Target(r); ok {
-				add(ref)
+		if ix != nil {
+			for j := range ix.Routes {
+				add(ix.Routes[j].Ref)
 			}
 		}
-		written(func(ref objects.Ref, _ *explore.RouteRow) { add(ref) })
 		for _, ref := range h.pathMemo.Membership(p, i.Resolved.ID(), t, func() *paths.Membership { return paths.NewMembership(t, in) }).InScope() {
 			add(ref)
 		}
 		for _, c := range in.Consumers {
-			add(c.BackendRef)
+			add(c.Consumer)
 		}
 	})
+	rowDenied := func(r paths.Row) bool {
+		return slices.ContainsFunc(t.Deps(r), func(k int32) bool { return v.denied(t.Refs[k]) })
+	}
 	v.prefetch(func(add func(objects.Ref)) {
-		written(func(ref objects.Ref, row *explore.RouteRow) {
-			if !v.denied(ref) {
-				add(row.Ref)
+		for _, r := range t.Rows {
+			if ref, ok := t.Target(r); ok && !rowDenied(r) {
+				add(ref)
 			}
-		})
+		}
+		if ix != nil {
+			for ref, uses := range ix.ByBackend {
+				if slices.ContainsFunc(uses, func(u explore.BackendUse) bool { row := &ix.Routes[u.Row]; return row.Owned && !v.denied(row.Ref) }) {
+					add(ref)
+				}
+			}
+		}
 		for _, c := range in.Consumers {
-			if !v.denied(c.BackendRef) {
-				add(c.Consumer)
+			if !v.denied(c.Consumer) {
+				add(c.BackendRef)
 			}
 		}
 	})
 	prefetchRows(v, t, func(r paths.Row) bool {
 		ref, ok := t.Target(r)
-		return ok && !v.denied(ref)
+		return ok && !v.denied(ref) && !rowDenied(r)
 	})
 }
 

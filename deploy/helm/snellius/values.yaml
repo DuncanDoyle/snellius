@@ -68,7 +68,8 @@ auth:
     # (resourceNames grants). Off by default: it costs one check per hidden object.
     namedGetScan: false
     # Permission checks sent to the API server across all viewers: at most maxInFlight at
-    # once and rate per second, with burst above the rate. Empty uses 32, 100 and 32.
+    # once and rate per second (at most 10000), with burst above the rate. Empty uses 32,
+    # 100 and 500; a burst of 500 lets one cold page skip the rate.
     maxInFlight: ""
     rate: ""
     burst: ""

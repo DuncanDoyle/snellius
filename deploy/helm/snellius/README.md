@@ -63,8 +63,8 @@ helm install ui ./deploy/helm/snellius -n snellius --create-namespace \
 | `auth.authz.cacheTTL` | `""` | How long an allowed permission check is reused, `30s` to `15m`. Empty uses `60s`. It is how long a revoked permission stays visible in Snellius; a longer TTL means fewer checks. A denied check is reused for 5 minutes. Passed as `--authz-cache-ttl`. |
 | `auth.authz.namedGetScan` | `false` | Also show in lists, counts and facets the objects a viewer may only `get` by name (`resourceNames` grants). Off by default: it costs one check per hidden object. Passed as `--authz-named-get-scan`, secure mode only. |
 | `auth.authz.maxInFlight` | `""` | Most permission checks Snellius sends to the API server at once, across all viewers. Empty uses `32`. Passed as `--authz-max-in-flight`, secure mode only. |
-| `auth.authz.rate` | `""` | Most permission checks Snellius sends to the API server per second, across all viewers. Empty uses `100`. Passed as `--authz-rate`, secure mode only. |
-| `auth.authz.burst` | `""` | Permission checks Snellius may send at once above `rate`. Empty uses `32`. Passed as `--authz-burst`, secure mode only. |
+| `auth.authz.rate` | `""` | Most permission checks Snellius sends to the API server per second, across all viewers, at most `10000`. Empty uses `100`. Passed as `--authz-rate`, secure mode only. |
+| `auth.authz.burst` | `""` | Permission checks Snellius may send above `rate` before the rate applies. Empty uses `500`, so one cold page does not wait on the rate. Passed as `--authz-burst`, secure mode only. |
 | `auth.trustedProxyCIDRs` | `[]` | CIDRs of proxies whose `X-Request-Id` and `X-Forwarded-For` Snellius trusts. Passed as `--trusted-proxy-cidrs`. |
 | `hostAliases` | `[]` | Pod `hostAliases`, for an IdP name that is not in DNS. |
 | `audit.levels` | `[security, agent, reads, summaries]` | Audit levels written to stdout as JSON lines, passed as `--audit-levels`. |

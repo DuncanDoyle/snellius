@@ -15,8 +15,11 @@ const (
 	DefaultMaxInFlight = 32
 	// DefaultRate is the SARs per second when Options.Rate is zero.
 	DefaultRate = 100
-	// DefaultBurst is the SARs sent at once above the rate when Options.Burst is zero.
-	DefaultBurst = 32
+	// DefaultBurst is the SARs sent above the rate when Options.Burst is zero:
+	// one cold page never waits on the bucket.
+	DefaultBurst = 500
+	// MaxRate is the highest --authz-rate, so the token interval never rounds to 0.
+	MaxRate = 10000
 )
 
 // maxQueued is the most checks waiting for admission; one more is ErrOverloaded.
