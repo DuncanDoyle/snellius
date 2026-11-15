@@ -360,7 +360,11 @@ Saved theme choices carry over. Finding codes keep the `KGWUI-` prefix, so API v
 
 ### Unreleased: identity and access (Phase 7)
 
-- **Upgrade break.** An install with `httpRoute.enabled` fails to render until it sets `auth.mode: secure`. Secure mode serves data only from `v0.8.0`. Do not upgrade such an install to a development build.
+- **Upgrade break: `httpRoute.enabled` needs `auth.mode: secure`.** Up to `v0.7.x`, an HTTPRoute let anyone who reached its hostname see everything the Snellius ServiceAccount can read, with no sign-in. The new default, local mode, listens only on the pod's loopback. An HTTPRoute would then either reach nothing, or, with the listener opened, expose that same unauthenticated view through the gateway. So the chart refuses to render the HTTPRoute in local mode, instead of breaking the route silently or exposing it. Secure mode is the mode for a gateway: users sign in, and from `v0.8.0` each user sees only what their own Kubernetes RBAC allows. Before you upgrade such an install, choose one:
+  1. Upgrade to `v0.8.0` or later, and set `auth.mode: secure` with the `auth.oidc.*` values. See [Secure mode](#secure-mode).
+  2. Set `httpRoute.enabled: false`, and reach the UI with `kubectl port-forward`.
+
+  Development builds before `v0.8.0` serve no data in secure mode, so do not upgrade such an install to one.
 - **Default mode is `local`.** The UI listens on `127.0.0.1:8080` in the pod, so from outside the pod only `kubectl port-forward` reaches it. Upgrades with `--reuse-values` from older releases work.
 - **Probe port.** Liveness and readiness probes use the new `probe` port (8081). `/readyz` no longer lists install IDs; they go to the log.
 - **`/metrics`.** The probe listener serves Prometheus text: `snellius_auth_mode{mode}`, `snellius_audit_records_total{level}` and `snellius_audit_dropped_total{level}`.

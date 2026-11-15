@@ -1,6 +1,6 @@
 {{- if .Values.httpRoute.enabled }}
 {{- if eq (include "snellius.authMode" .) "local" }}
-{{- fail "httpRoute.enabled needs auth.mode: secure; local mode serves only the loopback" }}
+{{- fail "httpRoute.enabled needs auth.mode: secure: local mode has no sign-in and listens only on the pod loopback. See Upgrade notes in the README" }}
 {{- end }}
 {{- if not .Values.httpRoute.parentRefs }}
 {{- fail "httpRoute.parentRefs is required when httpRoute.enabled is true" }}
