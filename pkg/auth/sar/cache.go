@@ -3,6 +3,7 @@ package sar
 import (
 	"container/list"
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -116,24 +117,42 @@ func (c *cache) check(ctx context.Context, spend func() error, id oidc.Identity,
 		c.flights[k] = f
 		c.mu.Unlock()
 		c.m.cache.Inc("miss")
-		f.d, f.err = c.send(ctx, id, a)
+		return c.fly(ctx, f, k, id, a)
+	}
+}
+
+// fly runs f's SAR and completes f even when the Checker panics: waiters
+// get an error and the panic continues to the request's own recovery.
+func (c *cache) fly(ctx context.Context, f *flight, k flightKey, id oidc.Identity, a Attributes) (decision, error) {
+	sent := false
+	defer func() {
+		if !sent {
+			f.d, f.err = decision{}, checkError(categoryPanic)
+		}
 		c.mu.Lock()
 		delete(c.flights, k)
 		if f.err == nil {
-			c.store(h, a, f.d)
+			c.store(k.id, a, f.d)
 		}
 		c.mu.Unlock()
 		close(f.done)
-		return f.d, f.err
-	}
+	}()
+	f.d, f.err = c.send(ctx, id, a)
+	sent = true
+	return f.d, f.err
 }
 
 // send runs one SAR, anchoring its expiry at the start. A result that is
 // already expired when it returns is an error. Waiters keep the SAR running
-// when the request that started it goes away.
+// when the request that started it goes away, but never past the TTL.
 func (c *cache) send(ctx context.Context, id oidc.Identity, a Attributes) (decision, error) {
 	start := c.clock.Now()
-	allowed, err := c.checker.Check(context.WithoutCancel(ctx), id, a)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.ttl)
+	defer cancel()
+	allowed, err := c.checker.Check(ctx, id, a)
+	if err != nil && !errors.Is(err, ErrCheck) && ctx.Err() != nil {
+		err = checkError(categoryTimeout)
+	}
 	end := c.clock.Now()
 	d := decision{allowed: allowed, expires: start.Add(c.ttl)}
 	if err == nil && !d.expires.After(end) {

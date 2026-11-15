@@ -39,6 +39,7 @@ const (
 	categoryRequest    = "request"
 	categoryEvaluation = "evaluation-error"
 	categoryLate       = "result-expired"
+	categoryPanic      = "checker-panic"
 )
 
 func checkError(category string) error { return fmt.Errorf("%w: %s", ErrCheck, category) }

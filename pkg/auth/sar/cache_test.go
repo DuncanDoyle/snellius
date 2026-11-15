@@ -13,6 +13,7 @@ import (
 
 	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
+	"github.com/DuncanDoyle/snellius/pkg/obs"
 )
 
 func allowAll(oidc.Identity, Attributes) (bool, error) { return true, nil }
@@ -373,4 +374,92 @@ func metricLine(t *testing.T, f *fixture, name string) string {
 		}
 	}
 	return ""
+}
+
+func TestFlightBoundedByTTL(t *testing.T) {
+	started, gate, joined := make(chan string, 4), make(chan struct{}), make(chan struct{}, 4)
+	block := true
+	// A tiny TTL: the flight deadline is wall time; the checker waits for it only once the waiter joined.
+	f := newFixture(nil)
+	f.a = New(Options{Checker: blockingCtx(started, gate, &block), Kinds: testKinds, TTL: 20 * time.Millisecond, Clock: f.clock, Metrics: obs.NewRegistry(), IdentityFrom: identityFrom})
+	f.a.cache.joined = func() { joined <- struct{}{} }
+	errs := make(chan error, 2)
+	authorize := func() {
+		_, err := f.a.AuthorizeErr(request(user("alice")), route("shop", "web"))
+		errs <- err
+	}
+	go authorize()
+	<-started
+	go authorize()
+	<-joined
+	close(gate)
+	for range 2 {
+		if err := <-errs; !errors.Is(err, ErrCheck) || !strings.Contains(err.Error(), categoryTimeout) {
+			t.Fatalf("error = %v, want a timeout ErrCheck for owner and waiter", err)
+		}
+	}
+	block = false
+	if !mustAuthorize(t, f.a, user("alice"), route("shop", "web")) {
+		t.Fatal("a later check after the timeout was not answered")
+	}
+}
+
+// blockingCtx reports each SAR on started and, while *block, waits for gate and then for its ctx to end.
+func blockingCtx(started chan<- string, gate <-chan struct{}, block *bool) Checker {
+	return checkerFunc(func(ctx context.Context, id oidc.Identity, _ Attributes) (bool, error) {
+		started <- id.Username
+		if *block {
+			<-gate
+			<-ctx.Done()
+			return false, ctx.Err()
+		}
+		return true, nil
+	})
+}
+
+type checkerFunc func(context.Context, oidc.Identity, Attributes) (bool, error)
+
+func (f checkerFunc) Check(ctx context.Context, id oidc.Identity, a Attributes) (bool, error) {
+	return f(ctx, id, a)
+}
+
+func TestCheckerPanicCompletesFlight(t *testing.T) {
+	started, release, joined := make(chan string, 4), make(chan struct{}), make(chan struct{}, 4)
+	panics := true
+	f := newFixture(func(id oidc.Identity, _ Attributes) (bool, error) {
+		if !panics {
+			return true, nil
+		}
+		started <- id.Username
+		<-release
+		panic("checker bug")
+	})
+	f.a.cache.joined = func() { joined <- struct{}{} }
+	recovered := make(chan any, 1)
+	go func() {
+		defer func() { recovered <- recover() }()
+		_, _ = f.a.AuthorizeErr(request(user("alice")), route("shop", "web"))
+	}()
+	<-started
+	waiter := make(chan error, 1)
+	go func() {
+		ok, err := f.a.AuthorizeErr(request(user("alice")), route("shop", "web"))
+		if ok {
+			err = errors.New("allowed")
+		}
+		waiter <- err
+	}()
+	<-joined
+	close(release)
+	if p := <-recovered; p != "checker bug" {
+		t.Fatalf("owner recovered %v, want the checker's panic", p)
+	}
+	if err := <-waiter; !errors.Is(err, ErrCheck) || !strings.Contains(err.Error(), categoryPanic) {
+		t.Fatalf("waiter error = %v, want a checker-panic ErrCheck", err)
+	}
+	panics = false
+	if !mustAuthorize(t, f.a, user("alice"), route("shop", "web")) {
+		t.Fatal("a later check did not run a new flight")
+	}
+	f.expectSARs(t, 2, "after the panic")
 }
