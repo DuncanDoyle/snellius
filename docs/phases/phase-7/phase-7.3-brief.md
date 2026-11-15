@@ -23,7 +23,7 @@ Secure mode knows who is calling (7.2) but not what they may read. 7.3 adds the 
 | Identity that may `list` every served kind cluster-wide | Fast path, asked only by requests that need a population: no per-object SARs; "true" expires at its earliest allow, "false" at its denying check |
 | `/routes` on Large, viewer allowed 10 of 100 namespaces | At most 400 SARs cold and 150 per minute warm; every poll 200 without contention (D-100 targets, reported by the bench) |
 | Many viewers at once | At most 32 SARs in flight and 100/s (burst 32) by default; the permission cache stays within 8 MiB |
-| More than 500 distinct uncached checks in one request | `503 authz-unavailable` |
+| More than 1,000 distinct uncached checks in one request (D-100) | `503 authz-unavailable` |
 | Two identities with different groups | Never share a cached decision |
 | `--authz-cache-ttl` outside 30 s to 15 min | Refused at startup |
 | Local mode | Unchanged |
