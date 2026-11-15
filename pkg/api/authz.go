@@ -31,6 +31,13 @@ type ListAuthorizer interface {
 	CanList(r *http.Request, gk objects.GroupKind, namespace string) (bool, error)
 }
 
+// FullReader answers the full-read fast path (design §6.4): whether the
+// caller may list every served kind cluster-wide and so sees the allow-all view.
+type FullReader interface {
+	// FullRead reports whether the caller of r reads everything, or why it could not tell.
+	FullRead(r *http.Request) (bool, error)
+}
+
 // ErrCheckLimit is the error of a request that needs more uncached checks than checkLimit.
 var ErrCheckLimit = errors.New("authorisation check limit reached")
 

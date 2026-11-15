@@ -61,17 +61,21 @@ type Authorizer struct {
 	identityFrom func(context.Context) (oidc.Identity, bool)
 	clock        clock.WithTicker
 	cache        *cache
+	full         *fullCache
+	// parallel bounds the SARs of one full-read evaluation; tests lower it.
+	parallel int
 	// spend and report are api.SpendCheck and api.ReportAuthzError; tests swap them.
 	spend  func(*http.Request) error
 	report func(*http.Request, error)
-	// swept is a test hook run after each sweep; nil in production.
-	swept func()
+	// Test hooks, nil in production: run after each sweep; a full-read evaluation stopped early.
+	swept, fullStopped func()
 }
 
 var (
 	_ api.Authorizer     = (*Authorizer)(nil)
 	_ api.ErrAuthorizer  = (*Authorizer)(nil)
 	_ api.ListAuthorizer = (*Authorizer)(nil)
+	_ api.FullReader     = (*Authorizer)(nil)
 )
 
 // New returns an Authorizer; call Run to sweep its cache.
@@ -85,11 +89,14 @@ func New(o Options) *Authorizer {
 	if o.IdentityFrom == nil {
 		o.IdentityFrom = session.IdentityFrom
 	}
+	m := newMetrics(o.Metrics)
 	return &Authorizer{
 		kinds:        o.Kinds,
 		identityFrom: o.IdentityFrom,
 		clock:        o.Clock,
-		cache:        newCache(o.Checker, o.Clock, o.TTL, newMetrics(o.Metrics)),
+		cache:        newCache(o.Checker, o.Clock, o.TTL, m),
+		full:         newFullCache(o.Clock, m),
+		parallel:     fullReadParallel,
 		spend:        api.SpendCheck,
 		report:       api.ReportAuthzError,
 	}
@@ -108,7 +115,9 @@ func (a *Authorizer) run(ctx context.Context, tick <-chan time.Time) {
 		case <-ctx.Done():
 			return
 		case <-tick:
-			a.cache.sweep(a.clock.Now())
+			now := a.clock.Now()
+			a.cache.sweep(now)
+			a.full.sweep(now)
 			if a.swept != nil {
 				a.swept()
 			}
