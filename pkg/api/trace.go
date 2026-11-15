@@ -37,7 +37,7 @@ func (d *detail) trace(route objects.Ref) routeTrace {
 	t, proj, _ := d.h.pathModel(d.p, d.i)
 	var rows []int32
 	for _, k := range proj.Order {
-		if r := t.Rows[k]; t.Route(r) == route && d.v.allowTable(t, t.Deps(r)) {
+		if r := t.Rows[k]; t.Route(r) == route && d.v.allowTableNamed(t, t.Deps(r), writtenTarget(t, r)) {
 			rows = append(rows, k)
 		}
 	}
@@ -104,6 +104,18 @@ func (d *detail) trace(route objects.Ref) routeTrace {
 		rt.merge(proj, k, entry[a], own[a].Signals)
 	}
 	return out
+}
+
+// writtenTarget is the backend or mirror target row r's route writes, a
+// named ref (D-100); nil for a row without one.
+func writtenTarget(t *paths.Topology, r paths.Row) *objects.Ref {
+	if b, ok := t.Backend(r); ok {
+		return &b.Ref
+	}
+	if m, ok := t.Mirror(r); ok {
+		return &m.Backend
+	}
+	return nil
 }
 
 // merge adds row k, through serves entry a with its own signals, to rt: the

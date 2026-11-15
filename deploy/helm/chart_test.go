@@ -839,3 +839,16 @@ func TestAuthzCacheTTLValue(t *testing.T) {
 		t.Errorf("local args = %v, want %v", got, localBase)
 	}
 }
+
+// auth.authz.namedGetScan renders --authz-named-get-scan only when true and in secure mode.
+func TestAuthzNamedGetScanValue(t *testing.T) {
+	if got := containerArgs(t, withSecure("--set", "auth.authz.namedGetScan=true")...); !slices.Contains(got, "--authz-named-get-scan") {
+		t.Errorf("secure args lack --authz-named-get-scan: %v", got)
+	}
+	for _, args := range [][]string{secureSet, withSecure("--set", "auth.authz.namedGetScan=false"), withSecure("--set", "auth.authz=null"),
+		{"--set", "auth.authz.namedGetScan=true"}} {
+		if got := containerArgs(t, args...); slices.Contains(got, "--authz-named-get-scan") {
+			t.Errorf("%v renders --authz-named-get-scan: %v", args, got)
+		}
+	}
+}

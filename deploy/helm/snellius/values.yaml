@@ -64,6 +64,9 @@ auth:
     # How long a permission check is reused, 30s to 15m; empty uses 30s. It is how long a
     # permission change takes to show in Snellius; a longer TTL means fewer checks.
     cacheTTL: ""
+    # Also show in lists, counts and facets the objects a viewer may only get by name
+    # (resourceNames grants). Off by default: it costs one check per hidden object.
+    namedGetScan: false
   # CIDRs of proxies whose X-Request-Id and X-Forwarded-For Snellius trusts (secure mode).
   trustedProxyCIDRs: []
 # Pod hostAliases, for an IdP name that is not in DNS. Passed through unchanged.

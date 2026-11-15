@@ -64,6 +64,9 @@ spec:
             {{- with include "snellius.authzValue" (dict "root" . "key" "cacheTTL") }}
             - --authz-cache-ttl={{ . }}
             {{- end }}
+            {{- if eq (include "snellius.authzValue" (dict "root" . "key" "namedGetScan")) "true" }}
+            - --authz-named-get-scan
+            {{- end }}
             {{- if eq (include "snellius.cookieSecure" .) "false" }}
             - --cookie-secure=false
             {{- end }}

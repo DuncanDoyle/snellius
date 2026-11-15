@@ -24,6 +24,14 @@ type ErrAuthorizer interface {
 	AuthorizeErr(r *http.Request, ref objects.Ref) (bool, error)
 }
 
+// NamedAuthorizer answers named-ref checks (D-100): a detail page's subject,
+// or an object named in a readable object. Without it a named ref is checked
+// as a population member.
+type NamedAuthorizer interface {
+	// AuthorizeNamedErr reports whether the caller of r may view the named ref, or why it could not tell.
+	AuthorizeNamedErr(r *http.Request, ref objects.Ref) (bool, error)
+}
+
 // ListAuthorizer answers population checks (design §7.6, §8.1): whether the
 // caller may list a kind in a namespace, "" meaning cluster-wide.
 type ListAuthorizer interface {
@@ -84,6 +92,23 @@ func decide(r *http.Request, a Authorizer, ref objects.Ref) bool {
 		return false
 	}
 	allowed, err := ea.AuthorizeErr(r, ref)
+	if err != nil {
+		ReportAuthzError(r, err)
+		return false
+	}
+	return allowed
+}
+
+// decideNamed is decide for a named ref, through NamedAuthorizer when a has it.
+func decideNamed(r *http.Request, a Authorizer, ref objects.Ref) bool {
+	na, ok := a.(NamedAuthorizer)
+	if !ok {
+		return decide(r, a, ref)
+	}
+	if authzFailed(r) {
+		return false
+	}
+	allowed, err := na.AuthorizeNamedErr(r, ref)
 	if err != nil {
 		ReportAuthzError(r, err)
 		return false

@@ -585,7 +585,7 @@ func TestBackendLinkAgreesWithBackendDetail(t *testing.T) {
 				listed := h.listedBackends(p, i, v, t2)
 				for _, ref := range refs {
 					status, _ := raw(t, srv, listBase+backendDetailPath(ref))
-					if got := v.can(ref) && listed(ref); got != (status == 200) {
+					if got := v.canNamed(ref) && listed(ref, true); got != (status == 200) {
 						t.Errorf("pass %d: %s %s listed %v, backend page %d", pass, ref.Kind, ref, got, status)
 					} else if got && pass == 0 && ref.Group == "" && ref.Kind == "Service" {
 						services++

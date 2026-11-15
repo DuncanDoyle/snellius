@@ -38,13 +38,29 @@ func (h *handler) backendsInput(p *engine.Published, i *engine.InstallModel, v *
 	return in
 }
 
+// withSubject returns in with ref as its named subject, already admitted by
+// canNamed: path rows to ref check it by name, every other dependency stays a population check.
+func withSubject(in paths.BackendsInput, v *view, t *paths.Topology, ref objects.Ref) paths.BackendsInput {
+	in.Subject = &ref
+	if !v.all {
+		in.Visible = func(d explore.DepSet) bool { return v.allowTableNamed(t, d, &ref) }
+	}
+	return in
+}
+
 // listedBackends reports the backends backendDetail serves the caller of v:
 // the ones Backends lists over the same input, so links and the endpoint
-// agree. The membership is memoised with t; only viewer checks run per request.
-func (h *handler) listedBackends(p *engine.Published, i *engine.InstallModel, v *view, t *paths.Topology) func(objects.Ref) bool {
+// agree. named asks about ref as backendDetail's subject, else as a list row.
+// The membership is memoised with t; only viewer checks run per request.
+func (h *handler) listedBackends(p *engine.Published, i *engine.InstallModel, v *view, t *paths.Topology) func(ref objects.Ref, named bool) bool {
 	in := h.backendsInput(p, i, v, t)
 	ms := h.pathMemo.Membership(p, i.Resolved.ID(), t, func() *paths.Membership { return paths.NewMembership(t, in) })
-	return func(ref objects.Ref) bool { return ms.Listed(t, in, ref) }
+	return func(ref objects.Ref, named bool) bool {
+		if named {
+			return ms.Listed(t, withSubject(in, v, t, ref), ref)
+		}
+		return ms.Listed(t, in, ref)
+	}
 }
 
 // backendList is GET …/backends (design §8.1): the install's backends as the
@@ -131,12 +147,12 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	ref := objects.Ref{Group: group, Kind: r.PathValue("kind"), Namespace: r.PathValue("ns"), Name: r.PathValue("name")}
 	v := h.view(r)
-	if !v.can(ref) {
+	if !v.canNamed(ref) {
 		writeErr(w, http.StatusNotFound, notFoundInScope)
 		return
 	}
 	t, proj, kept := h.pathModel(p, i)
-	in := h.backendsInput(p, i, v, t)
+	in := withSubject(h.backendsInput(p, i, v, t), v, t, ref)
 	in.Only = &ref
 	set := paths.Backends(t, proj, in)
 	if len(set.Items) == 0 {
@@ -151,7 +167,7 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	titles := signalTitles(i, b.Problem.Signals)
-	out := BackendDetail{Install: i.Resolved.ID(), Ref: l.linked(ref), Kind: backendKind(b), Type: b.Type, Problem: problemDTO(l, titles, b.Problem),
+	out := BackendDetail{Install: i.Resolved.ID(), Ref: l.linkedNamed(ref), Kind: backendKind(b), Type: b.Type, Problem: problemDTO(l, titles, b.Problem),
 		Status: problemDTO(l, titles, paths.Problem{Signals: b.Own}).Signals, Exposure: exposure, Consumers: make([]ConsumerDTO, 0, len(b.Consumers)),
 		Sources: []EndpointsDTO{}, PortChain: []PortChainDTO{}, Explanations: []RefExplanationDTO{}, CollectedAt: wireTime(p.ConfirmedAt)}
 	for _, c := range b.Consumers {

@@ -17,8 +17,9 @@ type linker struct {
 	m      *engine.Model
 	i      *engine.InstallModel
 	detail map[objects.GroupKind]bool
-	// backend reports whether backendDetail serves this caller a ref; nil links no backend.
-	backend func(objects.Ref) bool
+	// backend reports whether backendDetail serves this caller a ref, named as
+	// its subject or else as a list row; nil links no backend.
+	backend func(ref objects.Ref, named bool) bool
 }
 
 // linkerFor returns the linker for the caller of v and install i of m, without backend links.
@@ -34,25 +35,43 @@ func linkerFor(v *view, m *engine.Model, i *engine.InstallModel) linker {
 // backend links come from t and proj when given, else from h.pathModel.
 func (h *handler) linker(v *view, p *engine.Published, i *engine.InstallModel, t *paths.Topology, proj *paths.Projection) linker {
 	l := linkerFor(v, p.Model, i)
-	listed := sync.OnceValue(func() func(objects.Ref) bool {
+	listed := sync.OnceValue(func() func(objects.Ref, bool) bool {
 		if t == nil {
 			t, _, _ = h.pathModel(p, i)
 		}
 		return h.listedBackends(p, i, v, t)
 	})
-	l.backend = func(ref objects.Ref) bool { return listed()(ref) }
+	l.backend = func(ref objects.Ref, named bool) bool { return listed()(ref, named) }
 	return l
 }
 
 // link is admit, except that a ref backendDetail serves the caller is
 // backend unless it is detail. Detail kinds are never backends in practice;
-// should a route write one, its detail page wins.
+// should a route write one, its detail page wins. ref is a population member (D-100).
 func (l linker) link(ref objects.Ref) Link {
-	k := l.admit(ref)
-	if k != LinkDetail && l.backend != nil && l.v.can(ref) && l.backend(ref) {
+	return l.linkWith(ref, false)
+}
+
+// linkNamed is link for a named ref: a detail page's subject, or a ref
+// written in an object the caller may read (D-100).
+func (l linker) linkNamed(ref objects.Ref) Link {
+	return l.linkWith(ref, true)
+}
+
+func (l linker) linkWith(ref objects.Ref, named bool) Link {
+	k := l.admitWith(ref, named)
+	if k != LinkDetail && l.backend != nil && l.check(named)(ref) && l.backend(ref, named) {
 		return LinkBackend
 	}
 	return k
+}
+
+// check is the view's predicate for a named or a population ref.
+func (l linker) check(named bool) func(objects.Ref) bool {
+	if named {
+		return l.v.canNamed
+	}
+	return l.v.can
 }
 
 // admit is admit(install, caller, ref) of design §7.1, the one place that
@@ -60,8 +79,18 @@ func (l linker) link(ref objects.Ref) Link {
 // denied, absent, never served or not admitted; detail when it is admitted
 // and its kind has a detail view; else yaml. A referenced or selected
 // candidate needs a referrer the caller may view. Admission never follows chains.
+// ref is a population member (D-100).
 func (l linker) admit(ref objects.Ref) Link {
-	if l.i.Index == nil || !l.v.can(ref) {
+	return l.admitWith(ref, false)
+}
+
+// admitNamed is admit for a named ref; its referrers stay population checks.
+func (l linker) admitNamed(ref objects.Ref) Link {
+	return l.admitWith(ref, true)
+}
+
+func (l linker) admitWith(ref objects.Ref, named bool) Link {
+	if l.i.Index == nil || !l.check(named)(ref) {
 		return LinkNone
 	}
 	a, ok := l.i.Index.Admission(ref)
@@ -82,7 +111,12 @@ func (l linker) admit(ref objects.Ref) Link {
 	return LinkYAML
 }
 
-// linked is ref with its link.
+// linked is ref with its link, as a population member.
 func (l linker) linked(ref objects.Ref) LinkedRef {
 	return LinkedRef{Ref: ref, Link: l.link(ref)}
+}
+
+// linkedNamed is ref with its link, as a named ref.
+func (l linker) linkedNamed(ref objects.Ref) LinkedRef {
+	return LinkedRef{Ref: ref, Link: l.linkNamed(ref)}
 }

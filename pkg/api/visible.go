@@ -11,15 +11,20 @@ import (
 
 // view is what the caller of one request may see (design §7.4). Every
 // visibility decision of a request goes through its view, which asks the
-// Authorizer about each ref at most once. Under AllowAll it never asks and
-// every count is the precomputed one (rule 10). A view is used by one
-// goroutine.
+// Authorizer about each ref at most once per kind of question. Under
+// AllowAll it never asks and every count is the precomputed one (rule 10).
+// A view is used by one goroutine.
+//
+// Population answers (can) and named answers (canNamed) never share storage
+// (D-100): a named allow must never answer a population question.
 type view struct {
 	a    Authorizer
 	r    *http.Request
 	all  bool
 	seen map[objects.Ref]bool
-	// pooled is set when seen came from seenPool.
+	// seenNamed memoises canNamed.
+	seenNamed map[objects.Ref]bool
+	// pooled is set when seen and seenNamed came from seenPool and namedPool.
 	pooled bool
 	// deps memoises allowDeps per index of the request's dependency table: 1 visible, -1 hidden.
 	deps []int8
@@ -33,7 +38,7 @@ type view struct {
 func (h *handler) view(r *http.Request) *view {
 	v := &view{a: h.authz, r: r, all: allowsAll(h.authz) || fullRead(r)}
 	if !v.all {
-		v.seen = map[objects.Ref]bool{}
+		v.seen, v.seenNamed = map[objects.Ref]bool{}, map[objects.Ref]bool{}
 	}
 	return v
 }
@@ -46,26 +51,36 @@ var seenPool interface {
 	Put(any)
 } = &sync.Pool{New: func() any { return map[objects.Ref]bool{} }}
 
-// borrow swaps v's memo for one from seenPool; release returns it.
+// namedPool recycles the named memos as seenPool does the population ones;
+// the two never trade maps. Tests swap it to control reuse.
+var namedPool interface {
+	Get() any
+	Put(any)
+} = &sync.Pool{New: func() any { return map[objects.Ref]bool{} }}
+
+// borrow swaps v's memos for ones from seenPool and namedPool; release returns them.
 func (v *view) borrow() {
 	if v.all || v.pooled {
 		return
 	}
-	v.seen, v.pooled = seenPool.Get().(map[objects.Ref]bool), true
+	v.seen, v.seenNamed, v.pooled = seenPool.Get().(map[objects.Ref]bool), namedPool.Get().(map[objects.Ref]bool), true
 }
 
-// release clears a borrowed memo and returns it to seenPool. v asks the
+// release clears the borrowed memos and returns each to its pool. v asks the
 // Authorizer afresh after it.
 func (v *view) release() {
 	if !v.pooled {
 		return
 	}
 	clear(v.seen)
+	clear(v.seenNamed)
 	seenPool.Put(v.seen)
-	v.seen, v.pooled = map[objects.Ref]bool{}, false
+	namedPool.Put(v.seenNamed)
+	v.seen, v.seenNamed, v.pooled = map[objects.Ref]bool{}, map[objects.Ref]bool{}, false
 }
 
-// can reports whether the caller may view ref.
+// can reports whether the caller may view ref as a member of a population:
+// a list row, count, facet or aggregate (D-100).
 func (v *view) can(ref objects.Ref) bool {
 	if v.all {
 		return true
@@ -74,6 +89,24 @@ func (v *view) can(ref objects.Ref) bool {
 	if !asked {
 		ok = decide(v.r, v.a, ref)
 		v.seen[ref] = ok
+	}
+	return ok
+}
+
+// canNamed reports whether the caller may view ref by name: a detail page's
+// subject, or a ref written in an object the caller may read (D-100).
+// Without a NamedAuthorizer both questions have one answer, so it is can.
+func (v *view) canNamed(ref objects.Ref) bool {
+	if v.all {
+		return true
+	}
+	if _, ok := v.a.(NamedAuthorizer); !ok {
+		return v.can(ref)
+	}
+	ok, asked := v.seenNamed[ref]
+	if !asked {
+		ok = decideNamed(v.r, v.a, ref)
+		v.seenNamed[ref] = ok
 	}
 	return ok
 }
@@ -125,6 +158,12 @@ func (v *view) allowDeps(ix *explore.Index, d explore.DepSet) bool {
 // index set into t.Refs (design §13). Answers are memoised per topology; under
 // AllowAll it is true without calls.
 func (v *view) allowTable(t *paths.Topology, d explore.DepSet) bool {
+	return v.allowTableNamed(t, d, nil)
+}
+
+// allowTableNamed is allowTable with named, when set, checked by canNamed: a
+// ref written in a readable object. Its answer never enters the population memo.
+func (v *view) allowTableNamed(t *paths.Topology, d explore.DepSet, named *objects.Ref) bool {
 	if v.all {
 		return true
 	}
@@ -132,6 +171,12 @@ func (v *view) allowTable(t *paths.Topology, d explore.DepSet) bool {
 		v.table, v.tableDeps = t, make([]int8, len(t.Refs))
 	}
 	for _, i := range d {
+		if named != nil && t.Refs[i] == *named {
+			if !v.canNamed(*named) {
+				return false
+			}
+			continue
+		}
 		switch v.tableDeps[i] {
 		case -1:
 			return false

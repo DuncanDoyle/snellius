@@ -345,7 +345,7 @@ func TestMetrics(t *testing.T) {
 	})
 	mustAuthorize(t, f.a, user("alice"), route("shop", "web"))
 	mustAuthorize(t, f.a, user("alice"), route("shop", "web"))
-	mustAuthorize(t, f.a, user("bob"), route("shop", "web"))
+	mustAuthorizeNamed(t, f.a, user("bob"), route("shop", "web"))
 	_, _ = f.a.AuthorizeErr(request(user("carol")), route("shop", "web"))
 	for name, want := range map[string]string{
 		`snellius_authz_checks_total{verb="list",outcome="allowed"}`: "1",

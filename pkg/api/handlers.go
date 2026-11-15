@@ -401,7 +401,7 @@ func (h *handler) resource(w http.ResponseWriter, r *http.Request) {
 		return s
 	}
 	want := objects.Ref{Group: dash(r.PathValue("group")), Kind: r.PathValue("kind"), Namespace: dash(r.PathValue("rns")), Name: r.PathValue("rname")}
-	if linkerFor(h.view(r), p.Model, i).admit(want) != LinkNone {
+	if linkerFor(h.view(r), p.Model, i).admitNamed(want) != LinkNone {
 		if obj := object(p.Model, want); obj != nil {
 			// The body is the raw object, so the collection time travels in a header (D-017 §6).
 			w.Header().Set("Collected-At", wireTime(p.ConfirmedAt).Format(time.RFC3339Nano))

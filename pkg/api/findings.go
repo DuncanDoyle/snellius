@@ -167,13 +167,14 @@ func restrictedDetail(f *health.Finding) string {
 }
 
 // findingRow is f on the wire for the caller of v, restricted per D-013 and
-// design §14 rules 11 and 12. Times are UTC.
-func findingRow(v *view, l linker, f *health.Finding) FindingRow {
+// design §14 rules 11 and 12. Times are UTC. named checks the resource as a
+// detail page's subject, else as a list row (D-100); evidence stays a population check.
+func findingRow(v *view, l linker, f *health.Finding, named bool) FindingRow {
 	row := FindingRow{ID: f.ID, Code: f.Code, Slug: f.Slug, Severity: f.Severity, Group: f.Group}
 	if f.Resource != nil {
-		lr := l.linked(*f.Resource)
+		lr := LinkedRef{Ref: *f.Resource, Link: l.linkWith(*f.Resource, named)}
 		row.Resource = &lr
-		if !v.can(*f.Resource) {
+		if !l.check(named)(*f.Resource) {
 			row.Restricted = true
 			return row
 		}
@@ -228,7 +229,7 @@ func (h *handler) findings(w http.ResponseWriter, r *http.Request) {
 	l := h.linker(v, p, i, nil, nil)
 	items := make([]FindingRow, 0, len(pg.Items))
 	for _, k := range pg.Items {
-		items = append(items, findingRow(v, l, &fs[k]))
+		items = append(items, findingRow(v, l, &fs[k], false))
 	}
 	writeJSON(w, Page[FindingRow]{Install: i.Resolved.ID(), Items: items, Total: pg.Total, Next: pg.Next, Prev: pg.Prev,
 		CollectedAt: wireTime(p.ConfirmedAt)})
@@ -294,7 +295,7 @@ func (h *handler) findingDetail(w http.ResponseWriter, r *http.Request) {
 	v := h.view(r)
 	l := h.linker(v, p, i, nil, nil)
 	f := &fs[k]
-	row := findingRow(v, l, f)
+	row := findingRow(v, l, f, true)
 	var refs []objects.Ref
 	if !row.Restricted {
 		refs = affectedOf(v, d, f.Group)

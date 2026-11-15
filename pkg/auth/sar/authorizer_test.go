@@ -131,10 +131,39 @@ func mustAuthorize(t *testing.T, a *Authorizer, id oidc.Identity, ref objects.Re
 	return ok
 }
 
-func TestListThenGet(t *testing.T) {
+func mustAuthorizeNamed(t *testing.T, a *Authorizer, id oidc.Identity, ref objects.Ref) bool {
+	t.Helper()
+	ok, err := a.AuthorizeNamedErr(request(id), ref)
+	if err != nil {
+		t.Fatalf("AuthorizeNamedErr(%v) error = %v", ref, err)
+	}
+	return ok
+}
+
+// A population check asks list only; with NamedGetScan a denied list adds the named get.
+func TestPopulationIsListOnly(t *testing.T) {
+	decide := grants(call{"bob", getAt("shop", "web")})
+	f := newFixture(decide)
+	if mustAuthorize(t, f.a, user("bob"), route("shop", "web")) || f.a.Authorize(request(user("bob")), route("shop", "web")) {
+		t.Error("a named get grant answers a population check")
+	}
+	if want := []call{{"bob", listAt("shop")}}; !reflect.DeepEqual(f.checker.recorded(), want) {
+		t.Fatalf("SARs = %+v, want only the list", f.checker.recorded())
+	}
+	scan := &fixture{checker: &fakeChecker{decide: decide}, clock: clocktesting.NewFakeClock(t0), reg: obs.NewRegistry()}
+	scan.a = New(Options{Checker: scan.checker, Kinds: testKinds, Clock: scan.clock, IdentityFrom: identityFrom, NamedGetScan: true})
+	if !mustAuthorize(t, scan.a, user("bob"), route("shop", "web")) {
+		t.Error("NamedGetScan: the named get grant does not show shop/web")
+	}
+	if want := []call{{"bob", listAt("shop")}, {"bob", getAt("shop", "web")}}; !reflect.DeepEqual(scan.checker.recorded(), want) {
+		t.Fatalf("NamedGetScan SARs = %+v\nwant %+v", scan.checker.recorded(), want)
+	}
+}
+
+func TestNamedIsListThenGet(t *testing.T) {
 	f := newFixture(grants(call{"alice", listAt("shop")}, call{"bob", getAt("shop", "web")}))
 	t.Run("list allowed sends no get", func(t *testing.T) {
-		if !mustAuthorize(t, f.a, user("alice"), route("shop", "web")) {
+		if !mustAuthorizeNamed(t, f.a, user("alice"), route("shop", "web")) {
 			t.Fatal("alice may list routes in shop but is denied")
 		}
 		if want := []call{{"alice", listAt("shop")}}; !reflect.DeepEqual(f.checker.recorded(), want) {
@@ -142,10 +171,10 @@ func TestListThenGet(t *testing.T) {
 		}
 	})
 	t.Run("resourceNames grant shows the named object only", func(t *testing.T) {
-		if !mustAuthorize(t, f.a, user("bob"), route("shop", "web")) {
+		if !mustAuthorizeNamed(t, f.a, user("bob"), route("shop", "web")) {
 			t.Error("bob's named get grant does not show shop/web")
 		}
-		if mustAuthorize(t, f.a, user("bob"), route("shop", "admin")) {
+		if mustAuthorizeNamed(t, f.a, user("bob"), route("shop", "admin")) {
 			t.Error("bob sees shop/admin without a grant")
 		}
 		want := []call{{"alice", listAt("shop")}, {"bob", listAt("shop")}, {"bob", getAt("shop", "web")}, {"bob", getAt("shop", "admin")}}
@@ -163,7 +192,7 @@ func TestClusterScopedKinds(t *testing.T) {
 	if !mustAuthorize(t, f.a, user("alice"), objects.Ref{Group: gwGroup, Kind: "GatewayClass", Namespace: "stray", Name: "kgw"}) {
 		t.Error("GatewayClass denied with a cluster-wide list grant")
 	}
-	if !mustAuthorize(t, f.a, user("alice"), objects.Ref{Kind: "Namespace", Name: "shop"}) {
+	if !mustAuthorizeNamed(t, f.a, user("alice"), objects.Ref{Kind: "Namespace", Name: "shop"}) {
 		t.Error("Namespace shop denied with a named get grant")
 	}
 	want := []call{{"alice", gc}, {"alice", Attributes{Verb: "list", Resource: "namespaces"}}, {"alice", nsGet}}
@@ -192,9 +221,9 @@ func TestUnmappedKindDenied(t *testing.T) {
 
 func TestListErrorStopsGet(t *testing.T) {
 	f := newFixture(func(oidc.Identity, Attributes) (bool, error) { return false, checkError(categoryRequest) })
-	ok, err := f.a.AuthorizeErr(request(user("alice")), route("shop", "web"))
+	ok, err := f.a.AuthorizeNamedErr(request(user("alice")), route("shop", "web"))
 	if ok || !errors.Is(err, ErrCheck) {
-		t.Fatalf("AuthorizeErr() = %v, %v; want ErrCheck", ok, err)
+		t.Fatalf("AuthorizeNamedErr() = %v, %v; want ErrCheck", ok, err)
 	}
 	if want := []call{{"alice", listAt("shop")}}; !reflect.DeepEqual(f.checker.recorded(), want) {
 		t.Fatalf("SARs = %+v, want only the list", f.checker.recorded())
@@ -206,6 +235,9 @@ func TestNoIdentityIsError(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/routes", nil)
 	if ok, err := f.a.AuthorizeErr(r, route("shop", "web")); ok || !errors.Is(err, ErrNoIdentity) {
 		t.Errorf("AuthorizeErr() = %v, %v; want ErrNoIdentity", ok, err)
+	}
+	if ok, err := f.a.AuthorizeNamedErr(r, route("shop", "web")); ok || !errors.Is(err, ErrNoIdentity) {
+		t.Errorf("AuthorizeNamedErr() = %v, %v; want ErrNoIdentity", ok, err)
 	}
 	if ok, err := f.a.CanList(r, objects.GroupKind{Group: gwGroup, Kind: "HTTPRoute"}, "shop"); ok || !errors.Is(err, ErrNoIdentity) {
 		t.Errorf("CanList() = %v, %v; want ErrNoIdentity", ok, err)
@@ -250,7 +282,7 @@ func TestCanListIgnoresNamedGet(t *testing.T) {
 	if want := []call{{"bob", listAt("shop")}}; !reflect.DeepEqual(f.checker.recorded(), want) {
 		t.Fatalf("SARs = %+v, want only the list", f.checker.recorded())
 	}
-	if !mustAuthorize(t, f.a, user("bob"), route("shop", "web")) {
+	if !mustAuthorizeNamed(t, f.a, user("bob"), route("shop", "web")) {
 		t.Fatal("the named get grant does not show shop/web")
 	}
 	if ok, err := f.a.CanList(request(user("bob")), gk, "shop"); ok || err != nil {

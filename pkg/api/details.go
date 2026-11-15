@@ -136,7 +136,7 @@ func (h *handler) startDetail(w http.ResponseWriter, r *http.Request) *detail {
 // nil. Nothing else about ref is read before this check.
 func (d *detail) open(w http.ResponseWriter, ref objects.Ref) (*unstructured.Unstructured, *Candidate) {
 	var u *unstructured.Unstructured
-	if d.l.link(ref) == LinkDetail {
+	if d.l.linkNamed(ref) == LinkDetail {
 		u, _ = stored(d.p.Model, ref)
 	}
 	if u == nil {
@@ -453,7 +453,7 @@ func (h *handler) listenerSetDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	parent := v.Parent.Ref()
 	out := ListenerSetDetail{Install: d.i.Resolved.ID(), Ref: LinkedRef{Ref: ref, Link: LinkDetail}, Generation: u.GetGeneration(), Health: st,
-		Candidate: cand, RuleSet: d.ix.RuleSet, RuleSetLabel: d.ix.RuleLabel, Parent: d.l.linked(parent), Conditions: conditions(u, v.Conditions), Listeners: d.listeners(u, v.Listeners, v.ListenerStatus),
+		Candidate: cand, RuleSet: d.ix.RuleSet, RuleSetLabel: d.ix.RuleLabel, Parent: d.l.linkedNamed(parent), Conditions: conditions(u, v.Conditions), Listeners: d.listeners(u, v.Listeners, v.ListenerStatus),
 		RouteCounts: d.routeCounts(ref), CollectedAt: wireTime(d.p.ConfirmedAt)}
 	out.Reason = d.reason(ref, st)
 	if len(v.Conditions) == 0 && len(v.ListenerStatus) == 0 && d.i.Resolved.Experimental(k) {
@@ -462,7 +462,7 @@ func (h *handler) listenerSetDetail(w http.ResponseWriter, r *http.Request) {
 	// The parent is read only when it opens: a hidden, absent or unadmitted
 	// parent reads as not found, and admission never follows chains (D-013).
 	var pu *unstructured.Unstructured
-	if d.l.admit(parent) != LinkNone {
+	if d.l.admitNamed(parent) != LinkNone {
 		pu, _ = stored(d.p.Model, parent)
 	}
 	out.ParentFound = pu != nil
@@ -560,7 +560,7 @@ func (d *detail) attachments(id explore.RowID, refs []objects.ParentRef) []Route
 		if f.Out.ParentRef >= len(refs) {
 			continue
 		}
-		out = append(out, RouteAttachment{ParentRef: refs[f.Out.ParentRef], Index: f.Out.ParentRef, Target: d.l.linked(f.Out.Resource), Result: d.f.attachment(f)})
+		out = append(out, RouteAttachment{ParentRef: refs[f.Out.ParentRef], Index: f.Out.ParentRef, Target: d.l.linkedNamed(f.Out.Resource), Result: d.f.attachment(f)})
 	}
 	return out
 }
@@ -569,7 +569,7 @@ func (d *detail) attachments(id explore.RowID, refs []objects.ParentRef) []Route
 func (d *detail) specParents(ps []objects.ParentRef) []SpecParentRef {
 	out := make([]SpecParentRef, 0, len(ps))
 	for _, p := range ps {
-		out = append(out, SpecParentRef{ParentRef: p, Target: d.l.linked(p.Ref())})
+		out = append(out, SpecParentRef{ParentRef: p, Target: d.l.linkedNamed(p.Ref())})
 	}
 	return out
 }
@@ -583,7 +583,7 @@ func (d *detail) parents(u *unstructured.Unstructured, ps []objects.RouteParentS
 			if slices.Contains(d.i.Resolved.ControllerNames, p.ControllerName) != ours {
 				continue
 			}
-			out = append(out, ParentStatus{ParentRef: p.ParentRef, Target: d.l.linked(p.ParentRef.Ref()), ControllerName: p.ControllerName,
+			out = append(out, ParentStatus{ParentRef: p.ParentRef, Target: d.l.linkedNamed(p.ParentRef.Ref()), ControllerName: p.ControllerName,
 				Ours: ours, Conditions: conditions(u, p.Conditions)})
 		}
 	}
@@ -660,11 +660,11 @@ func (d *detail) filters(fs []objects.Filter) []FilterDTO {
 	for _, f := range fs {
 		dto := FilterDTO{Type: f.Type, Config: f.Config}
 		if e := f.ExtensionRef; e != nil {
-			lr := d.l.linked(*e)
+			lr := d.l.linkedNamed(*e)
 			dto.ExtensionRef = &lr
 		}
 		if m := f.Mirror; m != nil {
-			dto.Mirror = &MirrorDTO{BackendRef: d.l.linked(m.Backend), Port: m.Port, Percent: m.Percent}
+			dto.Mirror = &MirrorDTO{BackendRef: d.l.linkedNamed(m.Backend), Port: m.Port, Percent: m.Percent}
 			if m.Fraction != nil {
 				dto.Mirror.Fraction = &FractionDTO{Numerator: m.Fraction.Numerator, Denominator: m.Fraction.Denominator}
 			}
@@ -683,13 +683,13 @@ func (d *detail) backendRef(route objects.Ref, rule, i int, b objects.BackendRef
 		out.Delegation = &DelegationRefDTO{Mode: dl.Mode, Namespace: dl.Namespace, Name: dl.Name, Label: dl.Label}
 		if dl.Mode == objects.DelegationName {
 			child := objects.Ref{Group: objects.GatewayAPIGroup, Kind: "HTTPRoute", Namespace: dl.Namespace, Name: dl.Name}
-			out.Ref = d.l.linked(child)
+			out.Ref = d.l.linkedNamed(child)
 			out.Delegation.State = d.delegationState(route, child)
 		}
 		d.refCounts(out.Delegation, explore.RefKey{Parent: route, Rule: rule, Ref: i})
 		return out
 	}
-	out.Ref = d.l.linked(b.Ref)
+	out.Ref = d.l.linkedNamed(b.Ref)
 	if b.Ref.Group == kinds.KgatewayGroup && b.Ref.Kind == "Backend" {
 		out.Backend = d.backendState(b.Ref)
 	}
@@ -697,11 +697,11 @@ func (d *detail) backendRef(route objects.Ref, rule, i int, b objects.BackendRef
 }
 
 // delegationState is a name ref's state from status (design §7.3). The
-// Authorizer decides on the ref alone, so a denied child and an absent
+// Authorizer decides on the named ref alone, so a denied child and an absent
 // denied one are both restricted.
 func (d *detail) delegationState(parent, child objects.Ref) string {
 	switch {
-	case !d.v.can(child):
+	case !d.v.canNamed(child):
 		return DelegationRestricted
 	case slices.Contains(d.ix.ParentRoutes[child], parent):
 		return DelegationReported
@@ -717,10 +717,10 @@ func (d *detail) delegationState(parent, child objects.Ref) string {
 // admitted; admission never follows chains). The state comes from the rule
 // set's computed.BackendJudge; without one the condition shows alone.
 func (d *detail) backendState(ref objects.Ref) *BackendStateDTO {
-	if !d.v.can(ref) {
+	if !d.v.canNamed(ref) {
 		return &BackendStateDTO{Restricted: true}
 	}
-	if d.l.admit(ref) == LinkNone {
+	if d.l.admitNamed(ref) == LinkNone {
 		return nil
 	}
 	u, _ := stored(d.p.Model, ref)

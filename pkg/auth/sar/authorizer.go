@@ -43,6 +43,8 @@ type Options struct {
 	Metrics *obs.Registry
 	// IdentityFrom returns the signed-in identity; nil means session.IdentityFrom.
 	IdentityFrom func(context.Context) (oidc.Identity, bool)
+	// NamedGetScan adds a named get to population checks the list denies (D-100).
+	NamedGetScan bool
 }
 
 // DefaultTTL is the decision lifetime when Options.TTL is zero (design §6.2).
@@ -54,10 +56,12 @@ const sweepEvery = time.Minute
 // ErrNoIdentity is the error of a check on a request without a signed-in identity.
 var ErrNoIdentity = errors.New("authorisation: no signed-in identity")
 
-// Authorizer decides visibility per signed-in user: list on the resource in
-// the namespace, then get on the named object (design §6.1).
+// Authorizer decides visibility per signed-in user (design §6.1, D-100):
+// populations by list on the resource in the namespace, named refs by that
+// list, then get on the named object.
 type Authorizer struct {
 	kinds        Kinds
+	namedGetScan bool
 	identityFrom func(context.Context) (oidc.Identity, bool)
 	clock        clock.WithTicker
 	cache        *cache
@@ -72,10 +76,11 @@ type Authorizer struct {
 }
 
 var (
-	_ api.Authorizer     = (*Authorizer)(nil)
-	_ api.ErrAuthorizer  = (*Authorizer)(nil)
-	_ api.ListAuthorizer = (*Authorizer)(nil)
-	_ api.FullReader     = (*Authorizer)(nil)
+	_ api.Authorizer      = (*Authorizer)(nil)
+	_ api.ErrAuthorizer   = (*Authorizer)(nil)
+	_ api.NamedAuthorizer = (*Authorizer)(nil)
+	_ api.ListAuthorizer  = (*Authorizer)(nil)
+	_ api.FullReader      = (*Authorizer)(nil)
 )
 
 // New returns an Authorizer; call Run to sweep its cache.
@@ -92,6 +97,7 @@ func New(o Options) *Authorizer {
 	m := newMetrics(o.Metrics)
 	return &Authorizer{
 		kinds:        o.Kinds,
+		namedGetScan: o.NamedGetScan,
 		identityFrom: o.IdentityFrom,
 		clock:        o.Clock,
 		cache:        newCache(o.Checker, o.Clock, o.TTL, m),
@@ -125,9 +131,20 @@ func (a *Authorizer) run(ctx context.Context, tick <-chan time.Time) {
 	}
 }
 
-// AuthorizeErr implements api.ErrAuthorizer. An unmapped kind, or a
-// namespaced kind without a namespace, is denied without a SAR.
+// AuthorizeErr implements api.ErrAuthorizer as the population check: list
+// on ref's resource in its namespace, and a named get only with NamedGetScan.
+// An unmapped kind, or a namespaced kind without a namespace, is denied without a SAR.
 func (a *Authorizer) AuthorizeErr(r *http.Request, ref objects.Ref) (bool, error) {
+	return a.authorize(r, ref, a.namedGetScan)
+}
+
+// AuthorizeNamedErr implements api.NamedAuthorizer: list, then get on the
+// named object, which honours resourceNames grants.
+func (a *Authorizer) AuthorizeNamedErr(r *http.Request, ref objects.Ref) (bool, error) {
+	return a.authorize(r, ref, true)
+}
+
+func (a *Authorizer) authorize(r *http.Request, ref objects.Ref, named bool) (bool, error) {
 	id, ok := a.identityFrom(r.Context())
 	if !ok {
 		return false, ErrNoIdentity
@@ -146,7 +163,7 @@ func (a *Authorizer) AuthorizeErr(r *http.Request, ref objects.Ref) (bool, error
 	h := hashIdentity(id)
 	list := Attributes{Verb: "list", Group: k.Group, Resource: k.Resource, Namespace: ns}
 	d, err := a.check(r, id, h, list)
-	if err != nil || d.allowed {
+	if err != nil || d.allowed || !named {
 		return d.allowed, err
 	}
 	get := list
@@ -155,7 +172,8 @@ func (a *Authorizer) AuthorizeErr(r *http.Request, ref objects.Ref) (bool, error
 	return d.allowed, err
 }
 
-// Authorize implements api.Authorizer: an error is reported for the request and answered as deny.
+// Authorize implements api.Authorizer with population semantics: an error is
+// reported for the request and answered as deny.
 func (a *Authorizer) Authorize(r *http.Request, ref objects.Ref) bool {
 	ok, err := a.AuthorizeErr(r, ref)
 	if err != nil {

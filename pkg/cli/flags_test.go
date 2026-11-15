@@ -101,3 +101,13 @@ func TestParseSessionFlags(t *testing.T) {
 		}
 	}
 }
+
+// The named get scan is off unless asked for.
+func TestNamedGetScanFlag(t *testing.T) {
+	if _, o, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), nil); err != nil || o.AuthzNamedGetScan {
+		t.Fatalf("default %v, %v", o.AuthzNamedGetScan, err)
+	}
+	if _, o, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), []string{"--authz-named-get-scan"}); err != nil || !o.AuthzNamedGetScan {
+		t.Fatalf("--authz-named-get-scan: %v, %v", o.AuthzNamedGetScan, err)
+	}
+}

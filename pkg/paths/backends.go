@@ -30,6 +30,17 @@ type BackendsInput struct {
 	Can     func(objects.Ref) bool
 	// Only, when set, lists that backend alone, if it is listed.
 	Only *objects.Ref
+	// Subject, when set, is a backend the caller admitted by name: Can is not
+	// asked about it, and it is still listed only for a visible reason (D-100).
+	Subject *objects.Ref
+}
+
+// admits reports whether the viewer of in may see backend ref: the named subject, else Can.
+func (in *BackendsInput) admits(ref objects.Ref) bool {
+	if in.Subject != nil && *in.Subject == ref {
+		return true
+	}
+	return in.Can == nil || in.Can(ref)
 }
 
 // Backend is one listed backend as a viewer may see it (design §8.1).
@@ -138,7 +149,7 @@ func (m *Membership) targetOf(t *Topology, k int32) objects.Ref {
 // the reasons of collect, for one ref.
 func (m *Membership) Listed(t *Topology, in BackendsInput, ref objects.Ref) bool {
 	can := func(x objects.Ref) bool { return in.Can == nil || in.Can(x) }
-	if !can(ref) {
+	if !in.admits(ref) {
 		return false
 	}
 	if _, ok := slices.BinarySearchFunc(m.inScope, ref, compareRefs); ok {
@@ -184,7 +195,7 @@ func (b *backends) add(ref objects.Ref) *Backend {
 	if i, ok := b.index[ref]; ok {
 		return &b.set.Items[i]
 	}
-	if !b.can(ref) {
+	if !b.in.admits(ref) {
 		b.set.Hidden = true
 		return nil
 	}

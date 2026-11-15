@@ -136,6 +136,11 @@ func newAuthz(c sar.Checker, clk *clocktesting.FakeClock) *sar.Authorizer {
 	return sar.New(sar.Options{Checker: c, Kinds: servedKinds{}, Clock: clk, IdentityFrom: identityFrom})
 }
 
+// scanAuthz is newAuthz with --authz-named-get-scan.
+func scanAuthz(c sar.Checker, clk *clocktesting.FakeClock) *sar.Authorizer {
+	return sar.New(sar.Options{Checker: c, Kinds: servedKinds{}, Clock: clk, IdentityFrom: identityFrom, NamedGetScan: true})
+}
+
 // call returns the status and body of GET path as user.
 func call(t *testing.T, srv *httptest.Server, user, path string) (int, []byte) {
 	t.Helper()
@@ -193,7 +198,8 @@ func grant(names map[string]bool) func(string, sar.Attributes, int) (bool, error
 }
 
 // Two viewers over SARs see what the same grants give as a plain Authorizer:
-// a namespace list grant and a resourceNames grant, each only its own routes.
+// a namespace list grant and, with the named get scan, a resourceNames grant,
+// each only its own routes.
 func TestTwoViewersOverSAR(t *testing.T) {
 	src, base := world(t)
 	ns0 := testutil.ScaleNamespace(0) + "/"
@@ -203,7 +209,7 @@ func TestTwoViewersOverSAR(t *testing.T) {
 			names[n] = true
 		}
 	}
-	srv := serve(t, src, newAuthz(&checker{decide: grant(names)}, clocktesting.NewFakeClock(t0)))
+	srv := serve(t, src, scanAuthz(&checker{decide: grant(names)}, clocktesting.NewFakeClock(t0)))
 	var seen []string
 	for user, own := range map[string]func(string) bool{
 		"team":  func(n string) bool { return strings.HasPrefix(n, ns0) },
@@ -220,6 +226,66 @@ func TestTwoViewersOverSAR(t *testing.T) {
 			t.Errorf("%s shares rows with the other viewer: %v", user, got)
 		}
 		seen = append(seen, got...)
+	}
+}
+
+// A resourceNames-only grant on one HTTPRoute opens its detail, but the route
+// list and the Gateway's route counts leave it out (D-100). With the named get
+// scan the list and counts include it.
+func TestResourceNamesGrantDetailNotList(t *testing.T) {
+	src, base := world(t)
+	var target string
+	var gw objects.Ref
+	all := serve(t, src, api.AllowAll{})
+	for _, n := range routeNames(t, all, "", base) {
+		_, b := call(t, all, "", base+"/routes/"+routesGroup+"/HTTPRoute/"+n)
+		var d api.RouteDetail
+		if err := json.Unmarshal(b, &d); err != nil {
+			t.Fatal(err)
+		}
+		if len(d.ParentRefs) == 1 && d.ParentRefs[0].Target.Kind == "Gateway" && len(d.Serves) > 0 {
+			target, gw = n, d.ParentRefs[0].Target.Ref
+			break
+		}
+	}
+	if target == "" {
+		t.Fatal("no route attached to one Gateway")
+	}
+	// The viewer may list Gateways in the Gateway's namespace and get the one route.
+	decide := func(_ string, a sar.Attributes, _ int) (bool, error) {
+		if a.Group == routesGroup && a.Resource == "gateways" && a.Verb == "list" && a.Namespace == gw.Namespace {
+			return true, nil
+		}
+		return isRoutes(a) && a.Verb == "get" && a.Namespace+"/"+a.Name == target, nil
+	}
+	counted := func(srv *httptest.Server) int {
+		code, b := call(t, srv, "named", base+"/gateways/"+gw.Namespace+"/"+gw.Name)
+		var d api.GatewayDetail
+		if code != http.StatusOK || json.Unmarshal(b, &d) != nil {
+			t.Fatalf("gateway detail %d %s", code, b)
+		}
+		return d.RouteCounts.Accepted + d.RouteCounts.NotAccepted + d.RouteCounts.Pending + d.RouteCounts.Unwatched
+	}
+	for _, scan := range []bool{false, true} {
+		c := &checker{decide: decide}
+		a := newAuthz(c, clocktesting.NewFakeClock(t0))
+		if scan {
+			a = scanAuthz(c, clocktesting.NewFakeClock(t0))
+		}
+		srv := serve(t, src, a)
+		if code, b := call(t, srv, "named", base+"/routes/"+routesGroup+"/HTTPRoute/"+target); code != http.StatusOK {
+			t.Fatalf("scan %v: detail of %s: %d %s", scan, target, code, b)
+		}
+		want := []string(nil)
+		if scan {
+			want = []string{target}
+		}
+		if got := routeNames(t, srv, "named", base); !slices.Equal(got, want) {
+			t.Errorf("scan %v: /routes lists %v, want %v", scan, got, want)
+		}
+		if n := counted(srv); (n > 0) != scan {
+			t.Errorf("scan %v: the Gateway counts %d routes", scan, n)
+		}
 	}
 }
 
