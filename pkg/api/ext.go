@@ -48,6 +48,9 @@ type handlerConfig struct {
 	consumersFor func(install.Install, *install.Owned) []objects.Consumer
 	// secure marks secure mode; complete says its identity and authorisation are fully wired.
 	secure, complete bool
+	// commitCheck and authzAudit are the commit wrapper's hooks (commit.go); nil means none.
+	commitCheck func(http.ResponseWriter, *http.Request) bool
+	authzAudit  func(*http.Request, string)
 }
 
 // WithSecureMode marks the handler secure. Until complete is true, every /api/
@@ -146,9 +149,10 @@ func WriteError(w http.ResponseWriter, code int, msg string) { writeErr(w, code,
 
 // Visible returns the items whose ref the caller of r may view, in order,
 // and the number hidden, asking a about each ref once (D-013). Under
-// AllowAll, or a nil a, it makes no calls and returns items, clipped so an append cannot alias it.
+// AllowAll, a full read or a nil a, it makes no calls and returns items, clipped so an append cannot alias it.
+// An ErrAuthorizer's error is recorded for the request and hides the ref; the API then answers 503.
 func Visible[T any](r *http.Request, a Authorizer, items []T, ref func(T) objects.Ref) (visible []T, hidden int) {
-	if a == nil || allowsAll(a) {
+	if a == nil || allowsAll(a) || fullRead(r) {
 		return slices.Clip(items), 0
 	}
 	v := &view{a: a, r: r, seen: map[objects.Ref]bool{}}

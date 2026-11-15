@@ -35,7 +35,8 @@ type ModelSource interface {
 
 // NewHandler returns the HTTP handler for the API, the probes and the SPA in ui.
 // Every response with resources, findings or counts goes through authz; a nil
-// authz means AllowAll (D-013). Options add extension endpoints.
+// authz means AllowAll (D-013). Options add extension endpoints. In complete
+// secure mode every /api/ response goes through the commit wrapper (commit.go).
 func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOption) http.Handler {
 	var cfg handlerConfig
 	for _, o := range opts {
@@ -84,8 +85,11 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 	// Unknown /api/ paths, extension ones included, get a JSON 404, never the SPA.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { writeErr(w, http.StatusNotFound, "not found") })
 	mux.Handle("/", spa(ui, authMode(cfg.secure)))
-	if cfg.secure && !cfg.complete {
+	switch {
+	case cfg.secure && !cfg.complete:
 		return secureGate(mux)
+	case cfg.secure:
+		return commit(mux, authz, cfg.commitCheck, cfg.authzAudit)
 	}
 	return mux
 }

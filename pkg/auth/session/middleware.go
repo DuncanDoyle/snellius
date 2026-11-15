@@ -51,6 +51,46 @@ func (s *Store) Middleware(next http.Handler) http.Handler {
 	})
 }
 
+// StillSignedIn reports whether the session r passed Middleware with is still
+// signed in, for the API's commit check. Otherwise it writes the 401 a new
+// request with the cookie would get and reports false. It never refreshes or waits.
+func (s *Store) StillSignedIn(w http.ResponseWriter, r *http.Request) bool {
+	info, ok := FromContext(r.Context())
+	c, err := r.Cookie(CookieName)
+	if !ok || err != nil {
+		s.writeUnauthorized(w, r, stateNone, nil)
+		return false
+	}
+	key := hashKey(c.Value)
+	s.mu.Lock()
+	st := s.current(r.Context(), key, info.AuditID)
+	s.mu.Unlock()
+	if st == stateOK {
+		return true
+	}
+	s.writeUnauthorized(w, r, st, c)
+	return false
+}
+
+// current resolves key without refreshing: OK while the session with auditID
+// is held and unexpired, else the cookie's end notice. s.mu is held.
+func (s *Store) current(ctx context.Context, key, auditID string) state {
+	sess := s.sessions[key]
+	if sess == nil || sess.auditID != auditID {
+		return s.notice(key)
+	}
+	now := s.clk.Now()
+	why := s.expired(sess, now)
+	if why == "" && !now.Before(freshUntil(sess)) && !s.canRefresh(sess) {
+		why = reasonRefresh
+	}
+	if why == "" {
+		return stateOK
+	}
+	s.end(ctx, sess, why)
+	return s.notice(key)
+}
+
 // Me serves GET /auth/me: the session's username and groups.
 func (s *Store) Me(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -131,6 +171,12 @@ func (s *Store) fromRequest(w http.ResponseWriter, r *http.Request) (Info, bool)
 	if st == stateOK {
 		return info, true
 	}
+	s.writeUnauthorized(w, r, st, c)
+	return Info{}, false
+}
+
+// writeUnauthorized writes the 401 of a cookie in state st.
+func (s *Store) writeUnauthorized(w http.ResponseWriter, r *http.Request, st state, c *http.Cookie) {
 	// session-ended keeps the cookie, so every request with it hears the same; it maps to no session.
 	reason := "session-ended"
 	if st != stateEnded {
@@ -140,7 +186,6 @@ func (s *Store) fromRequest(w http.ResponseWriter, r *http.Request) (Info, bool)
 		}
 	}
 	writeJSON(w, http.StatusUnauthorized, map[string]string{"error": reason, "login": "/auth/login?return=" + url.QueryEscape(returnPath(r))})
-	return Info{}, false
 }
 
 // returnPath is the page that made the request, from its Referer; the login route checks it again.

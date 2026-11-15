@@ -49,6 +49,61 @@ type authzState struct {
 	mu     sync.Mutex
 	checks int
 	err    error
+	// full is set before the handler runs when the caller reads everything (design §6.4).
+	full bool
+}
+
+// failed returns the first recorded error, or nil.
+func (s *authzState) failed() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
+// fullRead reports whether r's request runs under a full read.
+func fullRead(r *http.Request) bool {
+	s := authzStateOf(r)
+	return s != nil && s.full
+}
+
+// authzFailed reports whether r's request has recorded an authorisation error.
+func authzFailed(r *http.Request) bool {
+	s := authzStateOf(r)
+	return s != nil && s.failed() != nil
+}
+
+// decide reports whether the caller of r may view ref, through the
+// error-returning form when a has one: an error is recorded and answered as
+// deny, and after one every ref of the request is denied without asking.
+func decide(r *http.Request, a Authorizer, ref objects.Ref) bool {
+	ea, ok := a.(ErrAuthorizer)
+	if !ok {
+		return a.Authorize(r, ref)
+	}
+	if authzFailed(r) {
+		return false
+	}
+	allowed, err := ea.AuthorizeErr(r, ref)
+	if err != nil {
+		ReportAuthzError(r, err)
+		return false
+	}
+	return allowed
+}
+
+// decideList reports whether the caller of r may list gk in namespace, as
+// decide does; an Authorizer without ListAuthorizer answers false.
+func decideList(r *http.Request, a Authorizer, gk objects.GroupKind, namespace string) bool {
+	la, ok := a.(ListAuthorizer)
+	if !ok || authzFailed(r) {
+		return false
+	}
+	allowed, err := la.CanList(r, gk, namespace)
+	if err != nil {
+		ReportAuthzError(r, err)
+		return false
+	}
+	return allowed
 }
 
 type authzStateKey struct{}

@@ -28,9 +28,10 @@ type view struct {
 	tableDeps []int8
 }
 
-// view returns the view of the caller of r.
+// view returns the view of the caller of r. Under a full read it is the
+// allow-all view.
 func (h *handler) view(r *http.Request) *view {
-	v := &view{a: h.authz, r: r, all: allowsAll(h.authz)}
+	v := &view{a: h.authz, r: r, all: allowsAll(h.authz) || fullRead(r)}
 	if !v.all {
 		v.seen = map[objects.Ref]bool{}
 	}
@@ -71,10 +72,19 @@ func (v *view) can(ref objects.Ref) bool {
 	}
 	ok, asked := v.seen[ref]
 	if !asked {
-		ok = v.a.Authorize(v.r, ref)
+		ok = decide(v.r, v.a, ref)
 		v.seen[ref] = ok
 	}
 	return ok
+}
+
+// canList reports whether the caller may list gk in namespace, "" meaning
+// cluster-wide: true under a full read, false without a ListAuthorizer.
+func (v *view) canList(gk objects.GroupKind, namespace string) bool {
+	if v.all {
+		return true
+	}
+	return decideList(v.r, v.a, gk, namespace)
 }
 
 // visible is can in the form the explore queries take: nil under AllowAll,

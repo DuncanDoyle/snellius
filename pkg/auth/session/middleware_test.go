@@ -2,13 +2,21 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
+
+	"github.com/DuncanDoyle/snellius/internal/testutil"
+	"github.com/DuncanDoyle/snellius/pkg/api"
+	"github.com/DuncanDoyle/snellius/pkg/engine"
+	"github.com/DuncanDoyle/snellius/pkg/platform"
 )
 
 // logout posts /auth/logout over plain HTTP, as behind TLS termination, with origin when not empty.
@@ -228,4 +236,101 @@ func TestLogoutClearsEndedNotice(t *testing.T) {
 		t.Fatalf("logout = %d", rec.Code)
 	}
 	f.wantMe(c, 401, signInBody)
+}
+
+// noModel is a ModelSource without a publication; the in-flight test only calls an extension.
+type noModel struct{}
+
+func (noModel) Current() *engine.Published { return nil }
+func (noModel) Platform() platform.Info    { return platform.Kubernetes() }
+
+// barrier holds each request until release closes; entered records arrivals.
+type barrier struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b barrier) wait() {
+	b.entered <- struct{}{}
+	<-b.release
+}
+
+// blockedFullRead is an authoriser whose full-read SAR blocks on b, then fails.
+type blockedFullRead struct {
+	api.AllowAll
+	b barrier
+}
+
+func (a blockedFullRead) FullRead(*http.Request) (bool, error) {
+	a.b.wait()
+	return false, errors.New("SAR failed")
+}
+
+// Requests already past Middleware when their session ends answer 401, never
+// their buffered body or a 503, whether the end is idle expiry, a failed
+// refresh or a logout, and whether they wait in a handler or a full-read SAR.
+func TestSessionEndsInFlight(t *testing.T) {
+	const n = 4
+	ends := map[string]func(f *fixture, c *http.Cookie){
+		"none": func(*fixture, *http.Cookie) {},
+		"idle": func(f *fixture, _ *http.Cookie) { f.clk.Step(31 * time.Minute) },
+		"refresh": func(f *fixture, c *http.Cookie) {
+			f.refresh.mu.Lock()
+			f.refresh.err = errors.New("refused")
+			f.refresh.mu.Unlock()
+			f.clk.Step(16 * time.Minute)
+			f.wantMe(c, 401, endedBody)
+		},
+		"logout": func(f *fixture, c *http.Cookie) {
+			if rec := f.logout(c, "https://snellius.example.com"); rec.Code != 200 {
+				f.t.Fatalf("logout = %d", rec.Code)
+			}
+		},
+	}
+	for name, end := range ends {
+		for _, inFullRead := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/fullRead=%v", name, inFullRead), func(t *testing.T) {
+				f := newFixture(t, nil)
+				c := f.signIn(f.result("oidc:dev"))
+				b := barrier{entered: make(chan struct{}, n), release: make(chan struct{})}
+				ext := api.ExtMount{Name: "slow", Pattern: "GET /data", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					b.wait()
+					api.WriteJSON(w, "buffered")
+				})}
+				var authz api.Authorizer = api.AllowAll{}
+				if inFullRead {
+					authz = blockedFullRead{b: b}
+				}
+				h := f.store.Middleware(api.NewHandler(noModel{}, fstest.MapFS{}, authz, api.WithSecureMode(true), api.WithExtMounts(ext),
+					api.WithCommitCheck(f.store.StillSignedIn)))
+				recs := make([]*httptest.ResponseRecorder, n)
+				var wg sync.WaitGroup
+				for i := range recs {
+					recs[i] = httptest.NewRecorder()
+					req := httptest.NewRequest("GET", "/api/ext/slow/data", nil)
+					req.AddCookie(c)
+					wg.Go(func() { h.ServeHTTP(recs[i], req) })
+				}
+				for range n {
+					testutil.Recv(t, b.entered, "a request to pass the middleware")
+				}
+				end(f, c)
+				close(b.release)
+				wg.Wait()
+				want := map[string]string{"none": `"buffered"`, "idle": endedBody, "refresh": endedBody, "logout": signInBody}[name]
+				code := http.StatusUnauthorized
+				switch {
+				case name == "none" && inFullRead:
+					code, want = http.StatusServiceUnavailable, `{"error":"authz-unavailable"}`
+				case name == "none":
+					code = http.StatusOK
+				}
+				for i, rec := range recs {
+					if got := strings.TrimSpace(rec.Body.String()); rec.Code != code || got != want {
+						t.Errorf("request %d = %d %s; want %d %s", i, rec.Code, got, code, want)
+					}
+				}
+			})
+		}
+	}
 }
