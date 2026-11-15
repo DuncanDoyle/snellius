@@ -45,3 +45,23 @@ func LargeHandlers(tb testing.TB) (func(authz Authorizer, opts ...HandlerOption)
 func DeepestChild(ix *explore.Index, can func(objects.Ref) bool) (objects.Ref, int) {
 	return deepestChild(ix, can)
 }
+
+// HeapBaseline is the 2.1 retained-heap baseline of the D-057 gates.
+const HeapBaseline = heapBaseline
+
+// SettledWorstHeap warms the worst gated D-057 tier as TestBudgetHeapAPIWarm's
+// child does, up to its settled figure, and returns what must stay alive.
+func SettledWorstHeap(t *testing.T) []any {
+	e, m, w := pathsEngine(t, scale.Large.Contradicting().Worst())
+	h := backendHandler(e, m, nil)
+	for _, i := range m.Installs {
+		pathsGet(t, h, "/api/v1/installs/"+i.Resolved.ID()+"/paths")
+		serviceDetails(t, h, i.Resolved.ID(), 200)
+	}
+	urls := serviceDetails(t, h, m.Installs[0].Resolved.ID(), 48)
+	for _, u := range urls[:24] {
+		detailGet(t, h, u)
+	}
+	m = e.Compute()
+	return []any{e, m, w, h}
+}
