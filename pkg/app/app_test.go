@@ -1989,7 +1989,7 @@ func TestSARKindsCoverModelRefs(t *testing.T) {
 	for _, ps := range ix.ParentRoutes {
 		refs = append(refs, ps...)
 	}
-	k := newSARKinds(served, Diagnostics{}, func() kinds.Catalog { return kinds.Catalog{} })
+	k := newSARKinds(served, func() kinds.Catalog { return kinds.Catalog{} })
 	seen := map[objects.GroupKind]bool{}
 	for _, r := range refs {
 		gk := objects.GroupKind{Group: r.Group, Kind: r.Kind}
@@ -2098,30 +2098,70 @@ func TestAuthzMetricsOnProbe(t *testing.T) {
 	}
 }
 
-// The full-read kinds drop a watched kind the catalog no longer serves, and
-// their key changes with the catalog's.
+// upstreamCatalog is a catalog serving every upstream kind except drop, plus extra.
+func upstreamCatalog(drop string, extra ...schema.GroupKind) kinds.Catalog {
+	served := slices.Clone(extra)
+	for _, s := range testutil.ServedUpstream() {
+		if s.Kind != drop {
+			served = append(served, schema.GroupKind{Group: s.Group, Kind: s.Kind})
+		}
+	}
+	return kinds.NewCatalog(served, nil)
+}
+
+// The full-read kinds are the kinds the per-object path checks, never Events or
+// CRDs; the key changes only when that set does.
 func TestSARKindsKeyFollowsCatalog(t *testing.T) {
-	cat := kinds.Catalog{}
-	k := newSARKinds(testutil.ServedUpstream(), Diagnostics{NoEvents: true}, func() kinds.Catalog { return cat })
+	cat := upstreamCatalog("")
+	k := newSARKinds(testutil.ServedUpstream(), func() kinds.Catalog { return cat })
 	has := func(all []sar.Kind, res string) bool {
 		return slices.ContainsFunc(all, func(x sar.Kind) bool { return x.Resource == res })
 	}
 	all, key := k.All()
-	if !has(all, "httproutes") || !has(all, "services") || has(all, "events") {
-		t.Fatalf("unlisted catalog: %v", all)
+	if !has(all, "httproutes") || !has(all, "services") || !has(all, "pods") || has(all, "events") ||
+		has(all, "customresourcedefinitions") || has(all, "endpointslices") {
+		t.Fatalf("full-read kinds: %v", all)
 	}
-	var served []schema.GroupKind
-	for _, s := range testutil.ServedUpstream() {
-		if s.Kind != "TCPRoute" {
-			served = append(served, schema.GroupKind{Group: s.Group, Kind: s.Kind})
+	for _, gk := range []schema.GroupKind{{Kind: "Event"}, {Group: "apiextensions.k8s.io", Kind: "CustomResourceDefinition"}} {
+		if _, ok := k.Lookup(gk.Group, gk.Kind); !ok {
+			t.Errorf("Lookup must still map %v", gk)
 		}
 	}
-	cat = kinds.NewCatalog(served, nil)
+	cat = upstreamCatalog("", schema.GroupKind{Group: "example.com", Kind: "Widget"})
+	if _, key2 := k.All(); key2 != key {
+		t.Fatalf("an unrelated CRD changed the key: %q -> %q", key, key2)
+	}
+	cat = upstreamCatalog("TCPRoute")
 	all2, key2 := k.All()
-	if key2 == key || key2 != cat.Key() || has(all2, "tcproutes") || len(all2) != len(all)-1 {
+	if key2 == key || has(all2, "tcproutes") || len(all2) != len(all)-1 {
 		t.Fatalf("after TCPRoute left: key %q -> %q, kinds %v", key, key2, all2)
 	}
 	if _, ok := k.Lookup(objects.GatewayAPIGroup, "TCPRoute"); !ok {
 		t.Fatal("Lookup must still map a kind the catalog dropped")
+	}
+	cat = upstreamCatalog("")
+	if _, key3 := k.All(); key3 != key {
+		t.Fatalf("TCPRoute back: key %q, want %q", key3, key)
+	}
+}
+
+// listChecker allows every SAR except list on the denied resources.
+type listChecker struct{ denied []string }
+
+func (c listChecker) Check(_ context.Context, _ oidc.Identity, a sar.Attributes) (bool, error) {
+	return a.Verb != "list" || !slices.Contains(c.denied, a.Resource), nil
+}
+
+// A viewer who may list every viewer kind, but not Events, CRDs or EndpointSlices, takes the full-read path.
+func TestFullReadWithoutInputKinds(t *testing.T) {
+	cat := upstreamCatalog("")
+	k := newSARKinds(testutil.ServedUpstream(), func() kinds.Catalog { return cat })
+	id := func(context.Context) (oidc.Identity, bool) { return oidc.Identity{Username: "oidc:op"}, true }
+	for denied, want := range map[string]bool{"events": true, "customresourcedefinitions": true, "endpointslices": true, "pods": false} {
+		a := sar.New(sar.Options{Checker: listChecker{denied: []string{denied}}, Kinds: k, IdentityFrom: id})
+		got, err := a.FullRead(httptest.NewRequest("GET", "/api/v1/installs", nil))
+		if err != nil || got != want {
+			t.Errorf("list denied on %s: FullRead = %v, %v; want %v", denied, got, err, want)
+		}
 	}
 }

@@ -341,7 +341,7 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		if o.Clock != nil {
 			clk = o.Clock
 		}
-		sarAuthz = sar.New(sar.Options{Checker: sar.NewKubeChecker(c.Kube), Kinds: newSARKinds(cfg.Served, o.Diagnostics, mon.Catalog),
+		sarAuthz = sar.New(sar.Options{Checker: sar.NewKubeChecker(c.Kube), Kinds: newSARKinds(cfg.Served, mon.Catalog),
 			TTL: o.AuthzCacheTTL, Clock: clk, Metrics: metrics})
 		authz = sarAuthz
 	}
