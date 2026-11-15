@@ -1496,3 +1496,21 @@ Measured on the reference machine, 5 runs per world:
 3. No RBAC watch in `v0.8.0`. 7.3's bench measures the check load; a watch with the same 30 s TTL (faster typical revocation, same worst case) is a later option. A longer TTL is the operator's explicit trade of freshness for load.
 
 **Consequences:** A revoked permission stays visible in Snellius for at most the TTL after the API server answers with the revocation. Load is about 25 checks per 30 s per active full reader.
+
+## D-100 — Permission checks scale with what a viewer can see (2026-11-15, Phase 7, amends D-057, D-091, D-099)
+**Status:** accepted by the user (2026-11-15), after the 7.3 bench and two Codex rounds (`phases/phase-7/reviews/sar-cost-codex.md`).
+
+**Context:** The 7.3 bench (Large: 100 namespaces, viewer allowed 10) showed list pages needing up to ~2,700 SARs per TTL, 503 at the 500-check cap, ~4,900 SARs/user/min against a target of 50, and cache bounds allowing ~6.5 GiB. Most checks were named `get`s on hidden objects, which D-091 used to honour `resourceNames` grants.
+
+**Decision:**
+1. **Lists enumerate by `list` permission.** An object appears in a list, count, facet or aggregate only when the viewer may `list` its resource in its namespace (cluster-wide for cluster-scoped kinds). Named `get` checks remain for detail pages and for objects named in a readable object, including targets that do not exist. A server flag (`--authz-named-get-scan`, chart `auth.authz.namedGetScan`, default off) restores scanning hidden objects with named `get` for clusters that rely on `resourceNames` read grants; the per-request cap still applies.
+2. **Asymmetric TTLs.** Allowed answers: default 60 s (`auth.authz.cacheTTL`, range 30 s to 15 min). Denied answers: 5 min. Both anchored at the SAR's start, never extended; errors are never cached. A cached full-read "false" keeps the expiry of a denying constituent; "true" expires at the earliest allowing constituent.
+3. **Fast path is lazy.** The full-read check runs only for requests whose handler needs a population, and a negative result is cached as in 2.
+4. **Validity at commit.** A response carries the earliest expiry of the allows it used; if that passed before commit, it is rebuilt once, else `503 authz-unavailable`.
+5. **Memory.** D-057's retained-heap budget rises from 48 to 64 MiB over the 2.1 baseline, with an 8 MiB sub-budget for the permission cache, enforced as a global byte bound (decisions, identity metadata, full-read entries) with LRU eviction; flights and queues bounded separately. The bench confirms the real number.
+6. **Load.** SAR resolution runs in parallel per request (8 workers), with a global limit of 32 concurrent SARs and 100 SAR/s (burst 32), configurable. The per-request cap stays 500. `view` stays single-threaded: checks resolve into a request-local table first, then the handler renders.
+7. **Targets.** The 50 SARs/user/min target is replaced by measured targets on the Large fixture for a viewer allowed 10 namespaces: `/routes` at most 400 SARs cold, at most 150/min warm, every poll 200 without contention; other list pages at or below `/routes`.
+8. **Namespace scope selector (7.4).** A persistent selector limits rows, counts and facets to chosen namespaces, so checks run only there. Cross-namespace dependencies keep their own checks; restricted ones stay unknown or incomplete.
+9. **README.** The defaults are the secure choice; the README explains how to tighten (`cacheTTL: 30s`, shorter session lifetimes) and how to relax (`cacheTTL` up to 15 min) and what each costs.
+
+**Consequences:** `resourceNames`-only read grants no longer make objects appear in lists by default. A removed RoleBinding stays effective in Snellius for up to 60 s, a new grant shows within 5 min. Fixed in 7.4 regardless: `deniedInInstall` counts and hidden findings in health aggregates (D-085), and EndpointSlices join the full-read set when they become an authorised population.

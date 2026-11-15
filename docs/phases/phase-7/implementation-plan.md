@@ -346,6 +346,102 @@ Install surface (stated, per the team rule):
 
 - [ ] Run; paste the numbers into the 7.3 complete record; commit.
 
+### Permission cost (D-100)
+
+The Task 21 bench (`reviews/sar-cost-codex.md`) showed list pages needing up to ~2,700 SARs, 503 at the cap, and cache bounds allowing ~6.5 GiB. D-100 changes the check model; Tasks 22–28 implement its items 1–7 and 9. Item 8 (namespace scope selector) is in 7.4. The gate stays closed; tests use `WithSecureMode(true)` as in Tasks 16–21.
+
+### Task 22: Lists by `list` permission; named `get` for details and named refs
+
+**Files:** `pkg/api/authz.go`, `visible.go`, `details.go`, `backends.go`, `handlers.go`, `findings.go`, `link.go` (named-ref call sites); `pkg/auth/sar/authorizer.go`; `pkg/cli/flags.go`, `pkg/app/app.go`; chart `values.yaml`, `templates/deployment.yaml`, `templates/_helpers.tpl`; tests `pkg/auth/sar/authorizer_test.go`, `handler_test.go`, new `pkg/api/named_test.go`, `pkg/cli/flags_test.go`, `deploy/helm/chart_test.go`.
+
+Install surface: **new flag** `--authz-named-get-scan` (bool, default false; secure mode only) → `sar.Options.NamedGetScan`; **new value** `auth.authz.namedGetScan` (default false) → the flag, rendered only when true and in secure mode, read nil-safe through `snellius.authzValue`. Nothing else changes.
+
+**Interfaces:**
+- `pkg/api` (additive): `type NamedAuthorizer interface { AuthorizeNamedErr(r *http.Request, ref objects.Ref) (bool, error) }`.
+- `sar.Authorizer.AuthorizeErr` becomes the population check: `list` on the ref's resource in its namespace (cluster-wide for cluster-scoped kinds); a denial is final unless `NamedGetScan`, which adds the named `get`. `AuthorizeNamedErr` is today's list-then-get. `Authorize` (extensions) keeps population semantics.
+- `view.can` stays the population predicate, used by every list, count, facet and aggregate. New `view.canNamed(ref)` (memoised, errors recorded like `can`) for: the subject of each detail route (`backends.go:134`, `details.go` route, Gateway, ListenerSet and delegation subjects, `handlers.go:409` resource YAML, `findings.go:291`), and refs written in a readable object (a readable route's `parentRefs`, `backendRefs` and delegation targets, a ListenerSet's parent), whether or not the target exists. Any call site not moved stays on the population rule, so a missed one under-shows, never over-shows.
+
+- [ ] Tests: `TestPopulationIsListOnly` (sar: list denied → no `get` sent; with `NamedGetScan` the `get` is sent); `TestNamedIsListThenGet`; `TestResourceNamesGrantDetailNotList` (handler, real authoriser: a `resourceNames`-only grant on one HTTPRoute → its detail 200, `/routes` and the counts omit it; with the flag the list includes it); `TestNamedRefInReadableRoute` (a readable route's backendRef to a Service granted only by name is shown on the route detail; an absent target the viewer may `get` is a normal finding, one it may not is withheld); `TestNamedCallSitesTable` (table of detail routes × grant: subject via named check, population via list); `TestNamedGetScanFlag` (default off; `--authz-named-get-scan` sets it); chart `TestAuthzNamedGetScanValue` (rendered only when true and secure; `auth.authz=null` renders).
+- [ ] Commit.
+
+### Task 23: Asymmetric TTLs and the lazy full read
+
+**Files:** `pkg/auth/sar/cache.go`, `fullread.go`, `authorizer.go`; `pkg/api/commit.go`, `visible.go`; `pkg/cli/flags.go`; chart `values.yaml` comment, `NOTES.txt`; tests `pkg/auth/sar/cache_test.go`, `fullread_test.go`, `handler_test.go`, `pkg/api/commit_test.go`, `pkg/cli/flags_test.go`.
+
+Install surface: `--authz-cache-ttl` and `auth.authz.cacheTTL` keep their names and range (30 s–15 min); the default moves from 30 s to **60 s** and now covers allowed answers only. No new setting.
+
+**Interfaces:**
+- `sar.Options.TTL` → `AllowTTL` (default `sar.DefaultAllowTTL = 60 s`); `sar.DenyTTL = 5 * time.Minute` (constant). Both anchored at the SAR's start, never extended; errors never cached; the late-result rule (Task 17) uses the TTL of the answer.
+- Full read: a "false" aggregate is cached with the expiry of the denying constituent (its witness); a "true" aggregate with the earliest allowing constituent's expiry. Incidental allows never shorten a "false". The Task 18 expiry check before return stays.
+- Lazy: the commit wrapper no longer calls `FullRead` before the handler. The view asks it the first time a population predicate (`can`, `canList`, `recount`, `allowDeps`, `allowTable`, `visible`) runs; `canNamed` alone never triggers it. The answer is memoised in the request state; an error is recorded (503 as today).
+
+- [ ] Tests: `TestAllowAndDenyTTL` (allow expires at start + 60 s, deny at start + 5 min); `TestMixedListGetExpiry` (list denied, named get allowed: the get's allow expires at its own 60 s while the list denial lasts 5 min; after 60 s the object disappears from its detail until a new get allows it); `TestFullReadFalseWitness` (a denying constituent at t with allows at t+1 s: "false" expires at t + 5 min, not t + 61 s); `TestFullReadTrueEarliestAllow`; `TestErrorsNeverCached` (both verbs); `TestDetailDoesNotProbeFullRead` (handler: route detail sends no cluster-wide `list`); `TestListProbesFullReadOnce` (handler: `/routes` asks it once, memoised); `TestAuthzCacheTTLDefault60s`.
+- [ ] Commit.
+
+### Task 24: Validity at commit
+
+**Files:** `pkg/api/authz.go`, `commit.go`; `pkg/auth/sar/cache.go`, `fullread.go`; `pkg/app/app.go`; tests `pkg/api/commit_test.go`, `pkg/auth/sar/handler_test.go`.
+
+**Interfaces:**
+- `func NoteAllow(r *http.Request, expires time.Time)` (pkg/api): the authoriser reports the expiry of every allow it returns (fresh, cached, merged, full-read "true"); the request state keeps the earliest. Denials are not noted: a stale denial only hides.
+- `WithCommitClock(func() time.Time)` handler option; `app.Build` passes the app clock.
+- Commit order: commit check (session), then authorisation error → 503, then validity: earliest allow expiry not after now → rebuild once with a fresh view and buffer (the request's 500-check count carries over); if the rebuild's earliest expiry has also passed, `503 authz-unavailable`, audit reason `expired` (new constant `AuditExpired`).
+
+- [ ] Tests (fake clock, fake authoriser that steps the clock inside the handler): `TestCommitValidResponseWritten`; `TestCommitExpiredRebuilt` (an allow expires mid-build: the handler runs twice, the second body is written); `TestCommitExpiredTwice503`; `TestCommitRebuildSharesCap` (400 checks + 400 on rebuild → 503 `check-limit`); `TestCommitDenyNotTracked`; handler level with the real authoriser: `TestRevokedDuringSlowRequest` (an allow used at t, a SAR delayed until past t + 60 s, revocation in between: the response never shows the revoked object).
+- [ ] Commit.
+
+### Task 25: Permission-cache byte budget and bounded waiting
+
+**Files:** `pkg/auth/sar/cache.go`, `fullread.go`, new `size.go`, `metrics.go`; `pkg/api/budget_test.go`, `pkg/engine/budget_test.go` (D-057 figure); tests `pkg/auth/sar/cache_test.go`.
+
+**Interfaces:**
+- The per-identity (10,000) and identity-count (2,000) bounds are replaced by one global budget: `sar.Options.MaxBytes` (default `8 << 20`). Accounted bytes per decision, identity and full-read entry are a measured fixed cost plus the lengths of their strings (`size.go`, one comment citing the bench). Least-recently-used eviction across identities: one LRU list over all decisions; an identity with no entries is dropped with its metadata.
+- Flights: at most 4,096 in flight across identities; a new flight beyond it fails with `sar.ErrOverloaded` (503). Merging into an existing flight is not counted.
+- Metrics: gauge `snellius_authz_cache_bytes`, counter `snellius_authz_cache_evictions_total`; the `snellius_authz_identities` gauge stays.
+- D-057 (as amended by D-100): the retained-heap budget tests move from 48 to 64 MiB over the 2.1 baseline (`pkg/api/budget_test.go:1558-1565`, `pkg/engine/budget_test.go:567-587`), messages cite D-100.
+
+- [ ] Tests: `TestByteBudgetEvictsGlobalLRU` (identities A and B fill the budget; touching A's entries evicts B's oldest first); `TestMultiIdentityChurn` (500 identities × 200 checks in a loop: accounted bytes never exceed the budget, hits stay correct per identity, no identity sees another's decision; `-race`); `TestDenialsEvictedEarlyAreRechecked` (an evicted 5 min denial is asked again, never served from elsewhere); `TestFlightBound` (4,097th concurrent distinct flight → `ErrOverloaded`); `TestAccountedBytesMatchHeap` (fill 10,000 decisions: accounted within 25 % of the `HeapAlloc` delta).
+- [ ] Commit.
+
+### Task 26: Parallel resolution into a request-local table
+
+**Files:** new `pkg/auth/sar/limit.go`, `pkg/auth/sar/batch.go`; `pkg/api/authz.go`, `visible.go`, `lists.go`, `paths.go`, `backends.go` (prefetch call sites); `pkg/cli/flags.go`, `pkg/app/app.go`; chart `values.yaml`, `templates/deployment.yaml`; tests `pkg/auth/sar/limit_test.go`, `batch_test.go`, `pkg/api/prefetch_test.go`, `handler_test.go`, flags and chart tests.
+
+Install surface: **new flags** (secure mode only) `--authz-max-in-flight` (default 32), `--authz-rate` (SARs per second, default 100), `--authz-burst` (default 32); each must be ≥ 1. **New values** `auth.authz.maxInFlight`, `rate`, `burst` (default `""`, the binary's), nil-safe. Per-request workers stay a constant (8).
+
+**Interfaces:**
+- `pkg/api` (additive): `type ListQuery struct { Kind objects.GroupKind; Namespace string }`; `type BatchAuthorizer interface { ResolveLists(r *http.Request, qs []ListQuery) ([]bool, error) }`. The sar implementation resolves through the cache with 8 workers per request, every miss charged to `SpendCheck` and noted with `NoteAllow`.
+- Global limiter in `limit.go`, standard library only (a semaphore and a token bucket; `golang.org/x/time` stays indirect): at most `maxInFlight` SARs sent at once and `rate` per second with `burst`; at most 1,024 checks waiting, beyond that `sar.ErrOverloaded`; a wait ends with the request's context.
+- `view.prefetchLists(qs)` resolves into the request-local table before rendering; `canList` and the population `can` then read the table, and `view` stays single-threaded. List handlers (`/routes`, `/gateways`, `/listenersets`, `/backends`, `/paths`) prefetch the distinct (kind, namespace) buckets of their install's rows and dependency tables. Any error in the batch is recorded and the whole buffered response is discarded (503).
+
+- [ ] Tests: `TestLimiterInFlight` (64 concurrent checks, never more than 32 sent at once); `TestLimiterRate` (fake clock: 100/s, burst 32); `TestLimiterQueueBound` (1,025th waiter → `ErrOverloaded`); `TestBatchEightWorkers`; `TestParallelErrorDiscardsResponse` (handler: one of 300 prefetched checks errors → exact 503 body, nothing of the page written); `TestPrefetchMatchesSerial` (`/routes`, `/backends`, `/paths` byte-equal with and without prefetch for three grant sets); `TestHiddenCreateDeleteUnchanged` (viewer allowed 10 namespaces: creating and deleting objects in a namespace where `list` is denied leaves `/routes`, `/gateways`, `/backends`, `/paths` byte-equal, masking only `deniedInInstall`, which 7.4 removes); `TestViewSingleGoroutine` (`-race` over the prefetch path); flag and chart tests for the three limits.
+- [ ] Commit.
+
+### Task 27: Docs for permission checks
+
+**Files:** `README.md`, `deploy/helm/snellius/README.md`, `deploy/helm/snellius/values.yaml` comments, `templates/NOTES.txt`, `docs/documentation-notes.md`.
+
+- The defaults are the secure choice: allowed answers 60 s, denials 5 min, lists by `list` permission.
+- **Tighten:** `auth.authz.cacheTTL: 30s` (a revoked permission shows for at most 30 s, about twice the SARs); shorter `auth.session.absolute`. Say plainly that `auth.session.idle` does not end a session while a visible tab keeps polling.
+- **Relax:** `cacheTTL` up to 15 min, with its cost: a revoked permission stays visible that long.
+- Global limits (`maxInFlight`, `rate`, `burst`) and when to raise them (large clusters, many viewers).
+- Upgrade notes: `resourceNames`-only read grants no longer make objects appear in lists; the objects still open on their detail pages; `auth.authz.namedGetScan: true` restores the old behaviour at a higher check cost.
+- [ ] Commit.
+
+### Task 28: Bench rerun against the D-100 targets
+
+**Files:** `pkg/api/sar_bench_test.go`, `export_bench_test.go`.
+
+- `TestBudgetSARDeniedList` rerun, report-only, with the D-100 defaults (allow 60 s, deny 5 min, list enumeration, 8 workers, global limits) for a viewer allowed 10 of the Large fixture's 100 namespaces. Targets, stated in the report next to each number:
+  1. `/routes`: at most 400 SARs cold; at most 150 SARs per minute warm at a 5 s poll; every poll 200 without contention.
+  2. `/gateways`, `/listenersets`, `/backends`, `/paths`: at or below `/routes` on each measure.
+  3. Details: cold and warm SARs reported.
+- Also with `--authz-named-get-scan` on: SARs and whether `/routes` hits the cap (expected; reported).
+- Latency p50/p95 at fake SAR latency 0 and 2 ms, cold and warm.
+- Load: 50 viewers polling at once: peak SARs in flight (≤ 32) and per second (≤ 100 plus burst), and the share of polls answered 200.
+- Memory: accounted cache bytes at the 8 MiB budget against the measured heap, and the retained-heap D-057 figure (≤ 64 MiB over the 2.1 baseline) with the cache full.
+- [ ] Run; paste the numbers into the 7.3 complete record; a missed target goes to the user before 7.3 closes.
+
 ## Sub-phase 7.4 — Visibility everywhere (data still gated)
 
 1. `pkg/health`: `Finding.Basis` and check-result basis; every analyzer declares it (inputs, absence checks, populations); a table test fails for any analyzer without a declaration.
@@ -354,6 +450,10 @@ Install surface (stated, per the team rule):
 4. Permissions note per viewer (design §7.5) from the full-read check.
 5. Path incompleteness from readable refs and permissions (design §8.1), shared with 7.5.
 6. The D-085 rule test per surface: two viewers, fixed clock, named masks, the change list of design §13.
+7. Namespace scope selector (D-100 item 8): a persistent selector in the web and an API parameter that limit rows, counts and facets to the chosen namespaces, so population checks run only there. Cross-namespace dependencies keep their own checks; restricted ones stay unknown or incomplete.
+8. Secure mode drops the exact hidden counts `deniedInInstall` (D-085): creating a hidden object changes them today.
+9. `visibleHealth` counts only findings the viewer may see; hidden findings no longer reach health aggregates.
+10. EndpointSlices join the full-read set (`pkg/app/kinds_sar.go`, `fullRead: true`) once they are an authorised population (item 3); test: a full reader denied EndpointSlices takes the per-object path.
 
 ## Sub-phase 7.5 — Two signals (the gate opens)
 
@@ -367,6 +467,6 @@ Install surface (stated, per the team rule):
 1. Audit levels: reads, summaries (5 min windows, 10,000 keys, flush on shutdown), disclosure (opt-in), requests (opt-in), denial collapsing.
 2. Docs: README trust model and secure-mode setup (both audience options, `kubectl auth whoami`), chart README, upgrade notes, `docs/documentation-notes.md`; snellius.dev (P-006).
 3. Phase review (Codex), stabilization if needed.
-4. `v0.8.0` only after the user has decided the claim-mapping scope (design-codex #11, plan-codex #8): either 7.7 ships first, or the release notes state that clusters whose API server cannot accept Snellius's audience stay on local mode.
+4. `v0.8.0` release; the notes say that clusters whose API server cannot accept Snellius's token stay on local mode (D-098).
 
-## Sub-phase 7.7 — Claim-mapping fallback (only if the user approves the JWT dependency and wants it in `v0.8.0`)
+Sub-phase 7.7 (claim mapping) is dropped: D-098 settled that `v0.8.0` ships without it.

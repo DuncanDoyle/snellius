@@ -18,7 +18,7 @@
 | 2 | Local mode by default (loopback only, banner); secure mode for production, required for any exposure | (user, D-086) | §3 |
 | 3 | OIDC login through the issuer the cluster trusts; identity from TokenReview | (user) | §4 |
 | 4 | The claim-mapping fallback needs a JWT library, a new dependency. Whether it ships in `v0.8.0` changes which clusters can use secure mode: **queued for the user** (Codex #11) | (user decision pending) | §4.3 |
-| 5 | SubjectAccessReview per object, cached 30 s per identity, never extended past expiry; an unavailable check fails closed | (Codex; our call on TTL) | §6 |
+| 5 | SubjectAccessReview checks: lists by `list` permission, named `get` for details and named refs; allows cached 60 s, denials 5 min, never extended; an unavailable check fails closed | (Codex; user, D-099, D-100) | §6 |
 | 6 | Two signals per route: route configuration and traffic path | (user, D-087) | §8 |
 | 7 | The legacy `health` field keeps its meaning (D-082 lift); restricted viewers get at least unknown over an incomplete path | (our call; Codex #10) | §8.3 |
 | 8 | Every finding and check result carries a basis; a restricted viewer sees it only when its object and whole basis are readable | (our call; Codex #1, #2) | §7.3, §7.6 |
@@ -137,14 +137,21 @@ Groups change. Session validity policy (Codex #6):
 
 ### 6.1 The check
 
-A `SARAuthorizer` implements `api.Authorizer`. For a ref it asks the API server a `SubjectAccessReview` with the session's user, groups, extra and UID:
-- Namespaced object: first `list` on its resource in its namespace. Allowed means every object of that resource there is visible. Denied: `get` on the named object, which honours `resourceNames` grants (Codex).
-- Cluster-scoped object (GatewayClass, Namespace): `list`, then named `get`.
+A `SARAuthorizer` implements `api.Authorizer`. It asks the API server a `SubjectAccessReview` with the session's user, groups, extra and UID. Lists and named refs are checked differently (D-100):
+- **Populations** (list rows, counts, facets, aggregates): an object is included only when the viewer may `list` its resource in its namespace, or cluster-wide for a cluster-scoped kind (GatewayClass, Namespace). Hidden objects are never scanned one by one, so the cost follows what the viewer can see.
+- **Named refs** (a detail page's subject, and an object named in a readable object, including a target that does not exist): `list` first, then `get` on the named object, which honours `resourceNames` grants.
+- `--authz-named-get-scan` (chart `auth.authz.namedGetScan`, default off) brings back the named `get` for population members, for clusters that rely on `resourceNames` read grants. The per-request cap still applies.
 - The ref's group and kind map to a resource through the kinds registry. A kind without a mapping is denied.
 
 ### 6.2 Cache
 
-Per identity (hash of username, groups, extra, UID): results keyed by verb, group, resource, namespace and name. TTL 30 seconds by default (chart `auth.authz.cacheTTL`, `--authz-cache-ttl`, range 30 s to 15 min), anchored at the SAR's start and never extended past expiry; an expired entry is checked again, not served (Codex). No RBAC watch invalidates the cache (D-099): a watch event says RBAC changed, not that every API server has applied it, so the TTL is the only bound on how long a revoked permission stays visible. The cache is bounded per identity and evicts least recently used (our call on the bound).
+Per identity (hash of username, groups, extra, UID): results keyed by verb, group, resource, namespace and name. Every answer is anchored at the SAR's start and never extended; an expired entry is checked again, not served (Codex). TTLs differ by answer (D-100):
+- **Allowed:** 60 s by default (chart `auth.authz.cacheTTL`, `--authz-cache-ttl`, range 30 s to 15 min). This bounds how long a revoked permission stays visible.
+- **Denied:** 5 min. A stale denial only hides; a new grant shows within 5 min.
+- **Errors:** never cached.
+- **Full read:** a cached "false" keeps the expiry of a denying check; a cached "true" expires at its earliest allowing check.
+
+No RBAC watch invalidates the cache (D-099): a watch event says RBAC changed, not that every API server has applied it. The cache is bounded by bytes across all identities (§6.4).
 
 ### 6.3 Failing closed
 
@@ -162,17 +169,21 @@ type ErrAuthorizer interface {
 
 Response-commit protocol (Codex #7): in secure mode the identity's decisions for a request are resolved before the handler writes anything. The handler builds its response into a buffer; a wrapper writes it only when no authorisation error was recorded, else `503 authz-unavailable`. Handlers that answer 404 on denial (`backends.go:134` and others) go through the same wrapper, so a denial during an outage never becomes a 404.
 
+Validity at commit (D-100): a response carries the earliest expiry of the allows it used. If that time has passed when the response would be written, it is rebuilt once with fresh checks; if it expires again, the answer is `503 authz-unavailable`.
+
 SAR outcomes: `allowed: true` is allow; `allowed: false` (with or without `denied`) is deny; an HTTP error, a timeout or a non-empty `evaluationError` is an error, never a deny. A `list` check that errors is not followed by a `get` check: the request fails.
 
 ### 6.4 Cost
 
-A page polls every 5 seconds and checks many refs. With namespace-level `list` checks and the cache, a typical app-team page needs a handful of SARs per 30 seconds per user.
+A page polls every 5 seconds and checks many refs. The 7.3 bench showed that scanning hidden objects with named `get`s cost thousands of SARs per page; D-100 replaced it with the population rule of §6.1.
 
-Budgets and bounds (Codex #14):
-- **Full-read fast path.** Snellius checks whether the identity may `list` every served kind cluster-wide. The decision is cached like any other: it expires with the TTL, measured from its earliest check, and is rechecked only when the identity next makes a request (D-099). If so, the request uses the precomputed allow-all projection, as `AllowAll` does today (`authz.go:37`), and no per-object SARs run. Most platform operators take this path.
-- **Typical target:** at most 50 SARs per user per minute at steady state on the large fixture with namespace-level grants.
-- **Hard limits:** per request, at most 500 distinct uncached SARs; beyond it the request answers `503 authz-unavailable` rather than a partial view. Identical concurrent checks are merged. Per identity, at most 10,000 cached decisions (LRU). Globally, at most 5,000 sessions and 2,000 identities in the cache; idle entries are swept every minute.
-- **Bench:** a denied-list workload (only `resourceNames` grants) on the large fixture, reporting SARs per page and latency, as report-only numbers first.
+Budgets and bounds (Codex #14, D-100):
+- **Full-read fast path, lazy.** Only a request whose handler needs a population asks whether the identity may `list` every served kind cluster-wide. The decision is cached with the expiries of §6.2 and rechecked only when the identity next needs it (D-099). If so, the request uses the precomputed allow-all projection, as `AllowAll` does (`authz.go:37`), and no per-object SARs run. Most platform operators take this path.
+- **Parallel resolution:** a request resolves its checks into a request-local table with 8 workers, then renders single-threaded (`view` is never shared between goroutines). Globally at most 32 SARs in flight and 100 SARs/s (burst 32), configurable; waiting is bounded too.
+- **Targets** (Large fixture, a viewer allowed 10 of 100 namespaces): `/routes` at most 400 SARs cold and 150 per minute warm, every poll answered 200 without contention; every other list page at or below `/routes`.
+- **Hard limits:** per request, at most 500 distinct uncached SARs; beyond it `503 authz-unavailable`, never a partial view. Identical concurrent checks are merged. At most 5,000 sessions.
+- **Memory:** the permission cache (decisions, identity data, full-read entries) has an 8 MiB byte budget with least-recently-used eviction across identities, inside D-057's retained-heap budget, raised to 64 MiB over the 2.1 baseline. In-flight checks and queues are bounded separately.
+- **Bench:** the denied-list workload on the large fixture, rerun against these targets.
 
 ## 7. Visibility everywhere
 
@@ -305,6 +316,7 @@ kgwctl reads with the user's kubeconfig. Phase 7 changes nothing in kgwctl; the 
 - `auth.oidc.issuerURL`, `clientID`, `clientSecret.existingSecret`/`key` (mounted as a file), `redirectURL`, `scopes`, `extraAudiences` (documentation only).
 - `auth.session.idle`, `absolute`, `cookieSecure`.
 - `auth.trustedProxyCIDRs` for `X-Forwarded-For` in audit only.
+- `auth.authz.cacheTTL` (allowed answers, default 60 s, 30 s to 15 min), `auth.authz.namedGetScan` (default off), and the global SAR limits `auth.authz.maxInFlight`, `rate`, `burst` (defaults 32, 100/s, 32) (D-100). The denied TTL (5 min) and the cache's byte budget are not settings.
 - `audit.levels`, `audit.summaryWindow`.
 - In secure mode the ClusterRole gains `create` on `tokenreviews` and `subjectaccessreviews`. Local mode does not get them.
 - `templates/NOTES.txt` and `values.yaml` describe both modes; the D-013 text moves to local mode.
