@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -13,11 +14,14 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 )
 
-// Cache bounds (design §6.4).
-const (
-	maxEntriesPerIdentity = 10_000
-	maxIdentities         = 2_000
-)
+// DefaultMaxBytes is the permission cache's byte budget when Options.MaxBytes is zero (D-100).
+const DefaultMaxBytes = 8 << 20
+
+// maxFlights bounds the SARs and full-read evaluations in flight across identities.
+const maxFlights = 4096
+
+// ErrOverloaded is the error of a check that would start a flight past maxFlights.
+var ErrOverloaded = fmt.Errorf("%w: overloaded", ErrCheck)
 
 // decision is a SAR answer valid until expires, the SAR's start plus the
 // answer's TTL.
@@ -38,22 +42,24 @@ type flight struct {
 	err  error
 }
 
-// idEntry is one identity's decisions, most recently used at the front.
+// idEntry is one identity's metadata: how many entries it has and its full-read entry.
 type idEntry struct {
-	hash    idHash
-	elem    *list.Element
-	entries map[Attributes]*list.Element
-	lru     *list.List
+	n    int
+	full *list.Element
 }
 
+// entry is a cached decision, or with full set the identity's full-read decision for kinds.
 type entry struct {
-	attrs Attributes
+	key   flightKey
+	kinds string
+	full  bool
 	d     decision
 }
 
-// cache holds decisions per identity and merges identical concurrent checks
-// (design §6.2, D-100). An allow lives allowTTL, a deny DenyTTL; an entry's
-// expiry never moves.
+// cache holds decisions and full-read decisions under one byte budget with
+// one LRU across identities, and merges identical concurrent checks (design
+// §6.2, D-100). An allow lives allowTTL, a deny DenyTTL; an expiry never moves.
+// An evicted entry is a miss.
 type cache struct {
 	checker  Checker
 	clock    clock.PassiveClock
@@ -61,19 +67,28 @@ type cache struct {
 	m        *metrics
 	log      *slog.Logger
 
-	mu      sync.Mutex
-	ids     map[idHash]*idEntry
-	idLRU   *list.List
-	flights map[flightKey]*flight
+	mu        sync.Mutex
+	decisions map[flightKey]*list.Element
+	ids       map[idHash]*idEntry
+	lru       *list.List // decisions and full-read entries, most recently used at the front
+	// used is entries and identities; each map is charged at its peak live count
+	// and counts its deletes since it was last replaced.
+	used, max        int64
+	decPeak, idsPeak int
+	decDels, idsDels int
+
+	flights     map[flightKey]*flight
+	fullFlights map[fullKey]*flight
 
 	// Test hooks, nil in production: a waiter joined a flight; a waiter's flight ended.
 	joined, woke func()
 }
 
-func newCache(c Checker, clk clock.PassiveClock, allowTTL time.Duration, m *metrics) *cache {
+func newCache(c Checker, clk clock.PassiveClock, allowTTL time.Duration, maxBytes int64, m *metrics) *cache {
 	return &cache{
-		checker: c, clock: clk, allowTTL: allowTTL, m: m, log: slog.Default(),
-		ids: map[idHash]*idEntry{}, idLRU: list.New(), flights: map[flightKey]*flight{},
+		checker: c, clock: clk, allowTTL: allowTTL, m: m, log: slog.Default(), max: maxBytes,
+		decisions: map[flightKey]*list.Element{}, ids: map[idHash]*idEntry{}, lru: list.New(),
+		flights: map[flightKey]*flight{}, fullFlights: map[fullKey]*flight{},
 	}
 }
 
@@ -123,6 +138,10 @@ func (c *cache) check(ctx context.Context, spend func() error, id oidc.Identity,
 			}
 			continue
 		}
+		if c.flying() >= maxFlights {
+			c.mu.Unlock()
+			return decision{}, ErrOverloaded
+		}
 		f := &flight{done: make(chan struct{})}
 		c.flights[k] = f
 		c.mu.Unlock()
@@ -142,7 +161,7 @@ func (c *cache) fly(ctx context.Context, f *flight, k flightKey, id oidc.Identit
 		c.mu.Lock()
 		delete(c.flights, k)
 		if f.err == nil {
-			c.store(k.id, a, f.d)
+			c.store(k, f.d)
 		}
 		c.mu.Unlock()
 		close(f.done)
@@ -176,60 +195,144 @@ func (c *cache) send(ctx context.Context, id oidc.Identity, a Attributes) (decis
 	return d, nil
 }
 
+// flying is the SARs and full-read evaluations in flight.
+func (c *cache) flying() int { return len(c.flights) + len(c.fullFlights) }
+
 // lookup returns an unexpired decision and marks it used; an expired one is dropped.
 func (c *cache) lookup(h idHash, a Attributes, now time.Time) (decision, bool) {
-	ie := c.ids[h]
-	if ie == nil {
-		return decision{}, false
-	}
-	el := ie.entries[a]
+	el := c.decisions[flightKey{h, a}]
 	if el == nil {
 		return decision{}, false
 	}
 	e := el.Value.(*entry)
 	if !now.Before(e.d.expires) {
-		c.remove(ie, el)
+		c.remove(el)
+		c.report()
 		return decision{}, false
 	}
-	ie.lru.MoveToFront(el)
-	c.idLRU.MoveToFront(ie.elem)
+	c.lru.MoveToFront(el)
 	return e.d, true
 }
 
-// store keeps d, evicting the least recently used entry or identity past the bounds.
-func (c *cache) store(h idHash, a Attributes, d decision) {
-	ie := c.ids[h]
-	if ie == nil {
-		if len(c.ids) >= maxIdentities {
-			c.drop(c.idLRU.Back().Value.(*idEntry))
-		}
-		ie = &idEntry{hash: h, entries: map[Attributes]*list.Element{}, lru: list.New()}
-		ie.elem = c.idLRU.PushFront(ie)
-		c.ids[h] = ie
-		c.m.identities.Set(float64(len(c.ids)))
-	} else {
-		c.idLRU.MoveToFront(ie.elem)
+// lookupFull returns the identity's unexpired full-read decision for k's kinds
+// and marks it used; an expired one is dropped.
+func (c *cache) lookupFull(k fullKey, now time.Time) (decision, bool) {
+	ie := c.ids[k.id]
+	if ie == nil || ie.full == nil {
+		return decision{}, false
 	}
-	if el := ie.entries[a]; el != nil {
+	e := ie.full.Value.(*entry)
+	if !now.Before(e.d.expires) {
+		c.remove(ie.full)
+		c.report()
+		return decision{}, false
+	}
+	if e.kinds != k.kinds {
+		return decision{}, false
+	}
+	c.lru.MoveToFront(ie.full)
+	return e.d, true
+}
+
+// store keeps d for k as the most recently used entry.
+func (c *cache) store(k flightKey, d decision) {
+	if el := c.decisions[k]; el != nil {
 		el.Value.(*entry).d = d
-		ie.lru.MoveToFront(el)
+		c.lru.MoveToFront(el)
 		return
 	}
-	if ie.lru.Len() >= maxEntriesPerIdentity {
-		c.remove(ie, ie.lru.Back())
+	el := c.insert(&entry{key: k, d: d})
+	c.decisions[k] = el
+	c.decPeak = max(c.decPeak, len(c.decisions))
+	c.evict(el)
+}
+
+// storeFull keeps d as the identity's full-read decision for k's kinds,
+// replacing its decision for any other kinds.
+func (c *cache) storeFull(k fullKey, d decision) {
+	if ie := c.ids[k.id]; ie != nil && ie.full != nil {
+		e := ie.full.Value.(*entry)
+		c.used += int64(len(k.kinds) - len(e.kinds))
+		e.kinds, e.d = k.kinds, d
+		c.lru.MoveToFront(ie.full)
+		c.evict(ie.full)
+		return
 	}
-	ie.entries[a] = ie.lru.PushFront(&entry{attrs: a, d: d})
+	el := c.insert(&entry{key: flightKey{id: k.id}, kinds: k.kinds, full: true, d: d})
+	c.ids[k.id].full = el
+	c.evict(el)
 }
 
-// remove drops one entry; the identity stays until the sweep, so store can refill it.
-func (c *cache) remove(ie *idEntry, el *list.Element) {
-	delete(ie.entries, el.Value.(*entry).attrs)
-	ie.lru.Remove(el)
+// insert puts e at the front of the LRU, adding its identity when new.
+func (c *cache) insert(e *entry) *list.Element {
+	ie := c.ids[e.key.id]
+	if ie == nil {
+		ie = &idEntry{}
+		c.ids[e.key.id] = ie
+		c.idsPeak = max(c.idsPeak, len(c.ids))
+		c.used += identityBytes
+	}
+	ie.n++
+	c.used += e.size()
+	return c.lru.PushFront(e)
 }
 
-func (c *cache) drop(ie *idEntry) {
-	c.idLRU.Remove(ie.elem)
-	delete(c.ids, ie.hash)
+// accounted is the cache's charge against the budget: entries, identities
+// and each map at its peak, which compaction lowers.
+func (c *cache) accounted() int64 {
+	return c.used + int64(c.decPeak)*decisionSlotBytes + int64(c.idsPeak)*identitySlotBytes
+}
+
+// evict drops least recently used entries, never keep, until the cache fits its budget.
+func (c *cache) evict(keep *list.Element) {
+	for c.accounted() > c.max {
+		el := c.lru.Back()
+		if el == keep {
+			break
+		}
+		c.remove(el)
+		c.m.evictions.Inc()
+	}
+	c.report()
+}
+
+// remove drops el, and its identity when that was its last entry, compacting the maps.
+func (c *cache) remove(el *list.Element) {
+	e := c.lru.Remove(el).(*entry)
+	c.used -= e.size()
+	ie := c.ids[e.key.id]
+	if e.full {
+		ie.full = nil
+	} else {
+		delete(c.decisions, e.key)
+		c.decisions = compact(c.decisions, &c.decPeak, &c.decDels)
+	}
+	if ie.n--; ie.n == 0 {
+		delete(c.ids, e.key.id)
+		c.used -= identityBytes
+		c.ids = compact(c.ids, &c.idsPeak, &c.idsDels)
+	}
+}
+
+// compact counts a delete from m and returns a copy sized to its entries once
+// they fell below half of *peak or *peak deletes passed: a map keeps its capacity,
+// and under churn its tombstones make it grow (TestRetainedHeapAfterChurn).
+func compact[K comparable, V any](m map[K]V, peak, dels *int) map[K]V {
+	*dels++
+	if len(m) >= *peak/2 && *dels < *peak {
+		return m
+	}
+	out := make(map[K]V, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	*peak, *dels = len(m), 0
+	return out
+}
+
+// report sets the byte and identity gauges.
+func (c *cache) report() {
+	c.m.bytes.Set(float64(c.accounted()))
 	c.m.identities.Set(float64(len(c.ids)))
 }
 
@@ -237,17 +340,12 @@ func (c *cache) drop(ie *idEntry) {
 func (c *cache) sweep(now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, ie := range c.ids {
-		for el := ie.lru.Front(); el != nil; {
-			next := el.Next()
-			if !now.Before(el.Value.(*entry).d.expires) {
-				c.remove(ie, el)
-			}
-			el = next
+	for el := c.lru.Front(); el != nil; {
+		next := el.Next()
+		if !now.Before(el.Value.(*entry).d.expires) {
+			c.remove(el)
 		}
-		if ie.lru.Len() == 0 {
-			c.drop(ie)
-		}
+		el = next
 	}
-	c.m.identities.Set(float64(len(c.ids)))
+	c.report()
 }

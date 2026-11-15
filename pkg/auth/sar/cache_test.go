@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	clocktesting "k8s.io/utils/clock/testing"
 
 	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
@@ -287,39 +290,207 @@ func TestErrorsNeverCached(t *testing.T) {
 	}
 }
 
-func TestPerIdentityLRU(t *testing.T) {
-	f := newFixture(allowAll)
-	name := func(i int) Attributes { return getAt("shop", fmt.Sprintf("r%d", i)) }
-	for i := range maxEntriesPerIdentity {
-		f.checkAt(t, user("alice"), name(i))
-	}
-	f.checkAt(t, user("alice"), name(0)) // r0 becomes the most recently used
-	f.checkAt(t, user("alice"), name(maxEntriesPerIdentity))
-	n := maxEntriesPerIdentity + 1
-	f.expectSARs(t, n, "filled")
-	f.checkAt(t, user("alice"), name(0))
-	f.expectSARs(t, n, "r0 was used last, so kept")
-	f.checkAt(t, user("alice"), name(1))
-	f.expectSARs(t, n+1, "r1 was least recently used, so evicted")
+// cached reports whether the cache holds a decision for id and a.
+func cached(c *cache, id oidc.Identity, a Attributes) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.decisions[flightKey{hashIdentity(id), a}] != nil
 }
 
-func TestIdentityBound(t *testing.T) {
+// setMax sets the cache's budget, returning what it accounts now.
+func setMax(c *cache, max func(accounted int64) int64) int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := c.accounted()
+	c.max = max(n)
+	return n
+}
+
+func nameAt(i int) Attributes { return getAt("shop", fmt.Sprintf("r%03d", i)) }
+
+func TestByteBudgetEvictsGlobalLRU(t *testing.T) {
 	f := newFixture(allowAll)
-	id := func(i int) oidc.Identity { return user(fmt.Sprintf("u%d", i)) }
-	for i := range maxIdentities {
-		f.checkAt(t, id(i), listAt("shop"))
+	a, b := user("alice"), user("bob")
+	for _, id := range []oidc.Identity{a, b} {
+		for i := range 10 {
+			f.checkAt(t, id, nameAt(i))
+		}
 	}
-	f.checkAt(t, id(0), listAt("shop"))
-	f.checkAt(t, id(maxIdentities), listAt("shop"))
-	n := maxIdentities + 1
-	f.expectSARs(t, n, "filled")
-	if len(f.a.cache.ids) != maxIdentities {
-		t.Fatalf("%d identities cached, want %d", len(f.a.cache.ids), maxIdentities)
+	setMax(f.a.cache, func(n int64) int64 { return n })
+	for i := range 10 {
+		f.checkAt(t, a, nameAt(i)) // alice's entries become the most recently used
 	}
-	f.checkAt(t, id(0), listAt("shop"))
-	f.expectSARs(t, n, "u0 was used last, so kept")
-	f.checkAt(t, id(1), listAt("shop"))
-	f.expectSARs(t, n+1, "u1 was least recently used, so dropped")
+	f.expectSARs(t, 20, "hits on alice's entries")
+	f.checkAt(t, a, nameAt(10))
+	for i := range 11 {
+		if !cached(f.a.cache, a, nameAt(i)) {
+			t.Fatalf("alice's r%03d evicted; bob's entries were older", i)
+		}
+	}
+	if cached(f.a.cache, b, nameAt(0)) || !cached(f.a.cache, b, nameAt(9)) {
+		t.Fatal("want bob's oldest entry evicted first and his newest kept")
+	}
+	for i := 1; i < 10; i++ {
+		if cached(f.a.cache, b, nameAt(i-1)) && !cached(f.a.cache, b, nameAt(i)) {
+			t.Fatalf("bob's r%03d evicted before the older r%03d", i, i-1)
+		}
+	}
+	if got := metricLine(t, f, "snellius_authz_cache_evictions_total"); got == "" || got == "0" {
+		t.Errorf("evictions = %q, want at least 1", got)
+	}
+	if got := metricLine(t, f, "snellius_authz_cache_bytes"); got == "" || got == "0" {
+		t.Errorf("cache bytes = %q, want the accounted bytes", got)
+	}
+}
+
+// Every identity's decisions differ from its neighbours', so a decision served
+// across identities fails the check.
+func TestMultiIdentityChurn(t *testing.T) {
+	const identities, checks, workers = 500, 200, 8
+	want := func(id oidc.Identity, a Attributes) bool {
+		var u, r int
+		_, _ = fmt.Sscanf(id.Username, "u%d", &u)
+		_, _ = fmt.Sscanf(a.Name, "r%d", &r)
+		return (u+r)%2 == 0
+	}
+	f := newFixture(func(id oidc.Identity, a Attributes) (bool, error) { return want(id, a), nil })
+	c := f.a.cache
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for w := range workers {
+		wg.Go(func() {
+			for u := w; u < identities; u += workers {
+				id := user(fmt.Sprintf("u%d", u))
+				for i := range checks {
+					// The second ask is a hit: the entry was just stored at the front.
+					for range 2 {
+						d, err := f.a.check(request(id), id, hashIdentity(id), nameAt(i))
+						if err == nil && d.allowed != want(id, nameAt(i)) {
+							err = fmt.Errorf("%s got %v for r%03d", id.Username, d.allowed, i)
+						}
+						c.mu.Lock()
+						if n := c.accounted(); err == nil && n > c.max {
+							err = fmt.Errorf("accounted %d B over the %d B budget", n, c.max)
+						}
+						c.mu.Unlock()
+						if err != nil {
+							errs <- err
+							return
+						}
+					}
+				}
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	if n := f.checker.count(); n != identities*checks {
+		t.Fatalf("%d SARs for %d first asks, want one each (the second ask hits)", n, identities*checks)
+	}
+	if got := metricLine(t, f, "snellius_authz_cache_evictions_total"); got == "" || got == "0" {
+		t.Fatalf("evictions = %q; the churn should exceed the budget", got)
+	}
+}
+
+// An evicted deny is asked again, though it would still be valid, and never
+// answered from another identity's entry.
+func TestDenialsEvictedEarlyAreRechecked(t *testing.T) {
+	f := newFixture(func(id oidc.Identity, _ Attributes) (bool, error) { return id.Username == "bob", nil })
+	alice, bob := user("alice"), user("bob")
+	if f.checkAt(t, alice, listAt("shop")).allowed {
+		t.Fatal("alice allowed")
+	}
+	f.checkAt(t, alice, listAt("shop"))
+	f.checkAt(t, bob, listAt("shop")) // bob's allow is newer than alice's deny
+	f.expectSARs(t, 2, "alice's deny cached")
+	// Room for one more map slot only, so bob's next entry evicts the oldest one.
+	setMax(f.a.cache, func(n int64) int64 { return n + decisionSlotBytes })
+	f.checkAt(t, bob, listAt("ops"))
+	if cached(f.a.cache, alice, listAt("shop")) {
+		t.Fatal("alice's deny, the least recently used entry, was kept past the budget")
+	}
+	f.clock.Step(time.Minute)
+	if f.checkAt(t, alice, listAt("shop")).allowed {
+		t.Fatal("alice allowed after her deny was evicted")
+	}
+	f.expectSARs(t, 4, "alice asked again within the deny's 5 min")
+}
+
+func TestFlightBound(t *testing.T) {
+	started, release, joined := make(chan struct{}, maxFlights), make(chan struct{}), make(chan struct{}, 1)
+	f := newFixture(nil)
+	f.reg = obs.NewRegistry()
+	f.a = New(Options{Checker: checkerFunc(func(context.Context, oidc.Identity, Attributes) (bool, error) {
+		started <- struct{}{}
+		<-release
+		return true, nil
+	}), Kinds: testKinds, Clock: f.clock, Metrics: f.reg, IdentityFrom: identityFrom})
+	f.a.cache.joined = func() { joined <- struct{}{} }
+	alice := user("alice")
+	check := func(i int) error {
+		_, err := f.a.check(request(alice), alice, hashIdentity(alice), nameAt(i))
+		return err
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, maxFlights+1)
+	for i := range maxFlights {
+		wg.Go(func() { errs <- check(i) })
+	}
+	for range maxFlights {
+		<-started
+	}
+	if err := check(maxFlights); !errors.Is(err, ErrOverloaded) || !errors.Is(err, ErrCheck) {
+		t.Fatalf("flight %d: error = %v, want ErrOverloaded", maxFlights+1, err)
+	}
+	if _, err := f.a.FullRead(request(alice)); !errors.Is(err, ErrOverloaded) {
+		t.Fatalf("full read past the bound: error = %v, want ErrOverloaded", err)
+	}
+	// Merging into a running flight is not counted.
+	wg.Go(func() { errs <- check(0) })
+	<-joined
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("a flight within the bound failed: %v", err)
+		}
+	}
+	if err := check(maxFlights); err != nil {
+		t.Fatalf("after the flights ended: %v", err)
+	}
+}
+
+func TestFullReadEntriesEvicted(t *testing.T) {
+	f, _ := newFullFixture(3, allowAll)
+	alice, bob := user("alice"), user("bob")
+	mustFullRead(t, f.a, alice)
+	f.expectSARs(t, 3, "alice's full read")
+	for i := range 3 {
+		f.checkAt(t, alice, clusterList(kindN(i).Resource)) // hits: the full-read entry becomes alice's oldest
+		f.checkAt(t, bob, nameAt(i))
+	}
+	mustFullRead(t, f.a, bob)
+	f.expectSARs(t, 9, "bob's full read")
+	setMax(f.a.cache, func(n int64) int64 { return n })
+	f.checkAt(t, bob, nameAt(3))
+	if _, ok := cachedFullOf(f, alice); ok {
+		t.Fatal("alice's full-read entry, the least recently used, kept past the budget")
+	}
+	if _, ok := cachedFullOf(f, bob); !ok {
+		t.Fatal("bob's recent full-read entry evicted")
+	}
+	miss := `snellius_authz_cache_total{result="fullread-miss"}`
+	if got := metricLine(t, f, miss); got != "2" {
+		t.Fatalf("%s = %s before, want 2", miss, got)
+	}
+	mustFullRead(t, f.a, alice)
+	if got := metricLine(t, f, miss); got != "3" {
+		t.Fatalf("%s = %s: alice's evicted full read was not evaluated again", miss, got)
+	}
 }
 
 func TestSweep(t *testing.T) {
@@ -498,4 +669,105 @@ func TestCheckerPanicCompletesFlight(t *testing.T) {
 		t.Fatal("a later check did not run a new flight")
 	}
 	f.expectSARs(t, 2, "after the panic")
+}
+
+// heapNow is HeapAlloc after two collections.
+func heapNow() int64 {
+	runtime.GC()
+	runtime.GC()
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	return int64(ms.HeapAlloc) //nolint:gosec // heap sizes fit
+}
+
+// newHeapAuthorizer serves kinds n kinds and answers every SAR without recording it.
+func newHeapAuthorizer(kinds int) (*Authorizer, *clocktesting.FakeClock) {
+	clk := clocktesting.NewFakeClock(t0)
+	allow := checkerFunc(func(context.Context, oidc.Identity, Attributes) (bool, error) { return true, nil })
+	return New(Options{Checker: allow, Kinds: &orderedKinds{kinds: kindsN(kinds), key: "v1"}, Clock: clk,
+		Metrics: obs.NewRegistry(), IdentityFrom: identityFrom}), clk
+}
+
+func TestAccountedBytesMatchHeap(t *testing.T) {
+	const n = 10_000
+	a, _ := newHeapAuthorizer(0)
+	alice := user("alice")
+	h := hashIdentity(alice)
+	before := heapNow()
+	for i := range n {
+		at := Attributes{Verb: "get", Group: gwGroup, Resource: "httproutes", Namespace: fmt.Sprintf("ns-%03d", i/100), Name: fmt.Sprintf("r-%05d", i)}
+		if _, err := a.check(request(alice), alice, h, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	heap := heapNow() - before
+	a.cache.mu.Lock()
+	acc := a.cache.accounted()
+	a.cache.mu.Unlock()
+	runtime.KeepAlive(a)
+	t.Logf("%d decisions: accounted %d B, HeapAlloc delta %d B (%.0f B per decision; %.2f accounted/heap)",
+		n, acc, heap, float64(heap)/n, float64(acc)/float64(heap))
+	if r := float64(acc) / float64(heap); r < 0.75 || r > 1.25 {
+		t.Fatalf("accounted %d B is %.2f× the heap delta %d B, want within 25%%", acc, r, heap)
+	}
+}
+
+func TestRetainedHeapAfterChurn(t *testing.T) {
+	const budget, few = DefaultMaxBytes, 16 << 10
+	limit := int64(budget * 5 / 4)
+	base := heapNow()
+	a, clk := newHeapAuthorizer(10)
+	c := a.cache
+	retained := func(phase string) int64 {
+		c.mu.Lock()
+		acc, ids, dec := c.accounted(), len(c.ids), len(c.decisions)
+		c.mu.Unlock()
+		r := heapNow() - base
+		t.Logf("%s: retained %d B (%.2f MiB), accounted %d B, %d identities, %d decisions", phase, r, float64(r)/(1<<20), acc, ids, dec)
+		if acc > budget {
+			t.Errorf("%s: accounted %d B over the %d B budget", phase, acc, budget)
+		}
+		return r
+	}
+	// Identity churn: 5,000 identities with 20 decisions each.
+	for u := range 5000 {
+		id := user(fmt.Sprintf("churn-%04d", u))
+		for i := range 20 {
+			if _, err := a.check(request(id), id, hashIdentity(id), nameAt(i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if r := retained("identity churn"); r > limit {
+		t.Errorf("identity churn: retained %d B, budget %d B + 25%%", r, budget)
+	}
+	// Full-read-only churn: 5,000 identities that only ask FullRead.
+	for u := range 5000 {
+		if _, err := a.FullRead(request(user(fmt.Sprintf("full-%04d", u)))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if r := retained("full-read-only churn"); r > limit {
+		t.Errorf("full-read-only churn: retained %d B, budget %d B + 25%%", r, budget)
+	}
+	// Eviction down to a few identities under a 16 KiB budget.
+	setMax(c, func(int64) int64 { return few })
+	clk.Step(time.Second)
+	for u := range 3 {
+		id := user(fmt.Sprintf("few-%d", u))
+		if _, err := a.check(request(id), id, hashIdentity(id), nameAt(0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := retained("eviction to a few identities")
+	c.mu.Lock()
+	ids, idsPeak, dec, decPeak := len(c.ids), c.idsPeak, len(c.decisions), c.decPeak
+	c.mu.Unlock()
+	if ids > 50 || idsPeak > 2*ids+1 || decPeak > 2*dec+1 {
+		t.Errorf("maps not compacted: %d identities (peak %d), %d decisions (peak %d)", ids, idsPeak, dec, decPeak)
+	}
+	if r > limit/8 {
+		t.Errorf("retained %d B after eviction to %d identities; the maps' capacity was not released", r, ids)
+	}
+	runtime.KeepAlive(a)
 }

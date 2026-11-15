@@ -73,11 +73,20 @@ func mustFullRead(t *testing.T, a *Authorizer, id oidc.Identity) bool {
 }
 
 // cachedFull returns alice's cached full-read decision.
-func cachedFull(f *fixture) (fullEntry, bool) {
-	f.a.full.mu.Lock()
-	defer f.a.full.mu.Unlock()
-	e, ok := f.a.full.entries[hashIdentity(user("alice"))]
-	return e, ok
+func cachedFull(f *fixture) (entry, bool) {
+	return cachedFullOf(f, user("alice"))
+}
+
+// cachedFullOf returns id's cached full-read decision.
+func cachedFullOf(f *fixture, id oidc.Identity) (entry, bool) {
+	c := f.a.cache
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ie := c.ids[hashIdentity(id)]
+	if ie == nil || ie.full == nil {
+		return entry{}, false
+	}
+	return *ie.full.Value.(*entry), true
 }
 
 func TestFullReadAllowed(t *testing.T) {

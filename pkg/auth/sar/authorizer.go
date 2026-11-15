@@ -45,6 +45,8 @@ type Options struct {
 	IdentityFrom func(context.Context) (oidc.Identity, bool)
 	// NamedGetScan adds a named get to population checks the list denies (D-100).
 	NamedGetScan bool
+	// MaxBytes bounds the permission cache, decisions and full reads together; zero means DefaultMaxBytes.
+	MaxBytes int64
 }
 
 // Decision lifetimes from the start of the SAR (design §6.2, D-100).
@@ -100,14 +102,17 @@ func New(o Options) *Authorizer {
 	if o.IdentityFrom == nil {
 		o.IdentityFrom = session.IdentityFrom
 	}
-	m := newMetrics(o.Metrics)
+	if o.MaxBytes == 0 {
+		o.MaxBytes = DefaultMaxBytes
+	}
+	c := newCache(o.Checker, o.Clock, o.AllowTTL, o.MaxBytes, newMetrics(o.Metrics))
 	return &Authorizer{
 		kinds:        o.Kinds,
 		namedGetScan: o.NamedGetScan,
 		identityFrom: o.IdentityFrom,
 		clock:        o.Clock,
-		cache:        newCache(o.Checker, o.Clock, o.AllowTTL, m),
-		full:         newFullCache(o.Clock, m),
+		cache:        c,
+		full:         &fullCache{c: c},
 		parallel:     fullReadParallel,
 		spend:        api.SpendCheck,
 		report:       api.ReportAuthzError,
@@ -130,7 +135,6 @@ func (a *Authorizer) run(ctx context.Context, tick <-chan time.Time) {
 		case <-tick:
 			now := a.clock.Now()
 			a.cache.sweep(now)
-			a.full.sweep(now)
 			if a.swept != nil {
 				a.swept()
 			}

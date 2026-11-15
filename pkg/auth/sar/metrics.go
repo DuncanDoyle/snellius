@@ -12,6 +12,8 @@ type metrics struct {
 	seconds    *obs.CounterVec
 	cache      *obs.CounterVec
 	identities *obs.GaugeVec
+	bytes      *obs.GaugeVec
+	evictions  *obs.CounterVec
 }
 
 func newMetrics(r *obs.Registry) *metrics {
@@ -23,6 +25,8 @@ func newMetrics(r *obs.Registry) *metrics {
 		seconds:    r.Counter("snellius_authz_check_seconds_total", "Wall time spent in SubjectAccessReviews, in seconds."),
 		cache:      r.Counter("snellius_authz_cache_total", "Authorisation cache lookups, by result.", "result"),
 		identities: r.Gauge("snellius_authz_identities", "Identities in the authorisation cache."),
+		bytes:      r.Gauge("snellius_authz_cache_bytes", "Accounted bytes of the authorisation cache, against its budget."),
+		evictions:  r.Counter("snellius_authz_cache_evictions_total", "Authorisation cache entries evicted to stay within the byte budget."),
 	}
 }
 

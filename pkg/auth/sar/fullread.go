@@ -7,8 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/utils/clock"
-
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 )
 
@@ -25,75 +23,65 @@ type fullKey struct {
 	kinds string
 }
 
-type fullEntry struct {
-	kinds string
-	d     decision
-}
-
-// fullCache holds one full-read decision per identity and merges concurrent
-// evaluations for the same key (design §6.4, D-100). An expiry never moves.
+// fullCache answers full reads from the shared cache, one decision per
+// identity in its LRU and budget, and merges concurrent evaluations for the
+// same key (design §6.4, D-100). An expiry never moves.
 type fullCache struct {
-	clock clock.PassiveClock
-	m     *metrics
-
-	mu      sync.Mutex
-	entries map[idHash]fullEntry
-	flights map[fullKey]*flight
+	c *cache
 
 	// Test hooks, nil in production: a waiter joined an evaluation; a waiter's evaluation ended.
 	joined, woke func()
 }
 
-func newFullCache(clk clock.PassiveClock, m *metrics) *fullCache {
-	return &fullCache{clock: clk, m: m, entries: map[idHash]fullEntry{}, flights: map[fullKey]*flight{}}
-}
-
 // get answers k from the cache, a running evaluation or a new one by eval.
 // The caller checks the result's expiry: a waiter may wake after it.
-func (c *fullCache) get(ctx context.Context, k fullKey, eval func() (decision, error)) (decision, error) {
+func (fc *fullCache) get(ctx context.Context, k fullKey, eval func() (decision, error)) (decision, error) {
+	c := fc.c
 	c.mu.Lock()
-	if e, ok := c.entries[k.id]; ok && e.kinds == k.kinds {
-		if c.clock.Now().Before(e.d.expires) {
-			c.mu.Unlock()
-			c.m.cache.Inc("fullread-hit")
-			return e.d, nil
-		}
-		delete(c.entries, k.id)
+	if d, ok := c.lookupFull(k, c.clock.Now()); ok {
+		c.mu.Unlock()
+		c.m.cache.Inc("fullread-hit")
+		return d, nil
 	}
-	if f := c.flights[k]; f != nil {
+	if f := c.fullFlights[k]; f != nil {
 		c.mu.Unlock()
 		c.m.cache.Inc("fullread-miss")
-		if c.joined != nil {
-			c.joined()
+		if fc.joined != nil {
+			fc.joined()
 		}
 		select {
 		case <-f.done:
 		case <-ctx.Done():
 			return decision{}, ctx.Err()
 		}
-		if c.woke != nil {
-			c.woke()
+		if fc.woke != nil {
+			fc.woke()
 		}
 		return f.d, f.err
 	}
+	if c.flying() >= maxFlights {
+		c.mu.Unlock()
+		return decision{}, ErrOverloaded
+	}
 	f := &flight{done: make(chan struct{})}
-	c.flights[k] = f
+	c.fullFlights[k] = f
 	c.mu.Unlock()
 	c.m.cache.Inc("fullread-miss")
-	return c.fly(f, k, eval)
+	return fc.fly(f, k, eval)
 }
 
 // fly runs eval for f and completes f even when eval panics.
-func (c *fullCache) fly(f *flight, k fullKey, eval func() (decision, error)) (decision, error) {
+func (fc *fullCache) fly(f *flight, k fullKey, eval func() (decision, error)) (decision, error) {
+	c := fc.c
 	ran := false
 	defer func() {
 		if !ran {
 			f.d, f.err = decision{}, checkError(categoryPanic)
 		}
 		c.mu.Lock()
-		delete(c.flights, k)
+		delete(c.fullFlights, k)
 		if f.err == nil && c.clock.Now().Before(f.d.expires) {
-			c.store(k, f.d)
+			c.storeFull(k, f.d)
 		}
 		c.mu.Unlock()
 		close(f.done)
@@ -101,29 +89,6 @@ func (c *fullCache) fly(f *flight, k fullKey, eval func() (decision, error)) (de
 	f.d, f.err = eval()
 	ran = true
 	return f.d, f.err
-}
-
-// store keeps d for k, replacing the identity's decision for any other key.
-// Past the bound one entry is dropped; it is only evaluated again.
-func (c *fullCache) store(k fullKey, d decision) {
-	if _, ok := c.entries[k.id]; !ok && len(c.entries) >= maxIdentities {
-		for h := range c.entries {
-			delete(c.entries, h)
-			break
-		}
-	}
-	c.entries[k.id] = fullEntry{kinds: k.kinds, d: d}
-}
-
-// sweep drops expired decisions.
-func (c *fullCache) sweep(now time.Time) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for h, e := range c.entries {
-		if !now.Before(e.d.expires) {
-			delete(c.entries, h)
-		}
-	}
 }
 
 // FullRead implements api.FullReader: whether the caller may list every
