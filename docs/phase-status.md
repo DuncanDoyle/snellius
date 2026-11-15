@@ -11,7 +11,7 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 - [x] Implementation plan, revised after `reviews/plan-codex.md`
 - [x] Codex review of design + plan, triage; approval delegated (see Status). Open for the user: claim-mapping fallback scope and its JWT dependency (design-codex #11)
 - [x] 7.1 Modes and groundwork — closed 2026-11-14, phases/phase-7/phase-7.1-complete.md (local branch, not pushed)
-- [~] 7.2 Identity and sessions — implemented 2026-11-14, phases/phase-7/phase-7.2-complete.md; close gate open: first green kind-secure CI run (needs push)
+- [x] 7.2 Identity and sessions — closed 2026-11-15, phases/phase-7/phase-7.2-complete.md (kind-secure green on PR #50 after D-097)
 - [ ] 7.3 Authoriser ← NEXT (first item: session-ended for every request with the ended cookie, 7.2 review #1)
 - [ ] 7.4 Visibility everywhere
 - [ ] 7.5 Two signals (gate opens)
@@ -28,7 +28,7 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 - [ ] phase-7-complete.md written, roadmap updated, tracked items closed
 
 ## Sub-phase
-Sub-phase: none (7.2 implemented 2026-11-14, close gate open: kind-secure CI; 7.3 next)
+Sub-phase: none (7.2 closed 2026-11-15; 7.3 next)
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md
