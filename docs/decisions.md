@@ -1484,3 +1484,15 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** `v0.8.0` ships without claim mapping; sub-phase 7.7 is dropped. Clusters that cannot accept Snellius's token use local mode in `v0.8.0`. #51 explores sending the token those clusters already accept (a Google or Entra access token, or an OpenShift OAuth token) to TokenReview, which keeps the API server as the identity authority. Claim mapping stays the last resort if #51 and the infrastructure options (Pinniped, Identity Service for GKE) fail.
 
 **Consequences:** In `v0.8.0`, GKE and AKS users get no sign-in, no per-user view and no HTTPRoute exposure. The README says so.
+
+## D-099 — Permission cache: 30 s TTL for every decision, no RBAC watch (2026-11-15, Phase 7, amends D-091)
+**Status:** accepted by the user (2026-11-15), after two Codex rounds (`phases/phase-7/reviews/d099-codex.md`).
+
+**Context:** D-091 decided the full-read fast path only at sign-in and identity refresh, so a full reader who lost cluster-wide read kept the allow-all view for up to 15 min. An RBAC watch to invalidate the cache, with a 5 min TTL, was proposed to cut load. A watch event says RBAC changed, not that every API server has applied it, and a SubjectAccessReview cannot ask for a decision at a given version. A stale allow fetched just after the clear would then live for the whole TTL. Platforms that use RBAC watches safely (Rancher's steve, OpenShift's project cache) evaluate RBAC themselves from their own copy, which Snellius does not do (the API server is the only evaluator).
+
+**Decision:**
+1. Every permission decision, including the full-read fast path, expires after the TTL, anchored at the SAR's start and never extended. The fast path is rechecked lazily, when the identity next makes a request.
+2. TTL default 30 s, one setting: chart `auth.authz.cacheTTL`, flag `--authz-cache-ttl`, range 30 s to 15 min. Cache sizes and per-request limits stay internal.
+3. No RBAC watch in `v0.8.0`. 7.3's bench measures the check load; a watch with the same 30 s TTL (faster typical revocation, same worst case) is a later option. A longer TTL is the operator's explicit trade of freshness for load.
+
+**Consequences:** A revoked permission stays visible in Snellius for at most the TTL after the API server answers with the revocation. Load is about 25 checks per 30 s per active full reader.

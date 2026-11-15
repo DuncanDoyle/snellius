@@ -144,7 +144,7 @@ A `SARAuthorizer` implements `api.Authorizer`. For a ref it asks the API server 
 
 ### 6.2 Cache
 
-Per identity (hash of username, groups, extra, UID): results keyed by verb, group, resource, namespace and name. TTL 30 seconds, never extended past expiry; an expired entry is checked again, not served (Codex). The cache is bounded per identity and evicts least recently used (our call on the bound).
+Per identity (hash of username, groups, extra, UID): results keyed by verb, group, resource, namespace and name. TTL 30 seconds by default (chart `auth.authz.cacheTTL`, `--authz-cache-ttl`, range 30 s to 15 min), anchored at the SAR's start and never extended past expiry; an expired entry is checked again, not served (Codex). No RBAC watch invalidates the cache (D-099): a watch event says RBAC changed, not that every API server has applied it, so the TTL is the only bound on how long a revoked permission stays visible. The cache is bounded per identity and evicts least recently used (our call on the bound).
 
 ### 6.3 Failing closed
 
@@ -169,7 +169,7 @@ SAR outcomes: `allowed: true` is allow; `allowed: false` (with or without `denie
 A page polls every 5 seconds and checks many refs. With namespace-level `list` checks and the cache, a typical app-team page needs a handful of SARs per 30 seconds per user.
 
 Budgets and bounds (Codex #14):
-- **Full-read fast path.** At sign-in and on each identity refresh, Snellius checks whether the identity may `list` every served kind cluster-wide. If so, the request uses the precomputed allow-all projection, as `AllowAll` does today (`authz.go:37`), and no per-object SARs run. Most platform operators take this path.
+- **Full-read fast path.** Snellius checks whether the identity may `list` every served kind cluster-wide. The decision is cached like any other: it expires with the TTL, measured from its earliest check, and is rechecked only when the identity next makes a request (D-099). If so, the request uses the precomputed allow-all projection, as `AllowAll` does today (`authz.go:37`), and no per-object SARs run. Most platform operators take this path.
 - **Typical target:** at most 50 SARs per user per minute at steady state on the large fixture with namespace-level grants.
 - **Hard limits:** per request, at most 500 distinct uncached SARs; beyond it the request answers `503 authz-unavailable` rather than a partial view. Identical concurrent checks are merged. Per identity, at most 10,000 cached decisions (LRU). Globally, at most 5,000 sessions and 2,000 identities in the cache; idle entries are swept every minute.
 - **Bench:** a denied-list workload (only `resourceNames` grants) on the large fixture, reporting SARs per page and latency, as report-only numbers first.

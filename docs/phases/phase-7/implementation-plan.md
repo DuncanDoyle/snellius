@@ -228,8 +228,8 @@ Install surface:
 
 ## Sub-phase 7.3 — Authoriser (data still gated)
 
-1. `pkg/auth/sar`: `SARAuthorizer` implementing `api.Authorizer` and `api.ErrAuthorizer`; list-then-get; cluster-scoped kinds; kinds registry mapping; outcome table (design §6.3); per-identity LRU (10,000), 30 s TTL never extended; merged concurrent checks; global identity bound 2,000.
-2. Full-read fast path: at sign-in and refresh, `list` on every served kind cluster-wide → allow-all projection.
+1. `pkg/auth/sar`: `SARAuthorizer` implementing `api.Authorizer` and `api.ErrAuthorizer`; list-then-get; cluster-scoped kinds; kinds registry mapping; outcome table (design §6.3); per-identity LRU (10,000), TTL from `--authz-cache-ttl` (default 30 s, 30 s–15 min, chart `auth.authz.cacheTTL`) anchored at SAR start and never extended; merged concurrent checks; global identity bound 2,000 (D-099).
+2. Full-read fast path: `list` on every served kind cluster-wide → allow-all projection; a cached decision with the same TTL, from its earliest check, rechecked lazily on the next request (D-099).
 3. `pkg/api`: `ErrAuthorizer` in `view`; buffered response wrapper; per-request uncached-SAR cap 500 → `503 authz-unavailable`; 404 paths through the wrapper.
 4. ClusterRole gains `create subjectaccessreviews` in secure mode.
 5. Bench: denied-list workload on the large fixture, report-only.
