@@ -134,8 +134,9 @@ trust_issuer() {
   docker cp "$node:/etc/kubernetes/manifests/kube-apiserver.yaml" "$OIDC_DIR/kube-apiserver.orig.yaml"
   patch_apiserver <"$OIDC_DIR/kube-apiserver.orig.yaml" >"$OIDC_DIR/kube-apiserver.yaml"
   # Stage outside the manifests directory, then move: kubelet reads every file in it.
-  docker cp "$OIDC_DIR/kube-apiserver.yaml" "$node:/tmp/kube-apiserver.yaml"
-  docker exec "$node" mv /tmp/kube-apiserver.yaml /etc/kubernetes/manifests/kube-apiserver.yaml
+  # Not in /tmp: it is a tmpfs on kind nodes, and docker cp cannot write into one.
+  docker cp "$OIDC_DIR/kube-apiserver.yaml" "$node:/etc/snellius-oidc/kube-apiserver.yaml"
+  docker exec "$node" mv /etc/snellius-oidc/kube-apiserver.yaml /etc/kubernetes/manifests/kube-apiserver.yaml
   if ! poll 180 apiserver_has_auth; then
     docker exec "$node" sh -c 'crictl ps -a --name kube-apiserver; crictl logs --tail 50 $(crictl ps -a -q --name kube-apiserver | head -n1)' >&2 || true
     exit 1
