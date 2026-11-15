@@ -142,6 +142,8 @@ A `SARAuthorizer` implements `api.Authorizer`. It asks the API server a `Subject
 - **Named refs** (a detail page's subject, and an object named in a readable object, including a target that does not exist): `list` first, then `get` on the named object, which honours `resourceNames` grants.
 - `--authz-named-get-scan` (chart `auth.authz.namedGetScan`, default off) brings back the named `get` for population members, for clusters that rely on `resourceNames` read grants. The per-request cap still applies.
 - The ref's group and kind map to a resource through the kinds registry. A kind without a mapping is denied.
+- A named check shares the request's population memo only when the authoriser has no separate named check (`canNamed`, `visible.go`). Production always separates them, so a named answer never enters the population memo.
+- Known under-show: a Service readable only by name opens its detail page but shows no exposure paths, because path rows check their dependencies as populations.
 
 ### 6.2 Cache
 
@@ -178,8 +180,8 @@ SAR outcomes: `allowed: true` is allow; `allowed: false` (with or without `denie
 A page polls every 5 seconds and checks many refs. The 7.3 bench showed that scanning hidden objects with named `get`s cost thousands of SARs per page; D-100 replaced it with the population rule of §6.1.
 
 Budgets and bounds (Codex #14, D-100):
-- **Full-read fast path, lazy.** Only a request whose handler needs a population asks whether the identity may `list` every served kind cluster-wide. The decision is cached with the expiries of §6.2 and rechecked only when the identity next needs it (D-099). If so, the request uses the precomputed allow-all projection, as `AllowAll` does (`authz.go:37`), and no per-object SARs run. Most platform operators take this path.
-- **Parallel resolution:** a request resolves its checks into a request-local table with 8 workers, then renders single-threaded (`view` is never shared between goroutines). Globally at most 32 SARs in flight and 100 SARs/s (burst 32), configurable; waiting is bounded too.
+- **Full-read fast path, lazy.** Only a request whose handler needs a population asks whether the identity may `list` every served kind cluster-wide. The decision is cached with the expiries of §6.2 and rechecked only when the identity next needs it (D-099). If so, the request uses the precomputed allow-all projection, as `AllowAll` does (`authz.go:37`), and no per-object SARs run. Most platform operators take this path. With no served kinds the full read is false (fails closed). An uncached full read spends one check per served kind against the per-request cap.
+- **Parallel resolution:** a request resolves its checks into a request-local table with 8 workers, then renders single-threaded (`view` is never shared between goroutines). Globally at most 32 SARs in flight and 100 SARs/s (burst 500), configurable; waiting is bounded too.
 - **Targets** (Large fixture, a viewer allowed 10 of 100 namespaces): `/routes` at most 400 SARs cold and 150 per minute warm, every poll answered 200 without contention; every other list page at most 400 SARs cold, `/backends` at most 550 (D-100 item 7, amended).
 - **Hard limits:** per request, at most 1,000 distinct uncached SARs (D-100 item 6); beyond it `503 authz-unavailable`, never a partial view. Identical concurrent checks are merged. At most 5,000 sessions.
 - **Memory:** the permission cache (decisions, identity data, full-read entries) has an 8 MiB byte budget with least-recently-used eviction across identities, inside D-057's retained-heap budget, raised to 64 MiB over the 2.1 baseline. In-flight checks and queues are bounded separately.
@@ -305,6 +307,7 @@ kgwctl reads with the user's kubeconfig. Phase 7 changes nothing in kgwctl; the 
 ## 11. Web
 
 - `client.ts` `request()`: `401` redirects to the login URL; `503` with `authz-unavailable` shows a new `PageState` "Can't check your permissions right now"; `retryEveryPoll` stops on `401` (`hooks.ts:16-29`).
+- After data has loaded, a poll answered `authz-unavailable` shows as a `PageNotice` over the rows already loaded (our call): the browser keeps what it had, and no new data leaves the server.
 - Polling pauses while the tab is hidden, so an idle tab doesn't keep a session alive (our call).
 - Header: the signed-in user with a menu (Who am I, Sign out) in secure mode; the local-mode banner in local mode (`Shell.tsx:118-125`).
 - The header health tint uses visible findings only (`Header.tsx:8`, through `/installs`).

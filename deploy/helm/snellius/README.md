@@ -12,6 +12,7 @@ Snellius runs in one of two modes, set with `auth.mode` (default `local`).
   - The API server must accept the client ID as an audience, either because the cluster already trusts that client ID or through `audiences` in its structured authentication configuration.
   - Sessions live in memory. The chart runs one replica, and a restart signs everyone out.
   - The secure-mode ClusterRole gains `create` on `tokenreviews` and `subjectaccessreviews`.
+  - An allowed permission check is reused for `auth.authz.cacheTTL` (default `60s`), a denied one for 5 minutes. Lists show only objects a user may `list`. The defaults are the secure choice. The [README](https://github.com/DuncanDoyle/snellius#secure-mode) explains how to tighten or relax them, and when to raise `auth.authz.maxInFlight`, `rate` and `burst`.
   - Secrets and tokens never reach the browser or the logs.
 - The ClusterRole never grants Secrets. That is the UI's whole secret-handling guarantee: no other field is redacted, and Deployments and other objects are shown as stored.
 
