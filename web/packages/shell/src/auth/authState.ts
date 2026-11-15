@@ -63,7 +63,7 @@ export function trackAuthRequest(): () => void {
   };
 }
 
-/** The longest a sign-in redirect waits for concurrent requests, any of which may carry the one session-ended. */
+/** The longest a sign-in redirect waits for concurrent requests, any of which may carry a session-ended. */
 const SETTLE_MAX_MS = 1000;
 
 function requestsSettled(): Promise<void> {
@@ -99,6 +99,57 @@ function recordRedirect() {
   }
 }
 
+const HAD_SESSION_KEY = "snellius.hadSession";
+const SIGNED_OUT_KEY = "snellius.signedOut";
+// The flags for this page load; they stand in for storage when it throws.
+let hadSession = false;
+let signedOut = false;
+
+function writeFlag(key: string, on: boolean) {
+  try {
+    if (on) sessionStorage.setItem(key, "1");
+    else sessionStorage.removeItem(key);
+  } catch {
+    // See redirectedRecently; the in-memory flag still applies.
+  }
+}
+
+function readFlag(key: string): boolean {
+  try {
+    return sessionStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Records that this tab had a session: a protected request succeeded. Kept across reloads. */
+export function markHadSession(): void {
+  if (hadSession) return;
+  hadSession = true;
+  writeFlag(HAD_SESSION_KEY, true);
+}
+
+/** Records a sign-out in place of the session, so a late sign-in-required shows the signed-out page. */
+export function markSignedOut(): void {
+  hadSession = false;
+  signedOut = true;
+  writeFlag(HAD_SESSION_KEY, false);
+  writeFlag(SIGNED_OUT_KEY, true);
+}
+
+/** Clears both flags; "Sign in again" calls it before it leaves for sign-in. */
+export function clearSessionFlags(): void {
+  hadSession = false;
+  signedOut = false;
+  writeFlag(HAD_SESSION_KEY, false);
+  writeFlag(SIGNED_OUT_KEY, false);
+}
+
+/** A tab that had a session, or signed out, never redirects to sign-in by itself. */
+function knownSession(): boolean {
+  return hadSession || signedOut || readFlag(HAD_SESSION_KEY) || readFlag(SIGNED_OUT_KEY);
+}
+
 /** Sign-in can be followed in local mode, when it is ready, or when /auth/status itself fails (the login route then explains). */
 async function signInReady(): Promise<boolean> {
   if (!isSecureMode()) return true;
@@ -123,12 +174,15 @@ async function redirect(login: string) {
   navigate(login);
 }
 
-/** Applies a 401 answer: redirect to sign-in (once per page load) or record that the session ended, which then wins. */
+/**
+ * Applies a 401 answer: record that the session ended, which then wins, or redirect to sign-in (once per page load).
+ * In a tab that had a session, sign-in-required also shows the signed-out page: answers can arrive in any order.
+ */
 export function handleUnauthorized(error: string, login: string | undefined): void {
   if (!login || !isLocalPath(login)) return;
   // The failure page stays put; sending the browser back to sign-in would loop.
   if (window.location.pathname === SIGNIN_FAILED_PATH) return;
-  if (error === "session-ended") {
+  if (error === "session-ended" || (error === "sign-in-required" && knownSession())) {
     set({ kind: "ended", login });
   } else if (error === "sign-in-required" && !redirected && state.kind !== "ended") {
     redirected = true;
@@ -136,9 +190,11 @@ export function handleUnauthorized(error: string, login: string | undefined): vo
   }
 }
 
-/** Clears the state between tests. */
+/** Clears the page-load state between tests; sessionStorage stays, so it also stands in for a reload. */
 export function resetAuthForTests(): void {
   redirected = false;
+  hadSession = false;
+  signedOut = false;
   status = undefined;
   inFlight = 0;
   drained = [];

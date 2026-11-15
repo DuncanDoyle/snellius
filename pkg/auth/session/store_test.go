@@ -237,7 +237,7 @@ func TestIdleExpiry(t *testing.T) {
 	f.wantMe(c, 200, okBody)
 	f.clk.Step(30 * time.Minute)
 	f.wantMe(c, 401, endedBody)
-	f.wantMe(c, 401, signInBody)
+	f.wantMe(c, 401, endedBody)
 	if got := f.audit.actions(); strings.Join(got, ",") != "login/success,session-ended/failure/idle" {
 		t.Fatalf("audit = %v", got)
 	}
@@ -252,7 +252,7 @@ func TestAbsoluteExpiry(t *testing.T) {
 		f.wantMe(c, 200, okBody)
 	}
 	f.clk.Step(10 * time.Minute)
-	f.wantMe(c, 401, endedBody)
+	f.wantEndedEveryRequest(c)
 	if got := f.audit.actions(); got[len(got)-1] != "session-ended/failure/absolute" {
 		t.Fatalf("audit = %v", got)
 	}
@@ -350,4 +350,48 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+// An end notice lives for the absolute timeout after the end; then the cookie hears sign-in-required and is cleared.
+func TestEndedNoticeExpires(t *testing.T) {
+	f := newFixture(t, nil)
+	c := f.signIn(f.result("oidc:dev"))
+	f.clk.Step(31 * time.Minute)
+	f.wantMe(c, 401, endedBody)
+	f.clk.Step(DefaultAbsolute - time.Second)
+	f.wantMe(c, 401, endedBody)
+	f.clk.Step(time.Second)
+	rec := f.me(c)
+	if got := strings.TrimSpace(rec.Body.String()); rec.Code != 401 || got != signInBody {
+		t.Fatalf("expired notice = %d %s", rec.Code, got)
+	}
+	var cleared bool
+	for _, ck := range rec.Result().Cookies() {
+		cleared = cleared || ck.Name == CookieName && ck.MaxAge < 0
+	}
+	if !cleared {
+		t.Fatal("sign-in-required did not clear the cookie")
+	}
+}
+
+// At most Max end notices are held: notice Max+1 forgets the oldest, whose cookie then hears sign-in-required.
+func TestEndedNoticeBound(t *testing.T) {
+	f := newFixture(t, nil)
+	cs := make([]*http.Cookie, DefaultMax)
+	for i := range cs {
+		cs[i] = f.signIn(f.result("oidc:dev"))
+	}
+	f.clk.Step(31 * time.Minute)
+	// Each request ends one session; distinct times make the first notice the oldest.
+	for _, c := range cs {
+		f.clk.Step(time.Millisecond)
+		f.wantMe(c, 401, endedBody)
+	}
+	last := f.signIn(f.result("oidc:dev"))
+	f.clk.Step(31 * time.Minute)
+	f.wantMe(last, 401, endedBody)
+	f.wantMe(cs[0], 401, signInBody)
+	f.wantMe(cs[1], 401, endedBody)
+	f.wantMe(cs[DefaultMax-1], 401, endedBody)
+	f.wantMe(last, 401, endedBody)
 }

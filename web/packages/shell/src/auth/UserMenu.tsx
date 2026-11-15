@@ -9,7 +9,7 @@ import { Tooltip } from "../shell/Tooltip";
 import { PageNotice } from "../states/PageNotice";
 import { Shimmer } from "../states/Shimmer";
 import { AccountDetails } from "./AccountDetails";
-import { useAuthState } from "./authState";
+import { markSignedOut, useAuthState } from "./authState";
 import { navigate, safeNext } from "./navigate";
 import { useMe } from "./useAuth";
 
@@ -65,6 +65,8 @@ export function UserMenu({ signedIn }: { signedIn: boolean | undefined }) {
     try {
       const res = await fetch("/auth/logout", { method: "POST", headers: { Accept: "application/json" } });
       if (!res.ok) return setLogoutError(new ApiError(res.status, res.statusText || `status ${res.status}`));
+      // The server has dropped the session; a late sign-in-required now shows the signed-out page.
+      markSignedOut();
       const { next } = (await res.json()) as { next?: string };
       navigate(safeNext(next));
     } catch (e) {

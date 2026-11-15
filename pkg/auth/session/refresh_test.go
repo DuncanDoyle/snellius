@@ -92,8 +92,8 @@ func TestRefreshFailureEndsSession(t *testing.T) {
 			setup(f)
 			c := f.signIn(f.result("oidc:dev"))
 			f.clk.Step(16 * time.Minute)
-			f.wantMe(c, 401, endedBody)
-			f.wantMe(c, 401, signInBody)
+			// The concurrent requests share the one failing refresh; all hear the end.
+			f.wantEndedEveryRequest(c)
 			if got := f.audit.actions(); strings.Join(got, ",") != "login/success,session-ended/failure/refresh" {
 				t.Fatalf("audit = %v", got)
 			}

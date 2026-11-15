@@ -1,11 +1,12 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SWRConfig } from "swr";
+import { apiFetch } from "../api/client";
 import { authCopy } from "../copy/auth";
 import { Shell } from "../shell/Shell";
 import { meta } from "../test/fixtures";
 import { stubApi, testSWR } from "../test/render";
-import { handleUnauthorized, resetAuthForTests } from "./authState";
+import { authState, handleUnauthorized, resetAuthForTests } from "./authState";
 import * as nav from "./navigate";
 
 const pages = {
@@ -153,6 +154,41 @@ describe("sign-out", () => {
     await userEvent.click(screen.getByRole("button", { name: me.username }));
     expect(screen.queryByText(authCopy.signOutFailed)).toBeNull();
   });
+
+  it("a sign-in-required that arrives after Sign out shows the signed-out page and never starts sign-in", async () => {
+    let release: (() => void) | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url === "/auth/logout")
+          return Promise.resolve(new Response(JSON.stringify({ next: "/" }), { status: 200 }));
+        // Sent before the logout and answered after it, when the server no longer knows the cookie.
+        if (url === "/api/v1/held")
+          return new Promise<Response>((resolve) => {
+            release = () =>
+              resolve(new Response(JSON.stringify({ error: "sign-in-required", login }), { status: 401 }));
+          });
+        const body = (routes as Record<string, unknown>)[url] ?? {};
+        return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+      }),
+    );
+    const view = mount();
+    const late = apiFetch("/api/v1/held").catch(() => {});
+    await vi.waitFor(() => expect(release).toBeDefined());
+    await signOut();
+    await waitFor(() => expect(nav.navigate).toHaveBeenCalledWith("/"));
+    release?.();
+    await late;
+    expect(await screen.findByRole("heading", { name: authCopy.endedTitle })).toBeInTheDocument();
+    view.unmount();
+    expect(sessionStorage.getItem("snellius.signedOut")).toBe("1");
+    expect(sessionStorage.getItem("snellius.hadSession")).toBeNull();
+    // The page logout leads to hears sign-in-required too, and still does not redirect.
+    resetAuthForTests();
+    handleUnauthorized("sign-in-required", login);
+    expect(authState.get()).toEqual({ kind: "ended", login });
+    expect(nav.navigate).not.toHaveBeenCalledWith(login);
+  });
 });
 
 describe("sign-in redirect loop", () => {
@@ -191,7 +227,8 @@ describe("sign-in redirect loop", () => {
   });
 });
 
-it("an ended session removes the old username from the header", async () => {
+it("concurrent requests after the session ends show the signed-out page without the old username, and never navigate", async () => {
+  // Like the server, every request with the ended cookie hears session-ended.
   let ended = false;
   vi.stubGlobal(
     "fetch",
@@ -204,9 +241,10 @@ it("an ended session removes the old username from the header", async () => {
   mount();
   expect(await screen.findByRole("button", { name: me.username })).toBeInTheDocument();
   ended = true;
-  handleUnauthorized("session-ended", login);
+  await Promise.all(["/api/v1/installs", "/api/v1/meta", "/auth/me"].map((p) => apiFetch(p).catch(() => {})));
   expect(await screen.findByRole("heading", { name: authCopy.endedTitle })).toBeInTheDocument();
   expect(screen.queryByText(me.username)).toBeNull();
+  expect(nav.navigate).not.toHaveBeenCalled();
 });
 
 describe("identity revalidation", () => {

@@ -84,7 +84,7 @@ type Store struct {
 
 	mu       sync.Mutex
 	sessions map[string]*session
-	// ended remembers sessions that ended, so the next request hears it once.
+	// ended holds an end notice per ended session's key, for Absolute after the end and at most Max of them.
 	ended map[string]time.Time
 }
 
@@ -127,7 +127,7 @@ func New(o Options) *Store {
 }
 
 // Complete starts a session for a sign-in, replacing the browser's previous
-// one, then redirects to the return path. It implements oidc.Completer.
+// one or its end notice, then redirects to the return path. It implements oidc.Completer.
 func (s *Store) Complete(w http.ResponseWriter, r *http.Request, res oidc.Result) {
 	value := newCookieValue()
 	now := s.clk.Now()
@@ -137,9 +137,11 @@ func (s *Store) Complete(w http.ResponseWriter, r *http.Request, res oidc.Result
 	sess.info.AuditID = sess.auditID
 	s.mu.Lock()
 	if c, err := r.Cookie(CookieName); err == nil {
-		if old := s.sessions[hashKey(c.Value)]; old != nil {
+		oldKey := hashKey(c.Value)
+		if old := s.sessions[oldKey]; old != nil {
 			s.remove(old)
 		}
+		delete(s.ended, oldKey)
 	}
 	if len(s.sessions) >= s.o.Max {
 		s.evictOldestIdle(r.Context())
@@ -180,10 +182,15 @@ func (s *Store) sweep() {
 		}
 	}
 	for k, at := range s.ended {
-		if now.Sub(at) > s.o.Absolute {
+		if s.noticeExpired(at, now) {
 			delete(s.ended, k)
 		}
 	}
+}
+
+// noticeExpired reports whether an end notice written at at has lived its Absolute at now.
+func (s *Store) noticeExpired(at, now time.Time) bool {
+	return now.Sub(at) >= s.o.Absolute
 }
 
 // expired returns the reason sess has ended at now, or "".
@@ -243,6 +250,7 @@ func (s *Store) evictOldestIdle(ctx context.Context) {
 	}
 }
 
+// forgetOldestNotice drops the oldest end notice; its cookie then hears sign-in-required. s.mu is held.
 func (s *Store) forgetOldestNotice() {
 	var key string
 	var at time.Time

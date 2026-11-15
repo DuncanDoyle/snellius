@@ -1,4 +1,4 @@
-import { handleUnauthorized, signInStatus, trackAuthRequest } from "../auth/authState";
+import { handleUnauthorized, markHadSession, signInStatus, trackAuthRequest } from "../auth/authState";
 import { isSecureMode } from "../auth/mode";
 import { observeServerDate, trackRequest } from "./clock";
 /** Error thrown for non-2xx API responses. */
@@ -24,8 +24,12 @@ export async function apiFetchWithHeaders<T>(path: string): Promise<{ body: T; h
   const authSettled = trackAuthRequest();
   try {
     // In secure mode, protected paths wait for /auth/status, so a 401 never outruns the sign-in pages.
-    if (isSecureMode() && (path.startsWith("/api/") || path === "/auth/me")) await signInStatus().catch(() => {});
-    return await request<T>(path);
+    const guarded = isSecureMode() && (path.startsWith("/api/") || path === "/auth/me");
+    if (guarded) await signInStatus().catch(() => {});
+    const res = await request<T>(path);
+    // A protected answer means this tab has a session; a later 401 then never redirects by itself.
+    if (guarded) markHadSession();
+    return res;
   } finally {
     settled();
     authSettled();

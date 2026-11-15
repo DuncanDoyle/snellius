@@ -73,7 +73,7 @@ func (s *Store) Me(w http.ResponseWriter, r *http.Request) {
 }
 
 // Logout serves POST /auth/logout. The Origin header must be the redirect URL's
-// origin. It deletes the session and answers the next URL: the issuer's
+// origin. It deletes the session or its end notice and answers the next URL: the issuer's
 // end-session endpoint without an ID token hint, else "/".
 func (s *Store) Logout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -86,11 +86,13 @@ func (s *Store) Logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if c, err := r.Cookie(CookieName); err == nil {
+		key := hashKey(c.Value)
 		s.mu.Lock()
-		sess := s.sessions[hashKey(c.Value)]
+		sess := s.sessions[key]
 		if sess != nil {
 			s.remove(sess)
 		}
+		delete(s.ended, key)
 		s.mu.Unlock()
 		if sess != nil {
 			s.emit(r.Context(), auditRecord(r, sess, "logout", "success", ""))
@@ -129,12 +131,13 @@ func (s *Store) fromRequest(w http.ResponseWriter, r *http.Request) (Info, bool)
 	if st == stateOK {
 		return info, true
 	}
-	if c != nil {
-		http.SetCookie(w, s.cookie("", -1))
-	}
-	reason := "sign-in-required"
-	if st == stateEnded {
-		reason = "session-ended"
+	// session-ended keeps the cookie, so every request with it hears the same; it maps to no session.
+	reason := "session-ended"
+	if st != stateEnded {
+		reason = "sign-in-required"
+		if c != nil {
+			http.SetCookie(w, s.cookie("", -1))
+		}
 	}
 	writeJSON(w, http.StatusUnauthorized, map[string]string{"error": reason, "login": "/auth/login?return=" + url.QueryEscape(returnPath(r))})
 	return Info{}, false

@@ -3,6 +3,7 @@ import { ExternalLink } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { authCopy, SECURE_MODE_DOCS } from "../copy/auth";
 import { PageState } from "../states/PageState";
+import { clearSessionFlags } from "./authState";
 import { navigate } from "./navigate";
 
 // region Styles
@@ -96,13 +97,17 @@ export function FailedPage({ reason }: { reason: string | null }) {
   );
 }
 
-/** Shown after a 401 session-ended; no automatic redirect, the person chooses. */
+/** The signed-out page, after a session ended or a sign-out; no automatic redirect, the person chooses. */
 export function SessionEndedPage({ login }: { login: string }) {
+  const signInAgain = () => {
+    clearSessionFlags();
+    navigate(login);
+  };
   return (
     <PageState
       kind="empty"
       title={authCopy.endedTitle}
-      action={<PrimaryButton onClick={() => navigate(login)}>{authCopy.signInAgain}</PrimaryButton>}
+      action={<PrimaryButton onClick={signInAgain}>{authCopy.signInAgain}</PrimaryButton>}
     />
   );
 }

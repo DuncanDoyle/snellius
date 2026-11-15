@@ -12,7 +12,7 @@ type state int
 
 const (
 	stateNone  state = iota // no session: sign-in required
-	stateEnded              // the session ended since the last request
+	stateEnded              // the session ended and its end notice is still held
 	stateOK
 )
 
@@ -24,14 +24,14 @@ func (s *Store) lookup(ctx context.Context, value string) (Info, state) {
 		s.mu.Lock()
 		sess := s.sessions[key]
 		if sess == nil {
-			st := s.takeNotice(key)
+			st := s.notice(key)
 			s.mu.Unlock()
 			return Info{}, st
 		}
 		now := s.clk.Now()
 		if why := s.expired(sess, now); why != "" {
 			s.end(ctx, sess, why)
-			st := s.takeNotice(key)
+			st := s.notice(key)
 			s.mu.Unlock()
 			return Info{}, st
 		}
@@ -47,7 +47,7 @@ func (s *Store) lookup(ctx context.Context, value string) (Info, state) {
 		}
 		if !s.canRefresh(sess) {
 			s.end(ctx, sess, reasonRefresh)
-			st := s.takeNotice(key)
+			st := s.notice(key)
 			s.mu.Unlock()
 			return Info{}, st
 		}
@@ -61,13 +61,18 @@ func (s *Store) lookup(ctx context.Context, value string) (Info, state) {
 	}
 }
 
-// takeNotice reports an end notice once. s.mu is held.
-func (s *Store) takeNotice(key string) state {
-	if _, ok := s.ended[key]; ok {
-		delete(s.ended, key)
-		return stateEnded
+// notice reports the cookie's end notice on every request until it expires or
+// a sign-in or logout deletes it. s.mu is held.
+func (s *Store) notice(key string) state {
+	at, ok := s.ended[key]
+	if !ok {
+		return stateNone
 	}
-	return stateNone
+	if s.noticeExpired(at, s.clk.Now()) {
+		delete(s.ended, key)
+		return stateNone
+	}
+	return stateEnded
 }
 
 // startRefresh starts the session's refresh unless one runs, and returns its done channel. s.mu is held.

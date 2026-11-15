@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -123,7 +124,7 @@ func TestMiddleware(t *testing.T) {
 	if rec := call("/api/v1/installs", "", c); rec.Code != 401 || strings.TrimSpace(rec.Body.String()) != endedBody {
 		t.Fatalf("ended = %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := call("/api/v1/installs", "", c); rec.Code != 401 || strings.TrimSpace(rec.Body.String()) != signInBody {
+	if rec := call("/api/v1/installs", "", c); rec.Code != 401 || strings.TrimSpace(rec.Body.String()) != endedBody {
 		t.Fatalf("after ended = %d %s", rec.Code, rec.Body.String())
 	}
 }
@@ -144,4 +145,87 @@ func TestLogoutDropsIDTokenHint(t *testing.T) {
 			t.Fatalf("%s: next = %s", ep, body.Next)
 		}
 	}
+}
+
+// wantEndedEveryRequest sends 20 concurrent /api/ requests with c, then 5 sequential ones and
+// an /auth/me: each answers session-ended and none sets a cookie.
+func (f *fixture) wantEndedEveryRequest(c *http.Cookie) {
+	f.t.Helper()
+	h := f.store.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	api := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/api/v1/installs", nil)
+		req.AddCookie(c)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	recs := make([]*httptest.ResponseRecorder, 20, 26)
+	var wg sync.WaitGroup
+	for i := range recs {
+		wg.Add(1)
+		go func() { defer wg.Done(); recs[i] = api() }()
+	}
+	wg.Wait()
+	for range 5 {
+		recs = append(recs, api())
+	}
+	recs = append(recs, f.me(c))
+	for i, rec := range recs {
+		if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusUnauthorized || got != endedBody {
+			f.t.Fatalf("request %d = %d %s; want session-ended", i, rec.Code, got)
+		}
+		if cs := rec.Result().Cookies(); len(cs) != 0 {
+			f.t.Fatalf("request %d sets cookies %v", i, cs)
+		}
+	}
+}
+
+// signInWith completes a sign-in from a browser that sends old, and returns the new cookie.
+func (f *fixture) signInWith(old *http.Cookie) *http.Cookie {
+	f.t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/auth/callback", nil)
+	req.AddCookie(old)
+	f.store.Complete(rec, req, f.result("oidc:dev"))
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == CookieName {
+			return c
+		}
+	}
+	f.t.Fatal("no session cookie")
+	return nil
+}
+
+// After an idle expiry, every request with the cookie hears session-ended, not only the first.
+func TestEndedSessionAnswersEveryRequest(t *testing.T) {
+	f := newFixture(t, nil)
+	c := f.signIn(f.result("oidc:dev"))
+	f.clk.Step(31 * time.Minute)
+	f.wantEndedEveryRequest(c)
+	if got := f.audit.actions(); strings.Join(got, ",") != "login/success,session-ended/failure/idle" {
+		t.Fatalf("audit = %v", got)
+	}
+}
+
+// A sign-in from the browser deletes the old cookie's end notice.
+func TestEndedNoticeClearedBySignIn(t *testing.T) {
+	f := newFixture(t, nil)
+	old := f.signIn(f.result("oidc:dev"))
+	f.clk.Step(31 * time.Minute)
+	f.wantMe(old, 401, endedBody)
+	c := f.signInWith(old)
+	f.wantMe(c, 200, okBody)
+	f.wantMe(old, 401, signInBody)
+}
+
+// Logout with an ended session's cookie deletes its end notice.
+func TestLogoutClearsEndedNotice(t *testing.T) {
+	f := newFixture(t, nil)
+	c := f.signIn(f.result("oidc:dev"))
+	f.clk.Step(31 * time.Minute)
+	f.wantMe(c, 401, endedBody)
+	if rec := f.logout(c, "https://snellius.example.com"); rec.Code != 200 {
+		t.Fatalf("logout = %d", rec.Code)
+	}
+	f.wantMe(c, 401, signInBody)
 }
