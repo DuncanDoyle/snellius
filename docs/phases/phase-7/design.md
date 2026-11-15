@@ -112,7 +112,7 @@ A TokenReview that returns `authenticated: false` ends the login with "Your sign
 
 ### 4.3 Claim-mapping fallback
 
-For clusters where neither option is possible (some managed clusters), Snellius would verify the ID token itself and apply the cluster's claim and prefix rules from its own configuration. That needs a JWT verification library, a new dependency (Snellius has none today). It is queued for the user's approval and built last, if approved (our call). Without it, such clusters stay on local mode for `v0.8.0`.
+For clusters where neither option is possible (some managed clusters), Snellius would verify the ID token itself and apply the cluster's claim and prefix rules from its own configuration. That needs a JWT verification library, a new dependency (Snellius has none today). Not in `v0.8.0` (D-098): such clusters stay on local mode, and #51 explores sending the token they already accept to TokenReview instead.
 
 The brainstorm said this fallback is "checked at startup". There is no API to read the API server's authentication configuration, so the check becomes a "Who am I" panel (username, groups) and documented `kubectl auth whoami` comparison (our call).
 

@@ -1475,3 +1475,12 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** Snellius sends the TokenReview without `spec.audiences`. The API server checks the token against the audiences in its own JWT configuration. Snellius's binding to its client is its own `aud` (and `azp`) check, which it trusts once the API server has verified the signature. The `audience` sign-in failure reason goes; a refused review is `unauthenticated`.
 
 **Consequences:** The API server must accept the token through one of its configured audiences. The setups in the README do that with Snellius's client ID: the same client ID as the cluster, or an extra audience. A token whose `aud` lists both Snellius and an audience the cluster accepts, with `azp` naming Snellius, also works.
+
+## D-098 — No claim-mapping fallback in v0.8.0; managed clusters through #51 (2026-11-15, Phase 7, amends D-090)
+**Status:** accepted by the user (2026-11-15).
+
+**Context:** Secure mode needs an API server that accepts a token issued to Snellius. GKE, AKS with Entra ID and OpenShift's built-in sign-in do not accept one. The claim-mapping fallback (design §4.3) would cover them by having Snellius verify the token and rebuild the identity from its own settings. That copies the cluster's identity rules, so drift gives a user someone else's permissions, and it needs a JWT library.
+
+**Decision:** `v0.8.0` ships without claim mapping; sub-phase 7.7 is dropped. Clusters that cannot accept Snellius's token use local mode in `v0.8.0`. #51 explores sending the token those clusters already accept (a Google or Entra access token, or an OpenShift OAuth token) to TokenReview, which keeps the API server as the identity authority. Claim mapping stays the last resort if #51 and the infrastructure options (Pinniped, Identity Service for GKE) fail.
+
+**Consequences:** In `v0.8.0`, GKE and AKS users get no sign-in, no per-user view and no HTTPRoute exposure. The README says so.

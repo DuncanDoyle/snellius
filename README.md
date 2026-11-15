@@ -45,6 +45,8 @@ Snellius runs in one of two modes. Set it with `--auth-mode` or the chart value 
 
 Secure mode signs users in with your IdP and shows the data of the Kubernetes identity that the IdP issues. It needs an IdP that your cluster already trusts for API access.
 
+Managed clusters whose API server accepts only the cloud's own tokens, such as GKE and AKS with Entra ID, are not supported yet; use local mode there ([#51](https://github.com/DuncanDoyle/snellius/issues/51)).
+
 1. **Register Snellius as an OIDC client at your IdP.**
    - Redirect URI: `https://<host>/auth/callback`
    - Post-logout redirect URI: `https://<host>/`

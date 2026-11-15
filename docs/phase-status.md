@@ -9,14 +9,14 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 ### Queue
 - [x] Design (`phases/phase-7/design.md`), revised after `reviews/design-codex.md`
 - [x] Implementation plan, revised after `reviews/plan-codex.md`
-- [x] Codex review of design + plan, triage; approval delegated (see Status). Open for the user: claim-mapping fallback scope and its JWT dependency (design-codex #11)
+- [x] Codex review of design + plan, triage; approval delegated (see Status). Claim-mapping fallback: not in v0.8.0 (D-098, user 2026-11-15); managed clusters through #51
 - [x] 7.1 Modes and groundwork — closed 2026-11-14, phases/phase-7/phase-7.1-complete.md (local branch, not pushed)
 - [x] 7.2 Identity and sessions — closed 2026-11-15, phases/phase-7/phase-7.2-complete.md (kind-secure green on PR #50 after D-097)
 - [ ] 7.3 Authoriser ← NEXT (first item: session-ended for every request with the ended cookie, 7.2 review #1)
 - [ ] 7.4 Visibility everywhere
 - [ ] 7.5 Two signals (gate opens)
 - [ ] 7.6 Audit, docs, release
-- [ ] 7.7 Claim-mapping fallback (if approved)
+- [-] 7.7 Claim-mapping fallback — dropped (D-098); see #51
 
 ### Exit gates
 - [ ] tests/vet pass (observed)
