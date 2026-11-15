@@ -68,7 +68,7 @@ func sessionApp(t *testing.T, cfg oidc.Config) *App {
 	dyn, kube := testutil.Clients(t, testutil.ControllerDeployment("kgw", "kgateway", "cr.kgateway.dev/kgateway-dev/kgateway:v2.4.0", 1, 1),
 		testutil.GatewayClass("kgateway", testutil.Controller, true), testutil.Gateway("infra", "edge", "kgateway", nil))
 	kube.PrependReactor("create", "tokenreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &authnv1.TokenReview{Status: authnv1.TokenReviewStatus{Authenticated: true, Audiences: []string{"c"},
+		return true, &authnv1.TokenReview{Status: authnv1.TokenReviewStatus{Authenticated: true,
 			User: authnv1.UserInfo{Username: "oidc:alice", Groups: []string{"oidc:dev"}}}}, nil
 	})
 	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}},

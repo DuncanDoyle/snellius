@@ -25,7 +25,6 @@ import (
 
 // Sign-in failure reasons, the only detail that reaches the browser.
 const (
-	ReasonAudience        = "audience"
 	ReasonUnauthenticated = "unauthenticated"
 	ReasonInvalid         = "invalid"
 )
@@ -222,9 +221,6 @@ func (f *Flow) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := f.reviewer.Review(r.Context(), raw)
 	switch {
-	case errors.Is(err, ErrAudience):
-		f.fail(w, r, ReasonAudience, "token review refused the audience")
-		return
 	case errors.Is(err, ErrUnauthenticated):
 		f.fail(w, r, ReasonUnauthenticated, "token review did not authenticate the token")
 		return

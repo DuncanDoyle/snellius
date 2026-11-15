@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 
 	authnv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,28 +23,26 @@ type Reviewer interface {
 	Review(ctx context.Context, idToken string) (Identity, error)
 }
 
-// TokenReview refusals; any other Review error is a failure to ask.
-var (
-	ErrUnauthenticated = errors.New("token review: not authenticated")
-	ErrAudience        = errors.New("token review: the client ID is not an accepted audience")
-)
+// ErrUnauthenticated is the TokenReview refusal; any other Review error is a failure to ask.
+var ErrUnauthenticated = errors.New("token review: not authenticated")
 
 // KubeReviewer reviews tokens through the authentication.k8s.io/v1 TokenReview API.
 type KubeReviewer struct {
-	kube     kubernetes.Interface
-	clientID string
+	kube kubernetes.Interface
 }
 
-// NewKubeReviewer returns a Reviewer that requires clientID as the token's audience.
-func NewKubeReviewer(kube kubernetes.Interface, clientID string) *KubeReviewer {
-	return &KubeReviewer{kube: kube, clientID: clientID}
+// NewKubeReviewer returns a Reviewer backed by the cluster's TokenReview API.
+func NewKubeReviewer(kube kubernetes.Interface) *KubeReviewer {
+	return &KubeReviewer{kube: kube}
 }
 
-// Review creates a TokenReview for the client ID audience. It returns the
-// identity only when the token is authenticated for that audience.
+// Review returns the identity the API server gives the token, if it authenticates it.
+// It sets no spec.audiences: the API server checks a JWT against its own configured
+// audiences, and matches spec.audiences only against its ServiceAccount audiences. The
+// binding to Snellius's client is the aud check in checkClaims, trusted once this passes.
 func (k *KubeReviewer) Review(ctx context.Context, idToken string) (Identity, error) {
 	tr, err := k.kube.AuthenticationV1().TokenReviews().Create(ctx, &authnv1.TokenReview{
-		Spec: authnv1.TokenReviewSpec{Token: idToken, Audiences: []string{k.clientID}},
+		Spec: authnv1.TokenReviewSpec{Token: idToken},
 	}, metav1.CreateOptions{})
 	if err != nil {
 		return Identity{}, fmt.Errorf("token review: %w", err)
@@ -53,9 +50,6 @@ func (k *KubeReviewer) Review(ctx context.Context, idToken string) (Identity, er
 	st := tr.Status
 	if !st.Authenticated || st.User.Username == "" {
 		return Identity{}, ErrUnauthenticated
-	}
-	if !slices.Contains(st.Audiences, k.clientID) {
-		return Identity{}, ErrAudience
 	}
 	id := Identity{Username: st.User.Username, UID: st.User.UID, Groups: st.User.Groups}
 	if len(st.User.Extra) > 0 {

@@ -154,15 +154,15 @@ The data gate from 7.1 stays closed. 7.2 adds identity: who is calling, proven b
 **Files:** new `pkg/auth/oidc/login.go`, `transaction.go`, `tokenreview.go`; tests alongside.
 
 **Interfaces:**
-- `oidc.Reviewer` interface: `Review(ctx, idToken string) (Identity, error)`; production implementation creates an `authentication.k8s.io/v1` `TokenReview` with `spec.audiences: [clientID]` through client-go and returns `Identity{Username, UID, Groups, Extra}` only when `status.authenticated` is true and `status.audiences` contains the client ID.
+- `oidc.Reviewer` interface: `Review(ctx, idToken string) (Identity, error)`; production implementation creates an `authentication.k8s.io/v1` `TokenReview` without `spec.audiences` (D-097) through client-go and returns `Identity{Username, UID, Groups, Extra}` only when `status.authenticated` is true.
 - Transaction store: one-use records keyed by a random 128-bit ID in cookie `snellius_login` (HttpOnly, SameSite=Lax, Secure per `--cookie-secure`, Path `/auth/`, Max-Age 600); holds state, nonce, PKCE S256 verifier, return path; at most 10,000 open transactions (oldest evicted).
 - `GET /auth/login?return=<path>`: return path must be a same-origin relative path starting with `/` and not `//`; else `/`. Redirects to the authorization endpoint with `response_type=code`, `client_id`, `redirect_uri`, `scope`, `state`, `nonce`, `code_challenge`, `code_challenge_method=S256`.
 - `GET /auth/callback`: the order of design §4.1 exactly (transaction, state, code exchange with verifier, ID-token claims `iss`/`aud`/`azp`/`exp`/`iat` ±2 min/`nonce` decoded without trust, TokenReview, return path). Any failure: an error page state (no session), audit `security` record `login` with `outcome: failure` and a reason code, never the token.
 - The ID token is never logged or sent to the browser.
-- A failed callback redirects to `/signin-failed?reason=<code>`, codes `audience` (TokenReview audiences), `unauthenticated` (TokenReview false), `invalid` (anything else). No other detail reaches the browser.
+- A failed callback redirects to `/signin-failed?reason=<code>`, codes `unauthenticated` (TokenReview false), `invalid` (anything else). No other detail reaches the browser.
 
-- [ ] Tests (with an `httptest` issuer and a fake `Reviewer`): happy path; replayed callback; wrong state; expired transaction; wrong `aud`; `azp` mismatch with several audiences; expired token; wrong nonce; TokenReview `authenticated: false`; TokenReview audiences missing the client ID; open-redirect return paths (`//evil`, `https://evil`, `/\evil`); the redirect reason codes.
-- [ ] The production `Reviewer` adapter is tested against a fake API server (`httptest` serving `/apis/authentication.k8s.io/v1/tokenreviews` behind a client-go config): the request carries `spec.audiences: [clientID]`; `authenticated: false`; missing and wrong response audiences; transport failure (plan-codex 7.2 #7).
+- [ ] Tests (with an `httptest` issuer and a fake `Reviewer`): happy path; replayed callback; wrong state; expired transaction; wrong `aud`; `azp` mismatch with several audiences; expired token; wrong nonce; TokenReview `authenticated: false`; open-redirect return paths (`//evil`, `https://evil`, `/\evil`); the redirect reason codes.
+- [ ] The production `Reviewer` adapter is tested against a fake API server (`httptest` serving `/apis/authentication.k8s.io/v1/tokenreviews` behind a client-go config): the request carries no `spec.audiences` (D-097); `authenticated: false`; transport failure (plan-codex 7.2 #7).
 
 ### Task 11: Sessions, refresh and logout
 

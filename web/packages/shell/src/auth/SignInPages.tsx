@@ -83,9 +83,9 @@ export function SignInFailedPage() {
   return <FailedPage reason={params.get("reason")} />;
 }
 
-/** The failure page for a reason: audience and unauthenticated mean the cluster refuses the sign-in. */
+/** The failure page for a reason: unauthenticated means the cluster refuses the sign-in. */
 export function FailedPage({ reason }: { reason: string | null }) {
-  const notAccepted = reason === "audience" || reason === "unauthenticated";
+  const notAccepted = reason === "unauthenticated";
   return (
     <PageState
       kind="error"

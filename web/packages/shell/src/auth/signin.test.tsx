@@ -150,7 +150,7 @@ describe("status pages", () => {
 });
 
 describe("/signin-failed", () => {
-  it.each(["audience", "unauthenticated"])("reason=%s says the cluster does not accept the sign-in", async (reason) => {
+  it.each(["unauthenticated"])("reason=%s says the cluster does not accept the sign-in", async (reason) => {
     renderWithTheme(<SignInFailedPage />, { path: `/signin-failed?reason=${reason}` });
     expect(screen.getByRole("heading", { name: authCopy.notAcceptedTitle })).toBeInTheDocument();
     expect(screen.getByText(authCopy.notAcceptedBody)).toBeInTheDocument();
@@ -166,7 +166,7 @@ describe("/signin-failed", () => {
 
   it("the shell shows it as a route, even when /api answers 401, without redirecting", async () => {
     stamp("secure");
-    window.history.pushState({}, "", "/signin-failed?reason=audience");
+    window.history.pushState({}, "", "/signin-failed?reason=unauthenticated");
     stubApi({
       "/auth/status": { mode: "secure", signIn: "ready" },
       "/api/v1/meta": [401, { error: "sign-in-required", login }],

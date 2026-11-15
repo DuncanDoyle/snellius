@@ -5,7 +5,7 @@
 **Close gate open:** the first green run of the new `kind-secure` CI job. It needs the branch pushed.
 
 ## Summary
-Secure mode now signs people in with OIDC through the issuer the cluster trusts. Snellius checks the ID token's claims, then asks the API server (TokenReview, with Snellius's client ID as the audience) who the person is. It keeps a server-side session: idle 30 min, absolute 8 h, identity refreshed at most every 15 min, at most 5,000 sessions. Sign-out removes the session and sends the browser to the IdP's logout page without an `id_token_hint`. The web UI redirects to sign-in, shows pages for "not set up", "provider unreachable", "not accepted by this cluster", "sign-in failed" and "signed out", and adds an account menu. Data stays closed: `401` without a session, `503 secure-mode-incomplete` with one.
+Secure mode now signs people in with OIDC through the issuer the cluster trusts. Snellius checks the ID token's claims, then asks the API server (TokenReview) who the person is. It keeps a server-side session: idle 30 min, absolute 8 h, identity refreshed at most every 15 min, at most 5,000 sessions. Sign-out removes the session and sends the browser to the IdP's logout page without an `id_token_hint`. The web UI redirects to sign-in, shows pages for "not set up", "provider unreachable", "not accepted by this cluster", "sign-in failed" and "signed out", and adds an account menu. Data stays closed: `401` without a session, `503 secure-mode-incomplete` with one.
 
 ## Sub-phases (phase record only)
 n/a

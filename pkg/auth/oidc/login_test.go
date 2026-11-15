@@ -402,10 +402,6 @@ func TestCallbackFailures(t *testing.T) {
 			f.reviewer.id, f.reviewer.err = Identity{}, ErrUnauthenticated
 			return f.signIn("/")
 		}, "unauthenticated"},
-		"token review audience": {func(f *flowFixture) *httptest.ResponseRecorder {
-			f.reviewer.id, f.reviewer.err = Identity{}, ErrAudience
-			return f.signIn("/")
-		}, "audience"},
 		"token review unreachable": {func(f *flowFixture) *httptest.ResponseRecorder {
 			f.reviewer.id, f.reviewer.err = Identity{}, context.DeadlineExceeded
 			return f.signIn("/")

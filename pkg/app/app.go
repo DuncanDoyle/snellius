@@ -611,7 +611,7 @@ func buildSignIn(kube kubernetes.Interface, o Options, auditLog *audit.Logger, m
 	if err != nil {
 		return store, nil, nil, err
 	}
-	f, err := oidc.NewFlow(oidc.FlowOptions{Config: o.OIDC, Provider: p, Reviewer: oidc.NewKubeReviewer(kube, o.OIDC.ClientID),
+	f, err := oidc.NewFlow(oidc.FlowOptions{Config: o.OIDC, Provider: p, Reviewer: oidc.NewKubeReviewer(kube),
 		Completer: store, Audit: auditLog, Clock: clk, CookieSecure: !o.CookieInsecure})
 	if err != nil {
 		return store, nil, nil, err

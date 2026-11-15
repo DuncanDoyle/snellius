@@ -5,7 +5,6 @@ kind: AuthenticationConfiguration
 jwt:
   - issuer:
       url: ISSUER_URL
-      # Snellius sends TokenReview with spec.audiences [CLIENT_ID].
       audiences: [CLIENT_ID]
       certificateAuthority: CA_PEM
     claimMappings:

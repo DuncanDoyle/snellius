@@ -11,7 +11,7 @@ test("an unsigned visitor is sent to sign-in", async ({ page, baseURL }) => {
 });
 
 test("the signin-failed page shows its reason and a Try again button", async ({ page }) => {
-  await page.goto("/signin-failed?reason=audience");
+  await page.goto("/signin-failed?reason=unauthenticated");
   await expect(page.getByRole("heading", { name: "This cluster doesn't accept your sign-in" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
   await page.goto("/signin-failed?reason=invalid");

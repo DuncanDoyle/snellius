@@ -77,9 +77,8 @@ func TestRefreshErrorsAreCategories(t *testing.T) {
 		err  error
 		want error
 	}{
-		"unknown":  {errors.New(leak), ErrTokenReviewFailed},
-		"refused":  {fmt.Errorf("%s: %w", leak, ErrUnauthenticated), ErrTokenReviewRefused},
-		"audience": {fmt.Errorf("%s: %w", leak, ErrAudience), ErrTokenReviewRefused},
+		"unknown": {errors.New(leak), ErrTokenReviewFailed},
+		"refused": {fmt.Errorf("%s: %w", leak, ErrUnauthenticated), ErrTokenReviewRefused},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFlowFixture(t, "")

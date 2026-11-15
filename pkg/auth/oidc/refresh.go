@@ -52,7 +52,7 @@ func (f *Flow) Refresh(ctx context.Context, refreshToken string) (Result, error)
 	}
 	id, err := f.reviewer.Review(ctx, raw)
 	switch {
-	case errors.Is(err, ErrUnauthenticated), errors.Is(err, ErrAudience):
+	case errors.Is(err, ErrUnauthenticated):
 		return Result{}, ErrTokenReviewRefused
 	case err != nil:
 		return Result{}, ErrTokenReviewFailed

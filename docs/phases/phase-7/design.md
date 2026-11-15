@@ -98,7 +98,7 @@ A second listener on the pod IP, `:8081`, in both modes: `/healthz`, `/readyz` a
    2. `state` equals the transaction's; the transaction is deleted.
    3. The code is exchanged at the discovered token endpoint over HTTPS with the verifier (`golang.org/x/oauth2`, already in the module graph).
    4. The ID token's claims, decoded without trusting them yet: `iss` equals the configured issuer, `aud` contains the configured client ID, `azp` equals it when present with several audiences, `exp` and `iat` are current (2 minutes skew), `nonce` equals the transaction's.
-   5. TokenReview (§4.2) is the signature and Kubernetes-identity authority: Snellius trusts the claims only after the API server accepts the token. TokenReview's `audiences` field is set to the configured client ID, so a token accepted only for another audience is refused.
+   5. TokenReview (§4.2) is the signature and Kubernetes-identity authority: Snellius trusts the claims only after the API server accepts the token. The TokenReview sets no `audiences` (D-097): the API server checks a JWT against its own configured audiences. Snellius binds the token to its client with the `aud` and `azp` check in step 4, which it trusts once TokenReview has verified the signature.
    6. The return path must be a same-origin relative path; otherwise `/`.
 4. Discovery is read from `{issuer}/.well-known/openid-configuration` at startup and retried; its `issuer` must equal the configured issuer, and every endpoint must be HTTPS. The issuer URL, client ID and redirect URL are configuration. A client secret, when the client is confidential, is read from a file (a mounted Secret); Snellius still never reads Secrets through the API (principle 8).
 
@@ -108,7 +108,7 @@ Snellius sends the ID token in a `TokenReview` to the API server. The API server
 
 Requirement: the cluster must accept the ID token's audience. Either Snellius uses the same OIDC client ID as the cluster, or the cluster's structured authentication configuration lists Snellius's client ID as an extra audience (GA in Kubernetes 1.34). The docs show both, and how to check with `kubectl auth whoami`.
 
-A TokenReview that returns `authenticated: false` ends the login with "Your sign-in is not accepted by this cluster", naming the likely cause (audience).
+A TokenReview that returns `authenticated: false` ends the login with "Your sign-in is not accepted by this cluster", naming the likely cause: the cluster does not accept the client ID as an audience.
 
 ### 4.3 Claim-mapping fallback
 
@@ -322,7 +322,7 @@ kgwctl reads with the user's kubeconfig. Phase 7 changes nothing in kgwctl; the 
 
 ## 14. Proposed decisions
 
-- **D-090** Identity from TokenReview; claim mapping only with an approved JWT dependency (§4).
+- **D-090** Identity from TokenReview; claim mapping only with an approved JWT dependency (§4). Amended by D-097: the TokenReview sets no audiences.
 - **D-091** SubjectAccessReview authoriser: list-then-get, 30 s TTL, fail closed, `ErrAuthorizer` (§6).
 - **D-092** Findings decided by hidden objects are omitted; installs visible through GatewayClasses; one permissions note per viewer (§7.3–§7.5).
 - **D-093** Two signals in the API; `health` is their summary (§8).

@@ -1466,3 +1466,12 @@ Measured on the reference machine, 5 runs per world:
 - **D-094** Audit as JSON lines on stdout with a fixed marker, the agreed levels and fields; OTLP later (§9).
 - **D-095** A probe listener with `/healthz`, `/readyz` (no install IDs) and a dependency-free `/metrics` (§3.3).
 - **D-096** Sessions in memory, one replica in secure mode; secure mode answers `503 secure-mode-incomplete` until 7.5 (§3.2, §5).
+
+## D-097 — TokenReview sets no audiences (2026-11-15, Phase 7, amends D-090)
+**Status:** accepted; found by the first `kind-secure` CI run.
+
+**Context:** D-090 set the TokenReview's `spec.audiences` to Snellius's client ID. The API server treats JWT authenticators as audience-agnostic: it matches `spec.audiences` only against its own ServiceAccount audiences (`--api-audiences`), so every review of an OIDC token came back unauthenticated.
+
+**Decision:** Snellius sends the TokenReview without `spec.audiences`. The API server checks the token against the audiences in its own JWT configuration. Snellius's binding to its client is its own `aud` (and `azp`) check, which it trusts once the API server has verified the signature. The `audience` sign-in failure reason goes; a refused review is `unauthenticated`.
+
+**Consequences:** The cluster requirement does not change: the API server must accept Snellius's client ID as an audience.
