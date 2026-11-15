@@ -89,7 +89,7 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 	case cfg.secure && !cfg.complete:
 		return secureGate(mux)
 	case cfg.secure:
-		return commit(mux, cfg.commitCheck, cfg.authzAudit)
+		return commit(mux, cfg.commitCheck, cfg.authzAudit, cfg.commitClock)
 	}
 	return mux
 }

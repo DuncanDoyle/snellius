@@ -73,9 +73,10 @@ type Authorizer struct {
 	full         *fullCache
 	// parallel bounds the SARs of one full-read evaluation; tests lower it.
 	parallel int
-	// spend and report are api.SpendCheck and api.ReportAuthzError; tests swap them.
+	// spend, report and note are api.SpendCheck, api.ReportAuthzError and api.NoteAllow; tests swap them.
 	spend  func(*http.Request) error
 	report func(*http.Request, error)
+	note   func(*http.Request, time.Time)
 	// Test hooks, nil in production: run after each sweep; a full-read evaluation stopped early.
 	swept, fullStopped func()
 }
@@ -110,6 +111,7 @@ func New(o Options) *Authorizer {
 		parallel:     fullReadParallel,
 		spend:        api.SpendCheck,
 		report:       api.ReportAuthzError,
+		note:         api.NoteAllow,
 	}
 }
 
@@ -169,12 +171,12 @@ func (a *Authorizer) authorize(r *http.Request, ref objects.Ref, named bool) (bo
 	list := Attributes{Verb: "list", Group: k.Group, Resource: k.Resource, Namespace: ns}
 	d, err := a.check(r, id, h, list)
 	if err != nil || d.allowed || !named {
-		return d.allowed, err
+		return a.allow(r, d, err)
 	}
 	get := list
 	get.Verb, get.Name = "get", ref.Name
 	d, err = a.check(r, id, h, get)
-	return d.allowed, err
+	return a.allow(r, d, err)
 }
 
 // Authorize implements api.Authorizer with population semantics: an error is
@@ -203,9 +205,17 @@ func (a *Authorizer) CanList(r *http.Request, gk objects.GroupKind, namespace st
 		namespace = ""
 	}
 	d, err := a.check(r, id, hashIdentity(id), Attributes{Verb: "list", Group: k.Group, Resource: k.Resource, Namespace: namespace})
-	return d.allowed, err
+	return a.allow(r, d, err)
 }
 
 func (a *Authorizer) check(r *http.Request, id oidc.Identity, h idHash, at Attributes) (decision, error) {
 	return a.cache.check(r.Context(), func() error { return a.spend(r) }, id, h, at)
+}
+
+// allow reports d's answer to r's request, noting an allow's expiry (D-100).
+func (a *Authorizer) allow(r *http.Request, d decision, err error) (bool, error) {
+	if err == nil && d.allowed {
+		a.note(r, d.expires)
+	}
+	return d.allowed, err
 }

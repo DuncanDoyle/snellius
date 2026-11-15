@@ -121,10 +121,12 @@ func (c *checker) recorded() []sar.Attributes {
 	return slices.Clone(c.calls)
 }
 
-// serve runs the API in complete secure mode with authz, the user taken from X-User.
-func serve(t *testing.T, src api.ModelSource, authz api.Authorizer) *httptest.Server {
+// serve runs the API in complete secure mode with authz, the user taken from
+// X-User. Commit reads t0 unless opts set a clock that moves.
+func serve(t *testing.T, src api.ModelSource, authz api.Authorizer, opts ...api.HandlerOption) *httptest.Server {
 	t.Helper()
-	h := api.NewHandler(src, fstest.MapFS{}, authz, api.WithSecureMode(true))
+	opts = append([]api.HandlerOption{api.WithSecureMode(true), api.WithCommitClock(func() time.Time { return t0 })}, opts...)
+	h := api.NewHandler(src, fstest.MapFS{}, authz, opts...)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, r.Header.Get("X-User"))))
 	}))
@@ -344,7 +346,7 @@ func TestRevokedAfterTTLAtHandler(t *testing.T) {
 		defer mu.Unlock()
 		return !revoked && func() bool { ok, _ := team(user, a, n); return ok }(), nil
 	}}
-	srv := serve(t, src, newAuthz(c, clk))
+	srv := serve(t, src, newAuthz(c, clk), api.WithCommitClock(clk.Now))
 	before := routeNames(t, srv, "team", base)
 	if len(before) == 0 {
 		t.Fatal("team sees no routes")
@@ -429,7 +431,7 @@ func TestMixedListGetExpiry(t *testing.T) {
 	var mu sync.Mutex
 	granted := true
 	c := &checker{decide: namedOnly(ns, name, func() bool { mu.Lock(); defer mu.Unlock(); return granted })}
-	srv := serve(t, src, newAuthz(c, clk))
+	srv := serve(t, src, newAuthz(c, clk), api.WithCommitClock(clk.Now))
 	detail := base + "/routes/" + routesGroup + "/HTTPRoute/" + ns + "/" + name
 	get := sar.Attributes{Verb: "get", Group: routesGroup, Resource: "httproutes", Namespace: ns, Name: name}
 	// expect fetches the detail and checks its status and the SARs it sent.
@@ -505,5 +507,90 @@ func TestListProbesFullReadOnce(t *testing.T) {
 	routeNames(t, srv, "team", base)
 	if n, lists := a.count(), clusterLists(); n != 2 || lists != first {
 		t.Errorf("second request: %d full reads, %d cluster-wide lists (first %d)", n, lists, first)
+	}
+}
+
+// Denials are not tracked at commit: two slow denied SARs move the clock past
+// the 5 min of the first denials, and the response is still written after one
+// build, with no SAR sent twice.
+func TestCommitDenyNotTracked(t *testing.T) {
+	src, base := world(t)
+	clk := clocktesting.NewFakeClock(t0)
+	var mu sync.Mutex
+	slow := 0
+	c := &checker{decide: func(_ string, a sar.Attributes, _ int) (bool, error) {
+		if isClusterList(a) {
+			return false, nil
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		// The first SAR ends at 4 min; the second starts there and ends past t0 + 5 min.
+		switch slow++; slow {
+		case 1:
+			clk.SetTime(t0.Add(4 * time.Minute))
+		case 2:
+			clk.SetTime(t0.Add(sar.DenyTTL + time.Second))
+		}
+		return false, nil
+	}}
+	srv := serve(t, src, newAuthz(c, clk), api.WithCommitClock(clk.Now))
+	if got := routeNames(t, srv, "nobody", base); got != nil {
+		t.Errorf("nobody sees %v", got)
+	}
+	if slow < 2 {
+		t.Fatalf("%d per-namespace SARs, want at least 2", slow)
+	}
+	calls := c.recorded()
+	for i, a := range calls {
+		if slices.Contains(calls[:i], a) {
+			t.Errorf("%+v sent twice: the response was rebuilt", a)
+		}
+	}
+}
+
+// An allow used at t, a SAR delayed past t + 60 s, and a revocation in
+// between: the response is rebuilt and never shows the revoked routes.
+func TestRevokedDuringSlowRequest(t *testing.T) {
+	src, base := world(t)
+	clk := clocktesting.NewFakeClock(t0)
+	ns0 := sar.Attributes{Verb: "list", Group: routesGroup, Resource: "httproutes", Namespace: testutil.ScaleNamespace(0)}
+	var mu sync.Mutex
+	revoked, allowed, after := false, false, 0
+	team := grant(nil)
+	c := &checker{decide: func(user string, a sar.Attributes, n int) (bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if allowed && !isClusterList(a) {
+			// After the allow: one SAR ends at t + 30 s, the next starts there and ends past t + 60 s.
+			switch after++; after {
+			case 1:
+				clk.SetTime(t0.Add(30 * time.Second))
+			case 2:
+				clk.SetTime(t0.Add(sar.DefaultAllowTTL + time.Second))
+				revoked = true
+			}
+		}
+		ok, _ := team(user, a, n)
+		ok = ok && !revoked
+		allowed = allowed || (ok && a == ns0)
+		return ok, nil
+	}}
+	srv := serve(t, src, newAuthz(c, clk), api.WithCommitClock(clk.Now))
+	if got := routeNames(t, srv, "team", base); got != nil {
+		t.Errorf("after the revocation team sees %v", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if after < 2 {
+		t.Fatalf("%d SARs after the allow, want the slow one", after)
+	}
+	n := 0
+	for _, a := range c.recorded() {
+		if a == ns0 {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("the list in %s was sent %d times, want again on the rebuild", ns0.Namespace, n)
 	}
 }

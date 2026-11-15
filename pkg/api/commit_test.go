@@ -12,6 +12,9 @@ import (
 	"sync"
 	"testing"
 	"testing/fstest"
+	"time"
+
+	clocktesting "k8s.io/utils/clock/testing"
 
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
@@ -408,5 +411,239 @@ func TestViewCanList(t *testing.T) {
 	h.authz = listAuthz{errAuthz: &errAuthz{}, err: errOutage}
 	if h.view(r).canList(routes, "shop") || st.failed() != errOutage {
 		t.Errorf("error not recorded: %v", st.failed())
+	}
+}
+
+// commitT0 is the fake clock's start in the validity-at-commit tests.
+var commitT0 = time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+
+// expiringAuthz allows every ref but deny's, noting each allow as valid for a
+// minute from the clock's now. step runs inside the n-th call, counted over
+// every build; full, when set, answers the n-th FullRead.
+type expiringAuthz struct {
+	clock *clocktesting.FakeClock
+	deny  func(objects.Ref) bool
+	spend bool
+	step  func(n int)
+	full  []bool
+
+	mu           sync.Mutex
+	calls, reads int
+}
+
+func (a *expiringAuthz) Authorize(r *http.Request, ref objects.Ref) bool {
+	ok, err := a.AuthorizeErr(r, ref)
+	if err != nil {
+		ReportAuthzError(r, err)
+	}
+	return ok
+}
+
+func (a *expiringAuthz) AuthorizeErr(r *http.Request, ref objects.Ref) (bool, error) {
+	a.mu.Lock()
+	a.calls++
+	n := a.calls
+	a.mu.Unlock()
+	if a.spend {
+		if err := SpendCheck(r); err != nil {
+			return false, err
+		}
+	}
+	if a.step != nil {
+		a.step(n)
+	}
+	if a.deny != nil && a.deny(ref) {
+		return false, nil
+	}
+	NoteAllow(r, a.clock.Now().Add(time.Minute))
+	return true, nil
+}
+
+// expiringFull is expiringAuthz with a full read; each answer steps the clock
+// a minute after noting a "true", which then expires during the build.
+type expiringFull struct{ *expiringAuthz }
+
+func (a expiringFull) FullRead(r *http.Request) (bool, error) {
+	a.mu.Lock()
+	a.reads++
+	all := a.full[a.reads-1]
+	a.mu.Unlock()
+	if all {
+		NoteAllow(r, a.clock.Now().Add(time.Minute))
+		a.clock.Step(time.Minute)
+	}
+	return all, nil
+}
+
+func (a *expiringAuthz) counts() (calls, reads int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.calls, a.reads
+}
+
+// builds counts handler runs; its mount writes the run and how many of n refs it may see.
+type builds struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (b *builds) count() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.n
+}
+
+func (b *builds) mount(a Authorizer, n int) ExtMount {
+	return ExtMount{Name: "b", Pattern: "GET /n", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b.mu.Lock()
+		b.n++
+		run := b.n
+		b.mu.Unlock()
+		items := make([]int, n)
+		for i := range items {
+			items[i] = i
+		}
+		vis, _ := Visible(r, a, items, func(i int) objects.Ref { return objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: fmt.Sprint(i)} })
+		WriteJSON(w, map[string]int{"build": run, "visible": len(vis)})
+	})}
+}
+
+// auditLog collects the audit reasons of a server.
+type auditLog struct {
+	mu      sync.Mutex
+	reasons []string
+}
+
+func (l *auditLog) option() HandlerOption {
+	return WithAuthzAudit(func(_ *http.Request, why string) {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.reasons = append(l.reasons, why)
+	})
+}
+
+func (l *auditLog) got() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.reasons)
+}
+
+// expiringServer serves a builds mount over n refs with a, commit reading clk.
+func expiringServer(t *testing.T, a Authorizer, clk *clocktesting.FakeClock, n int, opts ...HandlerOption) (*httptest.Server, *builds, *auditLog) {
+	t.Helper()
+	b, l := &builds{}, &auditLog{}
+	opts = append([]HandlerOption{WithExtMounts(b.mount(a, n)), WithCommitClock(clk.Now), l.option()}, opts...)
+	return secureServer(t, staticModel{}, a, opts...), b, l
+}
+
+// A response whose allows outlive the commit is written after one build.
+func TestCommitValidResponseWritten(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &expiringAuthz{clock: clk}
+	srv, b, l := expiringServer(t, a, clk, 3)
+	if code, _, body := fetchRaw(t, srv, "/api/ext/b/n"); code != http.StatusOK || body != `{"build":1,"visible":3}`+"\n" {
+		t.Errorf("%d %q", code, body)
+	}
+	if b.count() != 1 || l.got() != nil {
+		t.Errorf("%d builds, audit %v", b.count(), l.got())
+	}
+}
+
+// An allow that expires during the build is rebuilt once; the second body is written.
+func TestCommitExpiredRebuilt(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &expiringAuthz{clock: clk, step: func(n int) {
+		if n == 2 {
+			clk.Step(time.Minute)
+		}
+	}}
+	srv, b, l := expiringServer(t, a, clk, 3)
+	if code, _, body := fetchRaw(t, srv, "/api/ext/b/n"); code != http.StatusOK || body != `{"build":2,"visible":3}`+"\n" {
+		t.Errorf("%d %q", code, body)
+	}
+	if calls, _ := a.counts(); b.count() != 2 || calls != 6 || l.got() != nil {
+		t.Errorf("%d builds, %d checks, audit %v", b.count(), calls, l.got())
+	}
+}
+
+// Expiry during both builds answers 503 authz-unavailable, audited as expired.
+func TestCommitExpiredTwice503(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &expiringAuthz{clock: clk, step: func(n int) {
+		if n%3 == 0 {
+			clk.Step(time.Minute)
+		}
+	}}
+	srv, b, l := expiringServer(t, a, clk, 3)
+	wantUnavailable(t, srv, "/api/ext/b/n")
+	if b.count() != 2 || !slices.Equal(l.got(), []string{AuditExpired}) {
+		t.Errorf("%d builds, audit %v", b.count(), l.got())
+	}
+}
+
+// A rebuild keeps the request's check count: 400 checks and 400 more pass the limit.
+func TestCommitRebuildSharesCap(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &expiringAuthz{clock: clk, spend: true, step: func(n int) {
+		if n == 400 {
+			clk.Step(time.Minute)
+		}
+	}}
+	srv, b, l := expiringServer(t, a, clk, 400)
+	wantUnavailable(t, srv, "/api/ext/b/n")
+	if b.count() != 2 || !slices.Equal(l.got(), []string{AuditCheckLimit}) {
+		t.Errorf("%d builds, audit %v", b.count(), l.got())
+	}
+}
+
+// The first build expires and the session ends during the second: the
+// session's 401 is answered, with nothing of either build.
+func TestLogoutDuringRebuild(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	var mu sync.Mutex
+	signedIn, checked := true, 0
+	a := &expiringAuthz{clock: clk, step: func(n int) {
+		switch n {
+		case 3:
+			clk.Step(time.Minute)
+		case 4:
+			mu.Lock()
+			signedIn = false
+			mu.Unlock()
+		}
+	}}
+	check := WithCommitCheck(func(w http.ResponseWriter, _ *http.Request) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		checked++
+		if !signedIn {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"sign-in-required"}`))
+		}
+		return signedIn
+	})
+	srv, b, l := expiringServer(t, a, clk, 3, check)
+	if code, _, body := fetchRaw(t, srv, "/api/ext/b/n"); code != http.StatusUnauthorized || body != `{"error":"sign-in-required"}` {
+		t.Errorf("%d %q", code, body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if b.count() != 2 || checked != 2 || l.got() != nil {
+		t.Errorf("%d builds, %d session checks, audit %v", b.count(), checked, l.got())
+	}
+}
+
+// A full-read "true" that expires during the first build is asked again by
+// the second, whose new answer (false) decides, not the first build's memo.
+func TestExpiredFullReadRebuild(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := expiringFull{&expiringAuthz{clock: clk, full: []bool{true, false}, deny: func(r objects.Ref) bool { return r.Name == "1" }}}
+	srv, b, _ := expiringServer(t, a, clk, 3)
+	if code, _, body := fetchRaw(t, srv, "/api/ext/b/n"); code != http.StatusOK || body != `{"build":2,"visible":2}`+"\n" {
+		t.Errorf("%d %q", code, body)
+	}
+	if calls, reads := a.counts(); b.count() != 2 || reads != 2 || calls != 3 {
+		t.Errorf("%d builds, %d full reads, %d checks", b.count(), reads, calls)
 	}
 }

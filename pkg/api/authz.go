@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
@@ -61,6 +62,37 @@ type authzState struct {
 	fullOnce sync.Once
 	// full is its answer; fullFailed, under mu, marks that it recorded the request's error.
 	full, fullFailed bool
+	// allowExp is the earliest expiry of an allow the request used; zero means none (D-100).
+	allowExp time.Time
+}
+
+// allowExpiry returns the earliest noted allow expiry, or zero.
+func (s *authzState) allowExpiry() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.allowExp
+}
+
+// spent returns the uncached checks counted so far.
+func (s *authzState) spent() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.checks
+}
+
+// NoteAllow records that r's request used an allow valid until expires; the
+// commit wrapper rebuilds a response whose earliest allow expired (D-100).
+// Denials are not noted: a stale denial only hides. It is a no-op outside a committed request.
+func NoteAllow(r *http.Request, expires time.Time) {
+	s := authzStateOf(r)
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.allowExp.IsZero() || expires.Before(s.allowExp) {
+		s.allowExp = expires
+	}
 }
 
 // failed returns the first recorded error, or nil.
@@ -163,7 +195,12 @@ type authzStateKey struct{}
 
 // withAuthzState returns r carrying fresh authorisation bookkeeping, and that bookkeeping.
 func withAuthzState(r *http.Request) (*http.Request, *authzState) {
-	s := &authzState{}
+	return withAuthzStateFrom(r, 0)
+}
+
+// withAuthzStateFrom is withAuthzState with checks already counted, as a rebuild keeps them.
+func withAuthzStateFrom(r *http.Request, checks int) (*http.Request, *authzState) {
+	s := &authzState{checks: checks}
 	return r.WithContext(context.WithValue(r.Context(), authzStateKey{}, s)), s
 }
 

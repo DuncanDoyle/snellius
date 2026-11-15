@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -133,6 +135,28 @@ func TestFullReadFalseWitness(t *testing.T) {
 		t.Fatal("the cached false turned true")
 	}
 	f.expectSARs(t, 2, "past the allow's expiry, before the denial's")
+}
+
+// A full-read "true" is noted with its expiry, fresh and cached; "false" is not noted.
+func TestFullReadNotesTrue(t *testing.T) {
+	for _, all := range []bool{true, false} {
+		f, _ := newFullFixture(3, func(_ oidc.Identity, a Attributes) (bool, error) { return all || a.Resource != "k1", nil })
+		var noted []time.Time
+		f.a.note = func(_ *http.Request, exp time.Time) { noted = append(noted, exp) }
+		f.a.parallel = 1
+		for range 2 {
+			if got := mustFullRead(t, f.a, user("alice")); got != all {
+				t.Fatalf("full read %v, want %v", got, all)
+			}
+		}
+		var want []time.Time
+		if all {
+			want = []time.Time{t0.Add(30 * time.Second), t0.Add(30 * time.Second)}
+		}
+		if !slices.Equal(noted, want) {
+			t.Errorf("all=%v: noted %v, want %v", all, noted, want)
+		}
+	}
 }
 
 // "True" expires at its earliest allowing constituent, a cached one included.

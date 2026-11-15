@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Reasons the commit wrapper passes to the WithAuthzAudit hook.
@@ -13,7 +14,11 @@ const (
 	AuditCheckFailed    = "check-failed"
 	AuditCheckLimit     = "check-limit"
 	AuditFullReadFailed = "full-read-failed"
+	AuditExpired        = "expired"
 )
+
+// commitAttempts is how many times commit builds a response whose allows expired (D-100).
+const commitAttempts = 2
 
 // authzUnavailable is the error body of a request whose authorisation failed (design §6.3).
 const authzUnavailable = "authz-unavailable"
@@ -26,37 +31,60 @@ func WithCommitCheck(check func(w http.ResponseWriter, r *http.Request) bool) Ha
 }
 
 // WithAuthzAudit calls audit once for each secure /api/ request answered 503
-// authz-unavailable, with AuditCheckFailed, AuditCheckLimit or AuditFullReadFailed.
+// authz-unavailable, with AuditCheckFailed, AuditCheckLimit, AuditFullReadFailed or AuditExpired.
 func WithAuthzAudit(audit func(r *http.Request, reason string)) HandlerOption {
 	return func(c *handlerConfig) { c.authzAudit = audit }
 }
 
-// commit is the response-commit protocol of secure mode (design §6.3): every
-// /api/ response is built in a buffer and written only when no authorisation
-// error was recorded and the commit check passes. Other paths pass through.
-// The full read is asked by the view, only when a population needs it (D-100).
-func commit(next http.Handler, check func(http.ResponseWriter, *http.Request) bool, audit func(*http.Request, string)) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/") {
-			next.ServeHTTP(w, r)
+// WithCommitClock sets the clock commit compares allow expiries with; without it, time.Now.
+func WithCommitClock(now func() time.Time) HandlerOption {
+	return func(c *handlerConfig) { c.commitClock = now }
+}
+
+// commit is the response-commit protocol of secure mode (design §6.3, D-100):
+// every /api/ response is built in a buffer, then the session, a recorded
+// authorisation error and the earliest allow expiry are checked, in that order,
+// after every build. A response whose allows expired is built once more from
+// fresh request state, keeping only the check count. Other paths pass through.
+func commit(next http.Handler, check func(http.ResponseWriter, *http.Request) bool, audit func(*http.Request, string), now func() time.Time) http.Handler {
+	if now == nil {
+		now = time.Now
+	}
+	unavailable := func(w http.ResponseWriter, r *http.Request, reason string) {
+		if audit != nil {
+			audit(r, reason)
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeErr(w, http.StatusServiceUnavailable, authzUnavailable)
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, base *http.Request) {
+		if !strings.HasPrefix(base.URL.Path, "/api/") {
+			next.ServeHTTP(w, base)
 			return
 		}
-		r, st := withAuthzState(r)
-		buf := &bufferedResponse{header: http.Header{}}
-		next.ServeHTTP(buf, r)
-		// An ended session answers 401 even when an authorisation error was recorded.
-		if check != nil && !check(w, r) {
-			return
-		}
-		if err := st.failed(); err != nil {
-			if audit != nil {
-				audit(r, auditReason(err, st.fullReadFailed()))
+		checks := 0
+		for attempt := 1; ; attempt++ {
+			r, st := withAuthzStateFrom(base, checks)
+			buf := &bufferedResponse{header: http.Header{}}
+			next.ServeHTTP(buf, r)
+			// An ended session answers 401 even when an authorisation error was recorded.
+			if check != nil && !check(w, r) {
+				return
 			}
-			w.Header().Set("Cache-Control", "no-store")
-			writeErr(w, http.StatusServiceUnavailable, authzUnavailable)
-			return
+			if err := st.failed(); err != nil {
+				unavailable(w, r, auditReason(err, st.fullReadFailed()))
+				return
+			}
+			if exp := st.allowExpiry(); exp.IsZero() || exp.After(now()) {
+				buf.writeTo(w)
+				return
+			}
+			if attempt == commitAttempts {
+				unavailable(w, r, AuditExpired)
+				return
+			}
+			checks = st.spent()
 		}
-		buf.writeTo(w)
 	})
 }
 

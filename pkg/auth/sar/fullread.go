@@ -128,7 +128,8 @@ func (c *fullCache) sweep(now time.Time) {
 
 // FullRead implements api.FullReader: whether the caller may list every
 // served kind cluster-wide. It never returns an expired decision: an expired
-// one is evaluated once more, and ErrExpired follows a second expiry.
+// one is evaluated once more, and ErrExpired follows a second expiry. A "true"
+// is noted with its expiry for the commit wrapper (D-100).
 func (a *Authorizer) FullRead(r *http.Request) (bool, error) {
 	id, ok := a.identityFrom(r.Context())
 	if !ok {
@@ -143,7 +144,7 @@ func (a *Authorizer) FullRead(r *http.Request) (bool, error) {
 			return false, err
 		}
 		if a.clock.Now().Before(d.expires) {
-			return d.allowed, nil
+			return a.allow(r, d, nil)
 		}
 	}
 	return false, ErrExpired

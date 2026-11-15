@@ -387,9 +387,14 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		api.WithCommands(reg.Commands), api.WithInstallCommands(commands), api.WithInstallFeatures(reg.FeaturesFor),
 		api.WithPacks(reg.Packs()...), api.WithInstallKinds(reg.KindAppliesTo), api.WithScopedReader(scoped), api.WithBackendConsumers(consumers)}
 	if o.AuthMode == ModeSecure {
+		// The commit wrapper compares allow expiries on the clock that stamped them.
+		var clk clock.PassiveClock = clock.RealClock{}
+		if o.Clock != nil {
+			clk = o.Clock
+		}
 		// The data gate stays closed in production; only tests set completeSecure.
 		hopts = append(hopts, api.WithSecureMode(o.completeSecure), api.WithCommitCheck(sessions.StillSignedIn),
-			api.WithAuthzAudit(authzAuditor(auditLog)))
+			api.WithAuthzAudit(authzAuditor(auditLog)), api.WithCommitClock(clk.Now))
 	}
 	h := api.NewHandler(eng, o.UI, authz, hopts...)
 	return &App{Engine: eng, oidc: prov, flow: flow, oidcErr: oidcErr, sessions: sessions, sar: sarAuthz, Handler: h, Metrics: metrics, Audit: auditLog, cfg: cfg, cache: ca, kinds: mon, opts: o, authz: authz, discovered: discovered, reg: reg,

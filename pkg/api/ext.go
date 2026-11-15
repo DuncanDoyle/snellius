@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/DuncanDoyle/snellius/pkg/diagnose"
 	"github.com/DuncanDoyle/snellius/pkg/endpoints"
@@ -51,6 +52,8 @@ type handlerConfig struct {
 	// commitCheck and authzAudit are the commit wrapper's hooks (commit.go); nil means none.
 	commitCheck func(http.ResponseWriter, *http.Request) bool
 	authzAudit  func(*http.Request, string)
+	// commitClock is the commit wrapper's clock; nil means time.Now.
+	commitClock func() time.Time
 }
 
 // WithSecureMode marks the handler secure. Until complete is true, every /api/
