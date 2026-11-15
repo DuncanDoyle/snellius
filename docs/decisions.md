@@ -996,7 +996,7 @@ Measured on the reference machine, 5 runs per world:
 **Alternatives:** None of the four in 3.4; all four in 3.4 (a design change to the cache's access model).
 
 ## D-057 — Retained heap over 2.1 raised to 48 MiB; Service and EndpointSlice facts shrunk (2026-11-06, phase 3)
-**Status:** accepted 2026-11-06 (user)
+**Status:** accepted 2026-11-06 (user); budget raised to 64 MiB by D-100 (2026-11-15)
 
 **Context:** The 3.4 bench (`bench/3.4.txt`) measures +41.9 MiB retained heap over 2.1 in the measurement world, against the 40 MiB gate (D-054). Real data grew 4.4 MB (EndpointSlice facts, the snapshot's fact slices and the routes' Service backendRefs). Freed informer stores leave 6–14 MB of fragmentation that varies between runs. The Service and EndpointSlice watches hold about 960 B per object, not the design's 200 B (design §11).
 
