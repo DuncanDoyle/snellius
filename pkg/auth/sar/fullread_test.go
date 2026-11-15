@@ -59,7 +59,8 @@ func clusterList(resource string) Attributes {
 func newFullFixture(n int, decide func(oidc.Identity, Attributes) (bool, error)) (*fixture, *orderedKinds) {
 	kinds := &orderedKinds{kinds: kindsN(n), key: "v1"}
 	f := &fixture{checker: &fakeChecker{decide: decide}, clock: clocktesting.NewFakeClock(t0), reg: obs.NewRegistry()}
-	f.a = New(Options{Checker: f.checker, Kinds: kinds, AllowTTL: 30 * time.Second, Clock: f.clock, Metrics: f.reg, IdentityFrom: identityFrom})
+	f.a = New(Options{Checker: f.checker, Kinds: kinds, AllowTTL: 30 * time.Second, Clock: f.clock, Metrics: f.reg, IdentityFrom: identityFrom,
+		MaxInFlight: unlimited, Rate: unlimited, Burst: unlimited})
 	return f, kinds
 }
 
@@ -122,7 +123,8 @@ func TestFullReadAllowed(t *testing.T) {
 
 // defaultTTL rebuilds f's Authorizer over kinds with the default allow TTL, one kind at a time.
 func defaultTTL(f *fixture, kinds Kinds) {
-	f.a = New(Options{Checker: f.checker, Kinds: kinds, Clock: f.clock, Metrics: f.reg, IdentityFrom: identityFrom})
+	f.a = New(Options{Checker: f.checker, Kinds: kinds, Clock: f.clock, Metrics: f.reg, IdentityFrom: identityFrom,
+		MaxInFlight: unlimited, Rate: unlimited, Burst: unlimited})
 	f.a.parallel = 1
 }
 

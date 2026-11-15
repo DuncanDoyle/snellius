@@ -3,6 +3,7 @@ package sar_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	authzv1 "k8s.io/api/authorization/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 	clocktesting "k8s.io/utils/clock/testing"
@@ -29,6 +31,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/engine"
 	"github.com/DuncanDoyle/snellius/pkg/health"
 	"github.com/DuncanDoyle/snellius/pkg/install"
+	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/scopeverify"
 )
@@ -53,7 +56,12 @@ func (f fixedSnap) Snapshot() *cache.Snapshot { return f.s }
 // world is the model of the small tier and its install's API base.
 func world(t *testing.T) (api.ModelSource, string) {
 	t.Helper()
-	snap := scale.Snapshot(small, 1)
+	return worldOf(t, scale.Snapshot(small, 1))
+}
+
+// worldOf is the model of snap and its install's API base.
+func worldOf(t *testing.T, snap *cache.Snapshot) (api.ModelSource, string) {
+	t.Helper()
 	for _, objs := range snap.Objects {
 		slices.SortFunc(objs, func(x, y *unstructured.Unstructured) int {
 			return strings.Compare(x.GetNamespace()+"/"+x.GetName(), y.GetNamespace()+"/"+y.GetName())
@@ -134,13 +142,17 @@ func serve(t *testing.T, src api.ModelSource, authz api.Authorizer, opts ...api.
 	return srv
 }
 
+// noLimit lifts the global SAR limits: the fake clocks here never refill the rate.
+const noLimit = 1 << 30
+
 func newAuthz(c sar.Checker, clk *clocktesting.FakeClock) *sar.Authorizer {
-	return sar.New(sar.Options{Checker: c, Kinds: servedKinds{}, Clock: clk, IdentityFrom: identityFrom})
+	return sar.New(sar.Options{Checker: c, Kinds: servedKinds{}, Clock: clk, IdentityFrom: identityFrom, MaxInFlight: noLimit, Rate: noLimit, Burst: noLimit})
 }
 
 // scanAuthz is newAuthz with --authz-named-get-scan.
 func scanAuthz(c sar.Checker, clk *clocktesting.FakeClock) *sar.Authorizer {
-	return sar.New(sar.Options{Checker: c, Kinds: servedKinds{}, Clock: clk, IdentityFrom: identityFrom, NamedGetScan: true})
+	return sar.New(sar.Options{Checker: c, Kinds: servedKinds{}, Clock: clk, IdentityFrom: identityFrom, NamedGetScan: true,
+		MaxInFlight: noLimit, Rate: noLimit, Burst: noLimit})
 }
 
 // call returns the status and body of GET path as user.
@@ -593,4 +605,330 @@ func TestRevokedDuringSlowRequest(t *testing.T) {
 	if n != 2 {
 		t.Errorf("the list in %s was sent %d times, want again on the rebuild", ns0.Namespace, n)
 	}
+}
+
+// serialOnly is an Authorizer without ResolveLists: every member is decided on its own.
+type serialOnly struct{ a *sar.Authorizer }
+
+func (s serialOnly) Authorize(r *http.Request, ref objects.Ref) bool { return s.a.Authorize(r, ref) }
+func (s serialOnly) AuthorizeErr(r *http.Request, ref objects.Ref) (bool, error) {
+	return s.a.AuthorizeErr(r, ref)
+}
+func (s serialOnly) AuthorizeNamedErr(r *http.Request, ref objects.Ref) (bool, error) {
+	return s.a.AuthorizeNamedErr(r, ref)
+}
+func (s serialOnly) CanList(r *http.Request, gk objects.GroupKind, ns string) (bool, error) {
+	return s.a.CanList(r, gk, ns)
+}
+func (s serialOnly) FullRead(r *http.Request) (bool, error) { return s.a.FullRead(r) }
+
+// wide is a tier with a Gateway and Backend per namespace, for viewers allowed ten of twelve.
+var wide = func() scale.Tier {
+	t := small
+	t.Name, t.Gateways, t.HTTPRoutes, t.Namespaces, t.Backends = "wide", 12, 72, 12, 12
+	return t
+}()
+
+// inNamespaces allows every list and get in the first n scale namespaces.
+func inNamespaces(n int) func(string, sar.Attributes, int) (bool, error) {
+	return func(_ string, a sar.Attributes, _ int) (bool, error) {
+		for i := range n {
+			if a.Namespace == testutil.ScaleNamespace(i) {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+}
+
+// objectsOf returns the kind objects of snap.
+func objectsOf(snap *cache.Snapshot, kind string) []*unstructured.Unstructured {
+	for _, objs := range snap.Objects {
+		if len(objs) > 0 && objs[0].GetKind() == kind {
+			return objs
+		}
+	}
+	return nil
+}
+
+// renamed is u named name, with a UID of its own.
+func renamed(u *unstructured.Unstructured, ns, name string) *unstructured.Unstructured {
+	u.SetNamespace(ns)
+	u.SetName(name)
+	u.SetUID(types.UID(u.GetKind() + "/" + ns + "/" + name))
+	return u
+}
+
+// addTo adds u to snap under the kind it shares with an existing object.
+func addTo(t *testing.T, snap *cache.Snapshot, u *unstructured.Unstructured) {
+	t.Helper()
+	for gvr, objs := range snap.Objects {
+		if len(objs) > 0 && objs[0].GetKind() == u.GetKind() {
+			snap.Objects[gvr] = append(objs, u)
+			return
+		}
+	}
+	t.Fatalf("no %s in the snapshot", u.GetKind())
+}
+
+// removeFrom drops kind ns/name from snap.
+func removeFrom(t *testing.T, snap *cache.Snapshot, kind, ns, name string) {
+	t.Helper()
+	for gvr, objs := range snap.Objects {
+		if i := slices.IndexFunc(objs, func(u *unstructured.Unstructured) bool {
+			return u.GetKind() == kind && u.GetNamespace() == ns && u.GetName() == name
+		}); i >= 0 {
+			snap.Objects[gvr] = slices.Delete(objs, i, i+1)
+			return
+		}
+	}
+	t.Fatalf("no %s %s/%s", kind, ns, name)
+}
+
+// firstIn returns a copy of the first kind object in ns.
+func firstIn(t *testing.T, snap *cache.Snapshot, kind, ns string) *unstructured.Unstructured {
+	t.Helper()
+	for _, objs := range snap.Objects {
+		for _, u := range objs {
+			if u.GetKind() == kind && u.GetNamespace() == ns {
+				return u.DeepCopy()
+			}
+		}
+	}
+	t.Fatalf("no %s in %s", kind, ns)
+	return nil
+}
+
+// hiddenRoute is a copy of an HTTPRoute of ns renamed name, in namespace at,
+// on Gateway gw of ns and sending to Backend be of beNS.
+func hiddenRoute(t *testing.T, snap *cache.Snapshot, ns, at, name, gw, beNS, be string) *unstructured.Unstructured {
+	t.Helper()
+	u := renamed(firstIn(t, snap, "HTTPRoute", ns), at, name)
+	u.Object["spec"] = map[string]any{
+		"parentRefs": []any{map[string]any{"name": gw, "namespace": ns}},
+		"rules":      []any{map[string]any{"backendRefs": []any{map[string]any{"group": kinds.KgatewayGroup, "kind": "Backend", "name": be, "namespace": beNS}}}},
+	}
+	delete(u.Object, "status")
+	return u
+}
+
+// bodies returns the body of each path for user; each must answer 200.
+func bodies(t *testing.T, srv *httptest.Server, user, base string, paths []string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, p := range paths {
+		code, b := call(t, srv, user, base+p)
+		if code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", p, code, b)
+		}
+		out[p] = string(b)
+	}
+	return out
+}
+
+// masked is b without deniedInInstall, which a hidden create or delete changes until 7.4.
+func masked(t *testing.T, b string) string {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(b), &m); err != nil {
+		return b
+	}
+	delete(m, "deniedInInstall")
+	out, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+var listPages = []string{"/routes?limit=200", "/gateways?limit=200", "/backends?limit=200", "/paths?limit=200"}
+
+func TestPrefetchMatchesSerial(t *testing.T) {
+	src, base := world(t)
+	snap := scale.Snapshot(small, 1)
+	var named []string
+	for _, u := range objectsOf(snap, "HTTPRoute") {
+		if u.GetNamespace() == testutil.ScaleNamespace(1) && len(named) < 3 {
+			named = append(named, u.GetName())
+		}
+	}
+	grants := map[string]func(string, sar.Attributes, int) (bool, error){
+		"routes in one namespace": func(_ string, a sar.Attributes, _ int) (bool, error) {
+			return isRoutes(a) && a.Namespace == testutil.ScaleNamespace(0), nil
+		},
+		"two namespaces": inNamespaces(2),
+		"named gets and backends": func(_ string, a sar.Attributes, _ int) (bool, error) {
+			return a.Verb == "get" && isRoutes(a) && a.Namespace == testutil.ScaleNamespace(1) && slices.Contains(named, a.Name) ||
+				a.Verb == "list" && a.Resource == "backends", nil
+		},
+	}
+	for name, decide := range grants {
+		for _, scan := range []bool{false, true} {
+			mk := newAuthz
+			if scan {
+				mk = scanAuthz
+			}
+			pre := serve(t, src, mk(&checker{decide: decide}, clocktesting.NewFakeClock(t0)))
+			ser := serve(t, src, serialOnly{mk(&checker{decide: decide}, clocktesting.NewFakeClock(t0))})
+			for _, p := range []string{"/routes?limit=200", "/backends?limit=200", "/paths?limit=200"} {
+				pc, pb := call(t, pre, "v", base+p)
+				sc, sb := call(t, ser, "v", base+p)
+				if pc != http.StatusOK || pc != sc || string(pb) != string(sb) {
+					t.Errorf("%s, scan %v, %s: prefetched %d, serial %d; bodies equal %v", name, scan, p, pc, sc, string(pb) == string(sb))
+				}
+				// The scan shows a route granted by name only; without it the list denial is final.
+				if shown := strings.Contains(string(pb), `"name":"`+named[0]+`"`); p == "/routes?limit=200" && name == "named gets and backends" && shown != scan {
+					t.Errorf("scan %v: named route shown %v", scan, shown)
+				}
+			}
+		}
+	}
+}
+
+func TestHiddenCreateDeleteUnchanged(t *testing.T) {
+	denied := testutil.ScaleNamespace(11)
+	base0 := scale.Snapshot(wide, 1)
+	created := scale.Snapshot(wide, 1)
+	addTo(t, created, renamed(firstIn(t, created, "Gateway", denied), denied, "hidden-gw"))
+	addTo(t, created, renamed(firstIn(t, created, "Backend", denied), denied, "hidden-be"))
+	addTo(t, created, hiddenRoute(t, created, denied, denied, "hidden", "hidden-gw", denied, "hidden-be"))
+	deleted := scale.Snapshot(wide, 1)
+	removeFrom(t, deleted, "Backend", denied, firstIn(t, deleted, "Backend", denied).GetName())
+
+	var want map[string]string
+	for i, snap := range []*cache.Snapshot{base0, created, deleted} {
+		src, base := worldOf(t, snap)
+		srv := serve(t, src, newAuthz(&checker{decide: inNamespaces(10)}, clocktesting.NewFakeClock(t0)))
+		got := bodies(t, srv, "v", base, listPages)
+		if i == 0 {
+			want = got
+			continue
+		}
+		if i == 1 && got[listPages[0]] == want[listPages[0]] {
+			t.Error("the created route did not change deniedInInstall: it is not in the install")
+		}
+		for _, p := range listPages {
+			if masked(t, got[p]) != masked(t, want[p]) {
+				t.Errorf("world %d, %s changed:\n got %.300s\nwant %.300s", i, p, got[p], want[p])
+			}
+		}
+	}
+}
+
+// coldSARs is the SARs one request for path sends as user on a fresh
+// Authorizer over src, after its full read; and the response.
+func coldSARs(t *testing.T, src api.ModelSource, base, path string, decide func(string, sar.Attributes, int) (bool, error)) ([]sar.Attributes, int, string) {
+	t.Helper()
+	c := &checker{decide: decide}
+	a := newAuthz(c, clocktesting.NewFakeClock(t0))
+	r, cancel := asUser("v")
+	defer cancel()
+	if _, err := a.FullRead(r); err != nil {
+		t.Fatal(err)
+	}
+	n := len(c.recorded())
+	code, b := call(t, serve(t, src, a), "v", base+path)
+	return c.recorded()[n:], code, string(b)
+}
+
+func TestHiddenRootAddsNoBucket(t *testing.T) {
+	team := func(_ string, a sar.Attributes, _ int) (bool, error) {
+		return isRoutes(a) && a.Namespace == testutil.ScaleNamespace(0), nil
+	}
+	fresh := func(a sar.Attributes) bool { return a.Namespace == "fresh" }
+	failFresh := func(u string, a sar.Attributes, n int) (bool, error) {
+		if fresh(a) {
+			return false, sar.ErrCheck
+		}
+		return team(u, a, n)
+	}
+	hidden := func(snap *cache.Snapshot, at string) {
+		ns := testutil.ScaleNamespace(3)
+		addTo(t, snap, hiddenRoute(t, snap, ns, at, "hidden", firstIn(t, snap, "Gateway", ns).GetName(), "fresh", "be"))
+	}
+	for _, path := range []string{"/routes?limit=200", "/paths?limit=200"} {
+		src0, base := worldOf(t, scale.Snapshot(small, 1))
+		sars0, code, want := coldSARs(t, src0, base, path, team)
+		if code != http.StatusOK || len(sars0) >= 400 {
+			t.Fatalf("%s base: %d, %d SARs", path, code, len(sars0))
+		}
+		t.Logf("%s: %d SARs cold", path, len(sars0))
+		withHidden := scale.Snapshot(small, 1)
+		hidden(withHidden, testutil.ScaleNamespace(3))
+		src1, _ := worldOf(t, withHidden)
+		for _, decide := range []func(string, sar.Attributes, int) (bool, error){team, failFresh} {
+			sars, code, got := coldSARs(t, src1, base, path, decide)
+			if code != http.StatusOK || slices.ContainsFunc(sars, fresh) || len(sars) != len(sars0) || masked(t, got) != masked(t, want) {
+				t.Errorf("%s with the hidden route: %d, %d SARs (base %d), fresh asked %v\n%v\n%v", path, code, len(sars), len(sars0), slices.ContainsFunc(sars, fresh), sars, sars0)
+			}
+		}
+		// Padding: hidden routes in new namespaces bring the request to the 500-check cap.
+		padded := func(withRoute bool) *cache.Snapshot {
+			snap := scale.Snapshot(small, 1)
+			ns := testutil.ScaleNamespace(3)
+			gw := firstIn(t, snap, "Gateway", ns).GetName()
+			for i := range 500 - len(sars0) {
+				pad := fmt.Sprintf("pad-%03d", i)
+				addTo(t, snap, hiddenRoute(t, snap, ns, pad, "p", gw, pad, "be"))
+			}
+			if withRoute {
+				hidden(snap, "pad-000")
+			}
+			return snap
+		}
+		for _, withRoute := range []bool{false, true} {
+			src, _ := worldOf(t, padded(withRoute))
+			sars, code, _ := coldSARs(t, src, base, path, team)
+			if code != http.StatusOK || len(sars) != 500 || slices.ContainsFunc(sars, fresh) {
+				t.Errorf("%s at the cap, hidden route %v: %d, %d SARs", path, withRoute, code, len(sars))
+			}
+		}
+	}
+}
+
+func TestParallelErrorDiscardsResponse(t *testing.T) {
+	many := small
+	many.Name, many.Namespaces, many.HTTPRoutes, many.Gateways, many.Backends = "many", 300, 600, 300, 300
+	src, base := worldOf(t, scale.Snapshot(many, 1))
+	sars, code, _ := coldSARs(t, src, base, "/routes?limit=200", inNamespaces(10))
+	if code != http.StatusOK || len(sars) < 300 || len(sars) >= 500 {
+		t.Fatalf("clean run: %d, %d SARs; want 200 and 300 to 499", code, len(sars))
+	}
+	var mu sync.Mutex
+	n := 0
+	allow := inNamespaces(10)
+	_, code, body := coldSARs(t, src, base, "/routes?limit=200", func(u string, a sar.Attributes, k int) (bool, error) {
+		mu.Lock()
+		n++
+		fail := n == 150
+		mu.Unlock()
+		if fail {
+			return false, sar.ErrCheck
+		}
+		return allow(u, a, k)
+	})
+	if code != http.StatusServiceUnavailable || body != `{"error":"authz-unavailable"}`+"\n" {
+		t.Fatalf("one of %d checks failed: %d %.200s", len(sars), code, body)
+	}
+}
+
+// Concurrent requests over the prefetch path, under -race: each view stays on
+// its handler's goroutine and every body equals the serial one.
+func TestViewSingleGoroutine(t *testing.T) {
+	src, base := worldOf(t, scale.Snapshot(wide, 1))
+	decide := inNamespaces(10)
+	want := bodies(t, serve(t, src, serialOnly{newAuthz(&checker{decide: decide}, clocktesting.NewFakeClock(t0))}), "v", base, listPages)
+	srv := serve(t, src, newAuthz(&checker{decide: decide}, clocktesting.NewFakeClock(t0)))
+	var wg sync.WaitGroup
+	for range 4 {
+		for _, p := range listPages {
+			wg.Go(func() {
+				code, b := call(t, srv, "v", base+p)
+				if code != http.StatusOK || string(b) != want[p] {
+					t.Errorf("%s: %d, equal %v", p, code, string(b) == want[p])
+				}
+			})
+		}
+	}
+	wg.Wait()
 }

@@ -64,6 +64,9 @@ type Options struct {
 	AuthzCacheTTL time.Duration
 	// AuthzNamedGetScan adds a named get to secure-mode list checks the list denies (D-100).
 	AuthzNamedGetScan bool
+	// AuthzMaxInFlight, AuthzRate and AuthzBurst bound the secure-mode SARs
+	// across viewers: at once, per second, and at once above the rate (D-100). Zero means the sar default.
+	AuthzMaxInFlight, AuthzRate, AuthzBurst int
 	// TrustedProxyCIDRs are the peers whose X-Request-Id and X-Forwarded-For are trusted.
 	TrustedProxyCIDRs []netip.Prefix
 	// AllowedHosts are extra Host names local mode serves, besides loopback.
@@ -344,7 +347,8 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 			clk = o.Clock
 		}
 		sarAuthz = sar.New(sar.Options{Checker: sar.NewKubeChecker(c.Kube), Kinds: newSARKinds(cfg.Served, mon.Catalog),
-			AllowTTL: o.AuthzCacheTTL, Clock: clk, Metrics: metrics, NamedGetScan: o.AuthzNamedGetScan})
+			AllowTTL: o.AuthzCacheTTL, Clock: clk, Metrics: metrics, NamedGetScan: o.AuthzNamedGetScan,
+			MaxInFlight: o.AuthzMaxInFlight, Rate: o.AuthzRate, Burst: o.AuthzBurst})
 		authz = sarAuthz
 	}
 	deps := extension.Deps{Current: eng.Current, Authorizer: authz, Capabilities: reg.CapabilityStates, Logger: slog.Default()}

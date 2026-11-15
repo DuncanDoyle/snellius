@@ -106,7 +106,8 @@ type fixture struct {
 
 func newFixture(decide func(oidc.Identity, Attributes) (bool, error)) *fixture {
 	f := &fixture{checker: &fakeChecker{decide: decide}, clock: clocktesting.NewFakeClock(t0), reg: obs.NewRegistry()}
-	f.a = New(Options{Checker: f.checker, Kinds: testKinds, AllowTTL: 30 * time.Second, Clock: f.clock, Metrics: f.reg, IdentityFrom: identityFrom})
+	f.a = New(Options{Checker: f.checker, Kinds: testKinds, AllowTTL: 30 * time.Second, Clock: f.clock, Metrics: f.reg, IdentityFrom: identityFrom,
+		MaxInFlight: unlimited, Rate: unlimited, Burst: unlimited})
 	return f
 }
 

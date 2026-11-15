@@ -243,7 +243,7 @@ func TestAllowAndDenyTTL(t *testing.T) {
 		f.clock.Step(5 * time.Second) // each SAR takes 5 s
 		return a.Namespace == "shop", nil
 	})
-	f.a = New(Options{Checker: f.checker, Kinds: testKinds, Clock: f.clock, Metrics: obs.NewRegistry(), IdentityFrom: identityFrom})
+	f.a = New(Options{Checker: f.checker, Kinds: testKinds, Clock: f.clock, Metrics: obs.NewRegistry(), IdentityFrom: identityFrom, MaxInFlight: unlimited, Rate: unlimited, Burst: unlimited})
 	if d := f.checkAt(t, user("alice"), listAt("shop")); !d.allowed || !d.expires.Equal(t0.Add(DefaultAllowTTL)) {
 		t.Fatalf("allow %+v, want expiry at start + 60 s", d)
 	}
@@ -427,7 +427,7 @@ func TestFlightBound(t *testing.T) {
 		started <- struct{}{}
 		<-release
 		return true, nil
-	}), Kinds: testKinds, Clock: f.clock, Metrics: f.reg, IdentityFrom: identityFrom})
+	}), Kinds: testKinds, Clock: f.clock, Metrics: f.reg, IdentityFrom: identityFrom, MaxInFlight: unlimited, Rate: unlimited, Burst: unlimited})
 	f.a.cache.joined = func() { joined <- struct{}{} }
 	alice := user("alice")
 	check := func(i int) error {
@@ -588,7 +588,7 @@ func TestFlightBoundedByTTL(t *testing.T) {
 	block := true
 	// A tiny TTL: the flight deadline is wall time; the checker waits for it only once the waiter joined.
 	f := newFixture(nil)
-	f.a = New(Options{Checker: blockingCtx(started, gate, &block), Kinds: testKinds, AllowTTL: 20 * time.Millisecond, Clock: f.clock, Metrics: obs.NewRegistry(), IdentityFrom: identityFrom})
+	f.a = New(Options{Checker: blockingCtx(started, gate, &block), Kinds: testKinds, AllowTTL: 20 * time.Millisecond, Clock: f.clock, Metrics: obs.NewRegistry(), IdentityFrom: identityFrom, MaxInFlight: unlimited, Rate: unlimited, Burst: unlimited})
 	f.a.cache.joined = func() { joined <- struct{}{} }
 	errs := make(chan error, 2)
 	authorize := func() {
@@ -685,7 +685,7 @@ func newHeapAuthorizer(kinds int) (*Authorizer, *clocktesting.FakeClock) {
 	clk := clocktesting.NewFakeClock(t0)
 	allow := checkerFunc(func(context.Context, oidc.Identity, Attributes) (bool, error) { return true, nil })
 	return New(Options{Checker: allow, Kinds: &orderedKinds{kinds: kindsN(kinds), key: "v1"}, Clock: clk,
-		Metrics: obs.NewRegistry(), IdentityFrom: identityFrom}), clk
+		Metrics: obs.NewRegistry(), IdentityFrom: identityFrom, MaxInFlight: unlimited, Rate: unlimited, Burst: unlimited}), clk
 }
 
 func TestAccountedBytesMatchHeap(t *testing.T) {

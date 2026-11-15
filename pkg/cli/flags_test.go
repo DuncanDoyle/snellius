@@ -115,3 +115,20 @@ func TestNamedGetScanFlag(t *testing.T) {
 		t.Fatalf("--authz-named-get-scan: %v, %v", o.AuthzNamedGetScan, err)
 	}
 }
+
+// The global SAR limits default to 32 at once, 100 per second and a burst of 32 (D-100); each is at least 1.
+func TestAuthzLimitFlags(t *testing.T) {
+	_, o, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), nil)
+	if err != nil || o.AuthzMaxInFlight != 32 || o.AuthzRate != 100 || o.AuthzBurst != 32 {
+		t.Fatalf("defaults %d, %d, %d, %v", o.AuthzMaxInFlight, o.AuthzRate, o.AuthzBurst, err)
+	}
+	_, o, err = Parse(flag.NewFlagSet("t", flag.ContinueOnError), []string{"--authz-max-in-flight=8", "--authz-rate=1", "--authz-burst=200"})
+	if err != nil || o.AuthzMaxInFlight != 8 || o.AuthzRate != 1 || o.AuthzBurst != 200 {
+		t.Fatalf("parsed %d, %d, %d, %v", o.AuthzMaxInFlight, o.AuthzRate, o.AuthzBurst, err)
+	}
+	for _, bad := range []string{"--authz-max-in-flight=0", "--authz-rate=0", "--authz-burst=-1"} {
+		if _, _, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), []string{bad}); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+}

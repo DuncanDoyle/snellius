@@ -110,7 +110,8 @@ func canView(r objects.Ref) bool {
 }
 
 func newAuthz(c *fakeChecker, clk *clocktesting.FakeClock) *sar.Authorizer {
-	return sar.New(sar.Options{Checker: c, Kinds: benchKinds{}, Clock: clk, IdentityFrom: identityFrom})
+	// The fake clock never refills the global rate, so the limits are lifted.
+	return sar.New(sar.Options{Checker: c, Kinds: benchKinds{}, Clock: clk, IdentityFrom: identityFrom, MaxInFlight: 1 << 30, Rate: 1 << 30, Burst: 1 << 30})
 }
 
 var t0 = time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)

@@ -71,16 +71,57 @@ func (h *handler) routes(w http.ResponseWriter, r *http.Request) {
 	}
 	ls.v.borrow()
 	defer ls.v.release()
+	ls.v.prefetch(func(add func(objects.Ref)) {
+		for i := range ls.ix.Routes {
+			add(ls.ix.Routes[i].Ref)
+		}
+	})
 	pg, err := ls.ix.QueryRoutes(ls.q, ls.v.visible())
 	if err != nil {
 		fail(w, err)
 		return
 	}
+	ls.prefetchRouteRows(pg.IDs)
 	items := make([]RouteRow, 0, len(pg.IDs))
 	for _, id := range pg.IDs {
 		items = append(items, ls.routeRow(id))
 	}
 	writeJSON(w, page(ls, pg, items, ls.v.deniedInInstall(len(ls.ix.Routes), ls.routeRef)))
+}
+
+// prefetchRouteRows resolves the buckets the page's route rows read: their
+// parents, reported edges, problem backend and facts.
+func (ls *list) prefetchRouteRows(ids []explore.RowID) {
+	ix := ls.ix
+	ls.v.prefetch(func(add func(objects.Ref)) {
+		depSets := func(ds ...explore.DepSet) {
+			for _, d := range ds {
+				for _, k := range d {
+					add(ix.Ref(k))
+				}
+			}
+		}
+		for _, id := range ids {
+			r := &ix.Routes[id]
+			for _, p := range r.Parents {
+				add(p.Target)
+				if p.Via != nil {
+					add(*p.Via)
+				}
+			}
+			for _, p := range r.ParentRoutes {
+				add(p)
+			}
+			if r.Backend != nil {
+				add(*r.Backend)
+			}
+			for j := range r.Computed {
+				depSets(r.Computed[j].Deps)
+			}
+			depSets(r.UnknownDeps...)
+			depSets(r.DroppedDeps...)
+		}
+	})
 }
 
 // routeRow is route row id on the wire.
@@ -181,11 +222,17 @@ func (h *handler) gateways(w http.ResponseWriter, r *http.Request) {
 	if ls == nil {
 		return
 	}
+	ls.v.prefetch(func(add func(objects.Ref)) {
+		for i := range ls.ix.Gateways {
+			add(ls.ix.Gateways[i].Ref)
+		}
+	})
 	pg, err := ls.ix.QueryGateways(ls.q, ls.v.visible())
 	if err != nil {
 		fail(w, err)
 		return
 	}
+	ls.prefetchGatewayRows(pg.IDs)
 	items := make([]GatewayListRow, 0, len(pg.IDs))
 	for _, id := range pg.IDs {
 		g := &ls.ix.Gateways[id]
@@ -201,6 +248,26 @@ func (h *handler) gateways(w http.ResponseWriter, r *http.Request) {
 		items = append(items, row)
 	}
 	writeJSON(w, page(ls, pg, items, ls.v.deniedInInstall(len(ls.ix.Gateways), ls.gwRef)))
+}
+
+// prefetchGatewayRows resolves the buckets the page's Gateway rows read:
+// their ListenerSets and not-accepted routes with those routes' parents.
+func (ls *list) prefetchGatewayRows(ids []explore.RowID) {
+	ix := ls.ix
+	ls.v.prefetch(func(add func(objects.Ref)) {
+		for _, id := range ids {
+			g := &ix.Gateways[id]
+			for _, id := range g.ListenerSets {
+				add(ix.ListenerSets[id].Ref)
+			}
+			for _, id := range g.NotAccepted {
+				add(ix.Routes[id].Ref)
+				for _, p := range ix.Routes[id].Parents {
+					add(p.Target)
+				}
+			}
+		}
+	})
 }
 
 // notAccepted counts g's not-accepted routes the caller may view, through
@@ -223,11 +290,21 @@ func (h *handler) listenerSets(w http.ResponseWriter, r *http.Request) {
 	if ls == nil {
 		return
 	}
+	ls.v.prefetch(func(add func(objects.Ref)) {
+		for i := range ls.ix.ListenerSets {
+			add(ls.ix.ListenerSets[i].Ref)
+		}
+	})
 	pg, err := ls.ix.QueryListenerSets(ls.q, ls.v.visible())
 	if err != nil {
 		fail(w, err)
 		return
 	}
+	ls.v.prefetch(func(add func(objects.Ref)) {
+		for _, id := range pg.IDs {
+			add(ls.ix.ListenerSets[id].Parent)
+		}
+	})
 	items := make([]ListenerSetRow, 0, len(pg.IDs))
 	for _, id := range pg.IDs {
 		s := &ls.ix.ListenerSets[id]

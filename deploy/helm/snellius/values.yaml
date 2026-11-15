@@ -67,6 +67,11 @@ auth:
     # Also show in lists, counts and facets the objects a viewer may only get by name
     # (resourceNames grants). Off by default: it costs one check per hidden object.
     namedGetScan: false
+    # Permission checks sent to the API server across all viewers: at most maxInFlight at
+    # once and rate per second, with burst above the rate. Empty uses 32, 100 and 32.
+    maxInFlight: ""
+    rate: ""
+    burst: ""
   # CIDRs of proxies whose X-Request-Id and X-Forwarded-For Snellius trusts (secure mode).
   trustedProxyCIDRs: []
 # Pod hostAliases, for an IdP name that is not in DNS. Passed through unchanged.

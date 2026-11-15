@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"slices"
 	"strconv"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -60,12 +61,65 @@ func (h *handler) pathList(w http.ResponseWriter, r *http.Request) {
 	}
 	t, proj, kept := h.pathModel(p, i)
 	v := h.view(r)
+	prefetchPaths(v, i.Index, t)
 	resp, err := pathsPage(h.linker(v, p, i, t, proj), p, i, v, t, proj, kept, q)
 	if err != nil {
 		fail(w, err)
 		return
 	}
 	writeJSON(w, resp)
+}
+
+// prefetchPaths resolves the buckets of the install's routes, the roots,
+// then the dependencies of the rows no denied root hides.
+func prefetchPaths(v *view, ix *explore.Index, t *paths.Topology) {
+	if ix != nil {
+		v.prefetch(func(add func(objects.Ref)) {
+			for i := range ix.Routes {
+				add(ix.Routes[i].Ref)
+			}
+		})
+	}
+	prefetchRows(v, t, nil)
+}
+
+// prefetchRows resolves the dependencies of t's rows that want picks (all
+// when nil) in rounds, in the order allowTable asks them: each round asks every
+// undecided row's next unresolved bucket, and a row with a denied bucket is
+// decided. So no row asks a bucket its own check would not.
+func prefetchRows(v *view, t *paths.Topology, want func(paths.Row) bool) {
+	if !v.batching() {
+		return
+	}
+	// Rows share dependency sets; each distinct set is resolved once.
+	seen := map[*int32]bool{}
+	var sets []explore.DepSet
+	for _, r := range t.Rows {
+		if d := t.Deps(r); len(d) > 0 && !seen[&d[0]] && (want == nil || want(r)) {
+			seen[&d[0]] = true
+			sets = append(sets, d)
+		}
+	}
+	denied := func(k int32) bool { return v.denied(t.Refs[k]) }
+	unknown := func(k int32) bool {
+		_, ok := v.lists[listQueryOf(t.Refs[k])]
+		return !ok
+	}
+	for len(sets) > 0 && v.batching() {
+		next := sets[:0]
+		v.prefetch(func(add func(objects.Ref)) {
+			for _, d := range sets {
+				if slices.ContainsFunc(d, denied) {
+					continue
+				}
+				if i := slices.IndexFunc(d, unknown); i >= 0 {
+					add(t.Refs[d[i]])
+					next = append(next, d)
+				}
+			}
+		})
+		sets = next
+	}
 }
 
 // pathModel is install i's topology from the path memo and its projection

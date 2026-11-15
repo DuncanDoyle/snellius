@@ -140,6 +140,12 @@ func NewMembership(t *Topology, in BackendsInput) *Membership {
 	return m
 }
 
+// InScope is the in-scope Backends, sorted; the caller must not change it.
+func (m *Membership) InScope() []objects.Ref { return m.inScope }
+
+// Target is row r's backendRef or mirror target; false when it has none.
+func (t *Topology) Target(r Row) (objects.Ref, bool) { return t.target(r) }
+
 func (m *Membership) targetOf(t *Topology, k int32) objects.Ref {
 	ref, _ := t.target(t.Rows[k])
 	return ref

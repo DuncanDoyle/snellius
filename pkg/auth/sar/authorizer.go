@@ -3,6 +3,7 @@
 package sar
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
@@ -47,6 +48,9 @@ type Options struct {
 	NamedGetScan bool
 	// MaxBytes bounds the permission cache, decisions and full reads together; zero means DefaultMaxBytes.
 	MaxBytes int64
+	// MaxInFlight, Rate and Burst bound the SARs sent across requests: at once,
+	// per second, and at once above the rate (D-100). Zero means the Default value.
+	MaxInFlight, Rate, Burst int
 }
 
 // Decision lifetimes from the start of the SAR (design §6.2, D-100).
@@ -89,6 +93,8 @@ var (
 	_ api.NamedAuthorizer = (*Authorizer)(nil)
 	_ api.ListAuthorizer  = (*Authorizer)(nil)
 	_ api.FullReader      = (*Authorizer)(nil)
+	_ api.BatchAuthorizer = (*Authorizer)(nil)
+	_ api.ListScanner     = (*Authorizer)(nil)
 )
 
 // New returns an Authorizer; call Run to sweep its cache.
@@ -105,7 +111,11 @@ func New(o Options) *Authorizer {
 	if o.MaxBytes == 0 {
 		o.MaxBytes = DefaultMaxBytes
 	}
-	c := newCache(o.Checker, o.Clock, o.AllowTTL, o.MaxBytes, newMetrics(o.Metrics))
+	o.MaxInFlight = cmp.Or(o.MaxInFlight, DefaultMaxInFlight)
+	o.Rate = cmp.Or(o.Rate, DefaultRate)
+	o.Burst = cmp.Or(o.Burst, DefaultBurst)
+	lim := newLimiter(o.Clock, o.MaxInFlight, o.Rate, o.Burst)
+	c := newCache(o.Checker, lim, o.Clock, o.AllowTTL, o.MaxBytes, newMetrics(o.Metrics))
 	return &Authorizer{
 		kinds:        o.Kinds,
 		namedGetScan: o.NamedGetScan,
@@ -160,19 +170,11 @@ func (a *Authorizer) authorize(r *http.Request, ref objects.Ref, named bool) (bo
 	if !ok {
 		return false, ErrNoIdentity
 	}
-	k, ok := a.kinds.Lookup(ref.Group, ref.Kind)
+	list, ok := a.listAttrs(ref.Group, ref.Kind, ref.Namespace)
 	if !ok {
 		return false, nil
 	}
-	ns := ""
-	if k.Namespaced {
-		if ref.Namespace == "" {
-			return false, nil
-		}
-		ns = ref.Namespace
-	}
 	h := hashIdentity(id)
-	list := Attributes{Verb: "list", Group: k.Group, Resource: k.Resource, Namespace: ns}
 	d, err := a.check(r, id, h, list)
 	if err != nil || d.allowed || !named {
 		return a.allow(r, d, err)
@@ -181,6 +183,24 @@ func (a *Authorizer) authorize(r *http.Request, ref objects.Ref, named bool) (bo
 	get.Verb, get.Name = "get", ref.Name
 	d, err = a.check(r, id, h, get)
 	return a.allow(r, d, err)
+}
+
+// listAttrs is the population list check of a group, kind and namespace:
+// cluster-wide for a cluster-scoped kind. False for an unmapped kind or a
+// namespaced kind without a namespace, which are denied without a SAR.
+func (a *Authorizer) listAttrs(group, kind, namespace string) (Attributes, bool) {
+	k, ok := a.kinds.Lookup(group, kind)
+	if !ok {
+		return Attributes{}, false
+	}
+	ns := ""
+	if k.Namespaced {
+		if namespace == "" {
+			return Attributes{}, false
+		}
+		ns = namespace
+	}
+	return Attributes{Verb: "list", Group: k.Group, Resource: k.Resource, Namespace: ns}, true
 }
 
 // Authorize implements api.Authorizer with population semantics: an error is

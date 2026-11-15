@@ -34,6 +34,10 @@ type view struct {
 	// table and tableDeps are allowTable's topology and its memo, as deps.
 	table     *paths.Topology
 	tableDeps []int8
+	// lists are the list answers prefetchLists resolved for this request (D-100 item 6).
+	lists map[ListQuery]bool
+	// listFinal is set when a list denial is a member's final answer: no named-get scan.
+	listFinal bool
 }
 
 // view returns the view of the caller of r. Under a full read, asked the
@@ -43,8 +47,86 @@ func (h *handler) view(r *http.Request) *view {
 	if !v.all {
 		v.lazy = true
 		v.seen, v.seenNamed = map[objects.Ref]bool{}, map[objects.Ref]bool{}
+		if _, ok := h.authz.(BatchAuthorizer); ok {
+			v.lists = map[ListQuery]bool{}
+			ls, ok := h.authz.(ListScanner)
+			v.listFinal = ok && !ls.NamedGetScan()
+		}
 	}
 	return v
+}
+
+// listQueryOf is the list question that admits ref as a population member.
+func listQueryOf(ref objects.Ref) ListQuery {
+	return ListQuery{Kind: objects.GroupKind{Group: ref.Group, Kind: ref.Kind}, Namespace: ref.Namespace}
+}
+
+// prefetchLists resolves the questions of qs not yet in v's table, in
+// parallel, before v renders. An error is recorded for the request, which
+// then answers 503; v itself stays on its own goroutine.
+func (v *view) prefetchLists(qs []ListQuery) {
+	ba, ok := v.a.(BatchAuthorizer)
+	if !ok || v.readsAll() || authzFailed(v.r) {
+		return
+	}
+	todo := make([]ListQuery, 0, len(qs))
+	for _, q := range qs {
+		if _, done := v.lists[q]; !done {
+			todo = append(todo, q)
+		}
+	}
+	if len(todo) == 0 {
+		return
+	}
+	res, err := ba.ResolveLists(v.r, todo)
+	if err != nil {
+		ReportAuthzError(v.r, err)
+		return
+	}
+	for i, q := range todo {
+		v.lists[q] = res[i]
+	}
+}
+
+// batching reports whether v resolves list questions in parallel before it
+// renders: a BatchAuthorizer, no full read and no error so far.
+func (v *view) batching() bool {
+	_, ok := v.a.(BatchAuthorizer)
+	return ok && !v.readsAll() && !authzFailed(v.r)
+}
+
+// prefetch resolves, in one parallel round, the buckets of the refs refs
+// adds. List handlers run it on their roots first, then on what the roots
+// they admit need (plan-7.3b #5); a ref no round covers is decided on its own.
+func (v *view) prefetch(refs func(add func(objects.Ref))) {
+	if !v.batching() {
+		return
+	}
+	seen := map[ListQuery]bool{}
+	var qs []ListQuery
+	refs(func(ref objects.Ref) {
+		if q := listQueryOf(ref); !seen[q] {
+			seen[q] = true
+			qs = append(qs, q)
+		}
+	})
+	v.prefetchLists(qs)
+}
+
+// denied reports whether a prefetch round denied ref's bucket, so a hidden
+// root never adds a bucket. With the named-get scan ref may still be admitted.
+func (v *view) denied(ref objects.Ref) bool {
+	allowed, ok := v.lists[listQueryOf(ref)]
+	return ok && !allowed
+}
+
+// member decides ref as a population member: from the prefetched list
+// answer when it is final, else through the Authorizer.
+func (v *view) member(ref objects.Ref) bool {
+	if allowed, ok := v.lists[listQueryOf(ref)]; ok && (allowed || v.listFinal) {
+		return allowed
+	}
+	return decide(v.r, v.a, ref)
 }
 
 // readsAll reports whether v is the allow-all view, asking the request's
@@ -101,7 +183,7 @@ func (v *view) can(ref objects.Ref) bool {
 	}
 	ok, asked := v.seen[ref]
 	if !asked {
-		ok = decide(v.r, v.a, ref)
+		ok = v.member(ref)
 		v.seen[ref] = ok
 	}
 	return ok
@@ -127,10 +209,14 @@ func (v *view) canNamed(ref objects.Ref) bool {
 }
 
 // canList reports whether the caller may list gk in namespace, "" meaning
-// cluster-wide: true under a full read, false without a ListAuthorizer.
+// cluster-wide: true under a full read, false without a ListAuthorizer. A
+// prefetched answer serves a namespace; cluster-wide is asked on its own.
 func (v *view) canList(gk objects.GroupKind, namespace string) bool {
 	if v.readsAll() {
 		return true
+	}
+	if allowed, ok := v.lists[ListQuery{Kind: gk, Namespace: namespace}]; ok && namespace != "" {
+		return allowed
 	}
 	return decideList(v.r, v.a, gk, namespace)
 }
@@ -184,6 +270,15 @@ func (v *view) allowTableNamed(t *paths.Topology, d explore.DepSet, named *objec
 	}
 	if v.table != t {
 		v.table, v.tableDeps = t, make([]int8, len(t.Refs))
+	}
+	// A final prefetched denial anywhere in d hides it before any check runs,
+	// so a hidden route never asks about the refs it names.
+	if v.listFinal {
+		for _, i := range d {
+			if v.tableDeps[i] == 0 && (named == nil || t.Refs[i] != *named) && v.denied(t.Refs[i]) {
+				return false
+			}
+		}
 	}
 	for _, i := range d {
 		if named != nil && t.Refs[i] == *named {

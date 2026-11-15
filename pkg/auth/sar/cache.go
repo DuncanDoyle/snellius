@@ -36,10 +36,12 @@ type flightKey struct {
 }
 
 // flight is one SAR in progress; done closes once d and err are set.
+// retry marks a leader whose context ended before admission: nothing was sent.
 type flight struct {
-	done chan struct{}
-	d    decision
-	err  error
+	done  chan struct{}
+	d     decision
+	err   error
+	retry bool
 }
 
 // idEntry is one identity's metadata: how many entries it has and its full-read entry.
@@ -61,7 +63,9 @@ type entry struct {
 // §6.2, D-100). An allow lives allowTTL, a deny DenyTTL; an expiry never moves.
 // An evicted entry is a miss.
 type cache struct {
-	checker  Checker
+	checker Checker
+	// lim admits every SAR the cache sends (D-100 item 6).
+	lim      *limiter
 	clock    clock.PassiveClock
 	allowTTL time.Duration
 	m        *metrics
@@ -84,9 +88,9 @@ type cache struct {
 	joined, woke func()
 }
 
-func newCache(c Checker, clk clock.PassiveClock, allowTTL time.Duration, maxBytes int64, m *metrics) *cache {
+func newCache(c Checker, lim *limiter, clk clock.PassiveClock, allowTTL time.Duration, maxBytes int64, m *metrics) *cache {
 	return &cache{
-		checker: c, clock: clk, allowTTL: allowTTL, m: m, log: slog.Default(), max: maxBytes,
+		checker: c, lim: lim, clock: clk, allowTTL: allowTTL, m: m, log: slog.Default(), max: maxBytes,
 		decisions: map[flightKey]*list.Element{}, ids: map[idHash]*idEntry{}, lru: list.New(),
 		flights: map[flightKey]*flight{}, fullFlights: map[fullKey]*flight{},
 	}
@@ -101,9 +105,11 @@ func (c *cache) ttl(allowed bool) time.Duration {
 }
 
 // check answers a for the identity from the cache, a running flight or a new
-// SAR. Every miss calls spend first; a hit does not.
+// SAR. Every miss calls spend first; a hit does not. A waiter whose leader
+// ended before admission leads a new attempt without spending again.
 func (c *cache) check(ctx context.Context, spend func() error, id oidc.Identity, h idHash, a Attributes) (decision, error) {
 	k := flightKey{h, a}
+	requeued := false
 	for {
 		c.mu.Lock()
 		if d, ok := c.lookup(h, a, c.clock.Now()); ok {
@@ -111,9 +117,11 @@ func (c *cache) check(ctx context.Context, spend func() error, id oidc.Identity,
 			c.m.cache.Inc("hit")
 			return d, nil
 		}
-		if err := spend(); err != nil {
-			c.mu.Unlock()
-			return decision{}, err
+		if !requeued {
+			if err := spend(); err != nil {
+				c.mu.Unlock()
+				return decision{}, err
+			}
 		}
 		if f := c.flights[k]; f != nil {
 			c.mu.Unlock()
@@ -125,6 +133,10 @@ func (c *cache) check(ctx context.Context, spend func() error, id oidc.Identity,
 			case <-f.done:
 			case <-ctx.Done():
 				return decision{}, ctx.Err()
+			}
+			if f.retry {
+				requeued = true
+				continue
 			}
 			if f.err != nil {
 				return decision{}, f.err
@@ -150,8 +162,10 @@ func (c *cache) check(ctx context.Context, spend func() error, id oidc.Identity,
 	}
 }
 
-// fly runs f's SAR and completes f even when the Checker panics: waiters
-// get an error and the panic continues to the request's own recovery.
+// fly admits f's SAR through the limiter under ctx, then runs it, and
+// completes f even when the Checker panics: waiters get an error and the
+// panic continues to the request's own recovery. A ctx that ends before
+// admission sends nothing and lets a waiter retry (plan-7.3b #6).
 func (c *cache) fly(ctx context.Context, f *flight, k flightKey, id oidc.Identity, a Attributes) (decision, error) {
 	sent := false
 	defer func() {
@@ -166,12 +180,18 @@ func (c *cache) fly(ctx context.Context, f *flight, k flightKey, id oidc.Identit
 		c.mu.Unlock()
 		close(f.done)
 	}()
+	release, err := c.lim.acquire(ctx)
+	if err != nil {
+		f.err, f.retry, sent = err, ctx.Err() != nil, true
+		return decision{}, err
+	}
+	defer release()
 	f.d, f.err = c.send(ctx, id, a)
 	sent = true
 	return f.d, f.err
 }
 
-// send runs one SAR, anchoring its expiry at the start with the answer's TTL.
+// send runs one admitted SAR, anchoring its expiry at the start with the answer's TTL.
 // A result already expired when it returns is an error. Waiters keep the SAR
 // running when the request that started it goes away, but never past allowTTL.
 func (c *cache) send(ctx context.Context, id oidc.Identity, a Attributes) (decision, error) {

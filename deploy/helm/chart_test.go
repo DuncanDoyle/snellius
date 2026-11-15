@@ -852,3 +852,21 @@ func TestAuthzNamedGetScanValue(t *testing.T) {
 		}
 	}
 }
+
+// auth.authz.maxInFlight, rate and burst become their flags in secure mode only; unset, the binary's defaults apply.
+func TestAuthzLimitValues(t *testing.T) {
+	want := []string{"--authz-max-in-flight=16", "--authz-rate=50", "--authz-burst=8"}
+	got := containerArgs(t, withSecure("--set", "auth.authz.maxInFlight=16", "--set", "auth.authz.rate=50", "--set", "auth.authz.burst=8")...)
+	for _, w := range want {
+		if !slices.Contains(got, w) {
+			t.Errorf("secure args lack %s: %v", w, got)
+		}
+	}
+	for _, args := range [][]string{secureSet, withSecure("--set", "auth.authz=null"), {"--set", "auth.authz.rate=50"}} {
+		for _, a := range containerArgs(t, args...) {
+			if strings.HasPrefix(a, "--authz-max-in-flight") || strings.HasPrefix(a, "--authz-rate") || strings.HasPrefix(a, "--authz-burst") {
+				t.Errorf("%v renders %q", args, a)
+			}
+		}
+	}
+}

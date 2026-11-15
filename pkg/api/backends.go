@@ -63,6 +63,58 @@ func (h *handler) listedBackends(p *engine.Published, i *engine.InstallModel, v 
 	}
 }
 
+// prefetchBackends resolves the buckets of the candidate backends Backends
+// lists from, the roots; then, for the backends not denied, those of the
+// owned routes that write them and of their consumers, and their path rows.
+func (h *handler) prefetchBackends(p *engine.Published, i *engine.InstallModel, v *view, t *paths.Topology, in paths.BackendsInput) {
+	if !v.batching() {
+		return
+	}
+	ix := i.Index
+	written := func(f func(ref objects.Ref, row *explore.RouteRow)) {
+		if ix == nil {
+			return
+		}
+		for ref, uses := range ix.ByBackend {
+			for _, u := range uses {
+				if row := &ix.Routes[u.Row]; row.Owned {
+					f(ref, row)
+				}
+			}
+		}
+	}
+	v.prefetch(func(add func(objects.Ref)) {
+		for _, r := range t.Rows {
+			if ref, ok := t.Target(r); ok {
+				add(ref)
+			}
+		}
+		written(func(ref objects.Ref, _ *explore.RouteRow) { add(ref) })
+		for _, ref := range h.pathMemo.Membership(p, i.Resolved.ID(), t, func() *paths.Membership { return paths.NewMembership(t, in) }).InScope() {
+			add(ref)
+		}
+		for _, c := range in.Consumers {
+			add(c.BackendRef)
+		}
+	})
+	v.prefetch(func(add func(objects.Ref)) {
+		written(func(ref objects.Ref, row *explore.RouteRow) {
+			if !v.denied(ref) {
+				add(row.Ref)
+			}
+		})
+		for _, c := range in.Consumers {
+			if !v.denied(c.BackendRef) {
+				add(c.Consumer)
+			}
+		}
+	})
+	prefetchRows(v, t, func(r paths.Row) bool {
+		ref, ok := t.Target(r)
+		return ok && !v.denied(ref)
+	})
+}
+
 // backendList is GET …/backends (design §8.1): the install's backends as the
 // caller may see them, problems first by default.
 func (h *handler) backendList(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +129,9 @@ func (h *handler) backendList(w http.ResponseWriter, r *http.Request) {
 	}
 	v := h.view(r)
 	t, proj, _ := h.pathModel(p, i)
-	set := paths.Backends(t, proj, h.backendsInput(p, i, v, t))
+	in := h.backendsInput(p, i, v, t)
+	h.prefetchBackends(p, i, v, t, in)
+	set := paths.Backends(t, proj, in)
 	pg, err := paths.RunBackends(set, q)
 	if err != nil {
 		fail(w, err)

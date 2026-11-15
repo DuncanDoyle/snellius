@@ -47,6 +47,28 @@ type FullReader interface {
 	FullRead(r *http.Request) (bool, error)
 }
 
+// ListQuery is one population list question: may the caller list Kind in
+// Namespace. A cluster-scoped kind is listed cluster-wide whatever Namespace says.
+type ListQuery struct {
+	Kind      objects.GroupKind
+	Namespace string
+}
+
+// BatchAuthorizer resolves many population list questions at once, in
+// parallel, before a handler renders (D-100 item 6). Each answer is the list
+// half of ErrAuthorizer's: a namespaced kind without a namespace is false.
+type BatchAuthorizer interface {
+	// ResolveLists answers qs in order, or why it could not tell.
+	ResolveLists(r *http.Request, qs []ListQuery) ([]bool, error)
+}
+
+// ListScanner says whether a list denial is final for a population member
+// (D-100). Without it, a denied member is asked again through ErrAuthorizer.
+type ListScanner interface {
+	// NamedGetScan reports whether a member the list denies is still asked by named get.
+	NamedGetScan() bool
+}
+
 // ErrCheckLimit is the error of a request that needs more uncached checks than checkLimit.
 var ErrCheckLimit = errors.New("authorisation check limit reached")
 

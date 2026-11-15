@@ -34,6 +34,9 @@ func Parse(fs *flag.FlagSet, args []string) (kubeconfig string, o app.Options, e
 	fs.DurationVar(&o.SessionAbsolute, "session-absolute", 8*time.Hour, "secure mode: a session ends this long after sign-in")
 	fs.DurationVar(&o.AuthzCacheTTL, "authz-cache-ttl", sar.DefaultAllowTTL, "secure mode: how long an allowed permission check is reused, 30s to 15m; a revoked permission can stay visible this long")
 	fs.BoolVar(&o.AuthzNamedGetScan, "authz-named-get-scan", false, "secure mode: also show in lists the objects a viewer may only get by name (resourceNames grants); costs one check per hidden object")
+	fs.IntVar(&o.AuthzMaxInFlight, "authz-max-in-flight", sar.DefaultMaxInFlight, "secure mode: most permission checks sent to the API server at once, across all viewers")
+	fs.IntVar(&o.AuthzRate, "authz-rate", sar.DefaultRate, "secure mode: most permission checks sent to the API server per second, across all viewers")
+	fs.IntVar(&o.AuthzBurst, "authz-burst", sar.DefaultBurst, "secure mode: permission checks sent at once above --authz-rate")
 	proxies := fs.String("trusted-proxy-cidrs", "", "comma-separated CIDRs of proxies whose X-Request-Id and X-Forwarded-For are trusted")
 	scopes := fs.String("oidc-scopes", strings.Join(oidc.DefaultScopes, ","), "secure mode: comma-separated OIDC scopes")
 	allowedHosts := fs.String("allowed-hosts", "", "comma-separated extra Host names local mode serves (any port)")
@@ -60,6 +63,9 @@ func Parse(fs *flag.FlagSet, args []string) (kubeconfig string, o app.Options, e
 	}
 	if o.AuthzCacheTTL < MinAuthzCacheTTL || o.AuthzCacheTTL > MaxAuthzCacheTTL {
 		return "", app.Options{}, fmt.Errorf("--authz-cache-ttl (%v) must be between %v and %v", o.AuthzCacheTTL, MinAuthzCacheTTL, MaxAuthzCacheTTL)
+	}
+	if o.AuthzMaxInFlight < 1 || o.AuthzRate < 1 || o.AuthzBurst < 1 {
+		return "", app.Options{}, fmt.Errorf("--authz-max-in-flight (%d), --authz-rate (%d) and --authz-burst (%d) must be at least 1", o.AuthzMaxInFlight, o.AuthzRate, o.AuthzBurst)
 	}
 	if o.TrustedProxyCIDRs, err = audit.ParseCIDRs(*proxies); err != nil {
 		return "", app.Options{}, err
