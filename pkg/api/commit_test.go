@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -204,14 +205,14 @@ func refsExt(a Authorizer, n int) ExtMount {
 	})}
 }
 
-// The 500th uncached check is answered; the 501st fails the request.
+// The CheckLimit-th uncached check is answered; one more fails the request.
 func TestCommitCheckLimit(t *testing.T) {
-	for _, n := range []int{checkLimit, checkLimit + 1} {
+	for _, n := range []int{CheckLimit, CheckLimit + 1} {
 		a := &errAuthz{spend: true}
 		var reasons []string
 		srv := secureServer(t, staticModel{}, a, WithExtMounts(refsExt(a, n)), WithAuthzAudit(func(_ *http.Request, why string) { reasons = append(reasons, why) }))
-		if n == checkLimit {
-			if code, _, body := fetchRaw(t, srv, "/api/ext/refs/n"); code != http.StatusOK || body != "500\n" {
+		if n == CheckLimit {
+			if code, _, body := fetchRaw(t, srv, "/api/ext/refs/n"); code != http.StatusOK || body != strconv.Itoa(CheckLimit)+"\n" {
 				t.Errorf("%d checks: %d %q", n, code, body)
 			}
 			continue
@@ -349,7 +350,7 @@ func TestCommitAuditReasons(t *testing.T) {
 	}{
 		{&errAuthz{}, 3, nil},
 		{&errAuthz{failAt: 2}, 3, []string{AuditCheckFailed}},
-		{&errAuthz{spend: true}, checkLimit + 1, []string{AuditCheckLimit}},
+		{&errAuthz{spend: true}, CheckLimit + 1, []string{AuditCheckLimit}},
 		{&fullAuthz{errAuthz: &errAuthz{}, err: errOutage}, 3, []string{AuditFullReadFailed}},
 	}
 	for _, c := range cases {
@@ -581,15 +582,16 @@ func TestCommitExpiredTwice503(t *testing.T) {
 	}
 }
 
-// A rebuild keeps the request's check count: 400 checks and 400 more pass the limit.
+// A rebuild keeps the request's check count: four fifths of the limit twice pass it.
 func TestCommitRebuildSharesCap(t *testing.T) {
 	clk := clocktesting.NewFakeClock(commitT0)
+	per := CheckLimit * 4 / 5
 	a := &expiringAuthz{clock: clk, spend: true, step: func(n int) {
-		if n == 400 {
+		if n == per {
 			clk.Step(time.Minute)
 		}
 	}}
-	srv, b, l := expiringServer(t, a, clk, 400)
+	srv, b, l := expiringServer(t, a, clk, per)
 	wantUnavailable(t, srv, "/api/ext/b/n")
 	if b.count() != 2 || !slices.Equal(l.got(), []string{AuditCheckLimit}) {
 		t.Errorf("%d builds, audit %v", b.count(), l.got())

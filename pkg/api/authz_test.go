@@ -14,8 +14,8 @@ func TestSpendCheckLimit(t *testing.T) {
 	}
 	r, _ = withAuthzState(r)
 	var wg sync.WaitGroup
-	errs := make(chan error, checkLimit)
-	for range checkLimit {
+	errs := make(chan error, CheckLimit)
+	for range CheckLimit {
 		wg.Go(func() { errs <- SpendCheck(r) })
 	}
 	wg.Wait()
@@ -26,7 +26,7 @@ func TestSpendCheckLimit(t *testing.T) {
 		}
 	}
 	if err := SpendCheck(r); !errors.Is(err, ErrCheckLimit) {
-		t.Fatalf("check %d = %v, want ErrCheckLimit", checkLimit+1, err)
+		t.Fatalf("check %d = %v, want ErrCheckLimit", CheckLimit+1, err)
 	}
 }
 

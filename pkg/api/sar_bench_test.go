@@ -201,7 +201,7 @@ func TestBudgetSARDeniedList(t *testing.T) {
 				last = get(h, c, "u", p.path)
 				sars += last.sars
 			}
-			// The same viewer outside the commit wrapper: no 500 cap.
+			// The same viewer outside the commit wrapper: no per-request cap.
 			uc := &fakeChecker{allow: deniedList}
 			uaz := newAuthz(uc, clocktesting.NewFakeClock(t0))
 			req := httptest.NewRequest(http.MethodGet, p.path, nil)

@@ -69,11 +69,12 @@ type ListScanner interface {
 	NamedGetScan() bool
 }
 
-// ErrCheckLimit is the error of a request that needs more uncached checks than checkLimit.
+// ErrCheckLimit is the error of a request that needs more uncached checks than CheckLimit.
 var ErrCheckLimit = errors.New("authorisation check limit reached")
 
-// checkLimit is the most uncached authorisation checks one request may make (design §6.4).
-const checkLimit = 500
+// CheckLimit is the most uncached authorisation checks one request may make (design §6.4, R25).
+// The global limiter protects the API server; this bounds one request's spend.
+const CheckLimit = 1000
 
 // authzState is one request's authorisation bookkeeping, shared by its goroutines.
 type authzState struct {
@@ -241,7 +242,7 @@ func SpendCheck(r *http.Request) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.checks++
-	if s.checks > checkLimit {
+	if s.checks > CheckLimit {
 		return ErrCheckLimit
 	}
 	return nil

@@ -41,7 +41,7 @@ const routesGroup = "gateway.networking.k8s.io"
 var t0 = time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
 
 // small is the Typical tier cut down so a restricted viewer's route list
-// stays under the 500-check limit: one get per route it cannot list.
+// stays under api.CheckLimit: one get per route it cannot list.
 var small = func() scale.Tier {
 	t := scale.Typical
 	t.Name, t.Gateways, t.HTTPRoutes, t.ListenerSets, t.Namespaces, t.Backends = "small", 10, 80, 2, 4, 6
@@ -878,24 +878,24 @@ func TestHiddenRootAddsNoBucket(t *testing.T) {
 				t.Errorf("%s serial with the hidden route: %d, fresh asked %v", path, code, slices.ContainsFunc(sars, fresh))
 			}
 		}
-		// Padding: hidden routes in new namespaces bring the request to the 500-check cap.
+		// Padding: hidden routes in new namespaces bring the request to api.CheckLimit.
 		padded := func(withRoute bool) *cache.Snapshot {
 			snap := scale.Snapshot(small, 1)
 			ns := testutil.ScaleNamespace(3)
 			gw := firstIn(t, snap, "Gateway", ns).GetName()
-			for i := range 500 - len(sars0) {
-				pad := fmt.Sprintf("pad-%03d", i)
+			for i := range api.CheckLimit - len(sars0) {
+				pad := fmt.Sprintf("pad-%04d", i)
 				addTo(t, snap, hiddenRoute(t, snap, ns, pad, "p", gw, pad, "be"))
 			}
 			if withRoute {
-				hidden(snap, "pad-000")
+				hidden(snap, "pad-0000")
 			}
 			return snap
 		}
 		for _, withRoute := range []bool{false, true} {
 			src, _ := worldOf(t, padded(withRoute))
 			sars, code, _ := coldSARs(t, src, base, path, team)
-			if code != http.StatusOK || len(sars) != 500 || slices.ContainsFunc(sars, fresh) {
+			if code != http.StatusOK || len(sars) != api.CheckLimit || slices.ContainsFunc(sars, fresh) {
 				t.Errorf("%s at the cap, hidden route %v: %d, %d SARs", path, withRoute, code, len(sars))
 			}
 		}
@@ -907,8 +907,8 @@ func TestParallelErrorDiscardsResponse(t *testing.T) {
 	many.Name, many.Namespaces, many.HTTPRoutes, many.Gateways, many.Backends = "many", 300, 600, 300, 300
 	src, base := worldOf(t, scale.Snapshot(many, 1))
 	sars, code, _ := coldSARs(t, src, base, "/routes?limit=200", inNamespaces(10))
-	if code != http.StatusOK || len(sars) < 300 || len(sars) >= 500 {
-		t.Fatalf("clean run: %d, %d SARs; want 200 and 300 to 499", code, len(sars))
+	if code != http.StatusOK || len(sars) < 300 || len(sars) >= api.CheckLimit {
+		t.Fatalf("clean run: %d, %d SARs; want 200 and 300 to below the cap", code, len(sars))
 	}
 	var mu sync.Mutex
 	n := 0
