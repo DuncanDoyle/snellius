@@ -428,6 +428,18 @@ func claims(edit func(map[string]any)) func(f *flowFixture) *httptest.ResponseRe
 	}
 }
 
+// A token for several audiences signs in when azp names the client, and that same token is reviewed (D-097).
+func TestCallbackSeveralAudiences(t *testing.T) {
+	f := newFlowFixture(t, "")
+	f.idp.claims = func(c map[string]any) { c["aud"], c["azp"] = []string{"kubernetes", testClientID}, testClientID }
+	if rec := f.signIn("/"); rec.Header().Get("Location") != "/" || len(f.done.results) != 1 {
+		t.Fatalf("callback = %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if f.reviewer.token == "" || f.reviewer.token != f.done.results[0].IDToken {
+		t.Fatal("the reviewed token is not the signed-in token")
+	}
+}
+
 // Claims are checked against the injected clock, with two minutes of skew.
 func TestCallbackClockSkew(t *testing.T) {
 	f := newFlowFixture(t, "")

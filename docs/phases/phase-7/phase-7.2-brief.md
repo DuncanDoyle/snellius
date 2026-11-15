@@ -14,7 +14,7 @@ Secure mode needs to know who is calling, as the cluster sees them. 7.2 adds OID
 | Secure mode, OIDC not configured | Not ready (reason in the log); `/auth/status` `signIn: not-configured`; UI "Sign-in is not configured" |
 | `/api/…` without a session | 401 `sign-in-required` with a login URL; the UI redirects once |
 | Sign-in through the IdP, cluster accepts the token's audience | Session; `/auth/me` shows the cluster's username and groups; `/api/` answers 503 `secure-mode-incomplete` |
-| Cluster does not accept the audience | `/signin-failed?reason=audience`; no session |
+| Cluster does not accept the audience | `/signin-failed?reason=unauthenticated` (D-097); no session |
 | Replayed callback, wrong state or nonce, expired token, open-redirect return path | Refused; audit failure record; no session |
 | Idle 30 min, absolute 8 h, refresh with a different `sub` | Session ends; next request 401 `session-ended` |
 | Sign out | Session deleted; IdP logout URL without `id_token_hint` |

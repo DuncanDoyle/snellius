@@ -198,7 +198,7 @@ Install surface:
 
 - `request()`: a `401` with `login` redirects the browser to that URL (once; no loop); `retryEveryPoll` stops on 401.
 - SWR polling pauses while `document.visibilityState` is hidden, and scheduled error retries and focus revalidation wait until the tab is visible again (plan-codex 7.2 #8).
-- Pages, each driven by a real backend response (plan-codex 7.2 #3): "Signing in" (redirecting); "Sign-in is not configured" (`/auth/status` `signIn: not-configured`, generic text plus the doc link); "Can't reach the sign-in provider" (`unavailable`); "Your sign-in is not accepted by this cluster" (`/signin-failed?reason=audience|unauthenticated`); "Sign-in failed" (`reason=invalid`); "Your session has ended" (`401 session-ended`).
+- Pages, each driven by a real backend response (plan-codex 7.2 #3): "Signing in" (redirecting); "Sign-in is not configured" (`/auth/status` `signIn: not-configured`, generic text plus the doc link); "Can't reach the sign-in provider" (`unavailable`); "Your sign-in is not accepted by this cluster" (`/signin-failed?reason=unauthenticated`, D-097); "Sign-in failed" (`reason=invalid`); "Your session has ended" (`401 session-ended`).
 - Header in secure mode: the user's name with a menu: "Who am I" (username and groups from `/auth/me`) and "Sign out" (`POST /auth/logout`, then follow the returned URL). Hover and active styles; tooltips; light and dark checked.
 - Every new string through the wording picker (controller supplies the copy).
 

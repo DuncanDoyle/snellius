@@ -42,6 +42,14 @@ func TestRefreshFailures(t *testing.T) {
 			f.idp.claims = func(c map[string]any) { c["aud"] = "other" }
 			return testRefreshToken
 		},
+		"several audiences, no azp": func(f *flowFixture) string {
+			f.idp.claims = func(c map[string]any) { c["aud"] = []string{"kubernetes", testClientID} }
+			return testRefreshToken
+		},
+		"several audiences, azp for another client": func(f *flowFixture) string {
+			f.idp.claims = func(c map[string]any) { c["aud"], c["azp"] = []string{"kubernetes", testClientID}, "kubernetes" }
+			return testRefreshToken
+		},
 		"expired": func(f *flowFixture) string {
 			f.idp.claims = func(c map[string]any) { c["exp"] = f.clk.Now().Add(-5 * time.Minute).Unix() }
 			return testRefreshToken

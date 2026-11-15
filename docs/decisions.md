@@ -1474,4 +1474,4 @@ Measured on the reference machine, 5 runs per world:
 
 **Decision:** Snellius sends the TokenReview without `spec.audiences`. The API server checks the token against the audiences in its own JWT configuration. Snellius's binding to its client is its own `aud` (and `azp`) check, which it trusts once the API server has verified the signature. The `audience` sign-in failure reason goes; a refused review is `unauthenticated`.
 
-**Consequences:** The cluster requirement does not change: the API server must accept Snellius's client ID as an audience.
+**Consequences:** The API server must accept the token through one of its configured audiences. The setups in the README do that with Snellius's client ID: the same client ID as the cluster, or an extra audience. A token whose `aud` lists both Snellius and an audience the cluster accepts, with `azp` naming Snellius, also works.
