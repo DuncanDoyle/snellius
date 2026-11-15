@@ -37,6 +37,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- $s := dig "session" (dict) (.root.Values.auth | default dict) -}}
 {{ dig .key "" $s }}
 {{- end }}
+{{- define "snellius.authzValue" -}}
+{{- $a := dig "authz" (dict) (.root.Values.auth | default dict) -}}
+{{ dig .key "" $a }}
+{{- end }}
 {{- define "snellius.cookieSecure" -}}
 {{ dig "cookieSecure" true (dig "session" (dict) (.Values.auth | default dict)) }}
 {{- end }}

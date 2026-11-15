@@ -751,24 +751,28 @@ func TestSecureModeRequiresOIDCValues(t *testing.T) {
 	}
 }
 
-func TestTokenReviewRuleOnlyInSecureMode(t *testing.T) {
-	if grants(clusterRole(t).Rules, "authentication.k8s.io", "tokenreviews", "create") {
-		t.Errorf("local mode must not grant tokenreviews")
-	}
-	cr := clusterRole(t, secureSet...)
-	if !grants(cr.Rules, "authentication.k8s.io", "tokenreviews", "create") {
-		t.Errorf("secure mode must grant tokenreviews create")
+// TokenReview and SubjectAccessReview create are granted in secure mode only, each in its own narrow rule.
+func TestReviewRulesOnlyInSecureMode(t *testing.T) {
+	reviews := map[string]string{"tokenreviews": "authentication.k8s.io", "subjectaccessreviews": "authorization.k8s.io"}
+	local, cr := clusterRole(t), clusterRole(t, secureSet...)
+	for res, group := range reviews {
+		if grants(local.Rules, group, res, "create") {
+			t.Errorf("local mode must not grant %s", res)
+		}
+		if !grants(cr.Rules, group, res, "create") {
+			t.Errorf("secure mode must grant %s create", res)
+		}
 	}
 	for _, r := range cr.Rules {
-		if slices.Contains(r.Resources, "tokenreviews") {
-			if !slices.Equal(r.Verbs, []string{"create"}) || !slices.Equal(r.APIGroups, []string{"authentication.k8s.io"}) {
-				t.Errorf("tokenreviews rule too wide: %+v", r)
+		if len(r.Resources) == 1 && reviews[r.Resources[0]] != "" {
+			if !slices.Equal(r.Verbs, []string{"create"}) || !slices.Equal(r.APIGroups, []string{reviews[r.Resources[0]]}) {
+				t.Errorf("%s rule too wide: %+v", r.Resources[0], r)
 			}
 			continue
 		}
 		for _, v := range r.Verbs {
 			if !slices.Contains([]string{"get", "list", "watch"}, v) {
-				t.Errorf("verb %q outside the tokenreviews rule", v)
+				t.Errorf("verb %q outside the review rules: %+v", v, r)
 			}
 		}
 		if slices.Contains(r.Resources, "secrets") {
@@ -796,7 +800,8 @@ func TestSecureNotes(t *testing.T) {
 		t.Fatalf("helm install --dry-run: %v\n%s", err, out)
 	}
 	notes := string(out[strings.Index(string(out), "NOTES:"):])
-	for _, want := range []string{"https://ui.example.com/auth/callback", "https://ui.example.com/", "client ID \"snellius\"", "kubectl auth whoami"} {
+	for _, want := range []string{"https://ui.example.com/auth/callback", "https://ui.example.com/", "client ID \"snellius\"", "kubectl auth whoami",
+		"reused for 30s (auth.authz.cacheTTL)"} {
 		if !strings.Contains(notes, want) {
 			t.Errorf("NOTES lack %q:\n%s", want, notes)
 		}
@@ -805,8 +810,32 @@ func TestSecureNotes(t *testing.T) {
 
 // --reuse-values from an older release has none of the new keys.
 func TestRendersWithoutOIDCValues(t *testing.T) {
-	got := containerArgs(t, "--set", "auth.oidc=null", "--set", "auth.session=null", "--set", "auth.trustedProxyCIDRs=null", "--set", "hostAliases=null")
+	got := containerArgs(t, "--set", "auth.oidc=null", "--set", "auth.session=null", "--set", "auth.authz=null", "--set", "auth.trustedProxyCIDRs=null",
+		"--set", "hostAliases=null")
 	if !slices.Equal(got, localBase) {
 		t.Errorf("args = %v, want %v", got, localBase)
+	}
+}
+
+// --reuse-values from a release without auth.authz still renders secure mode, with the binary's TTL.
+func TestRendersWithoutAuthzValues(t *testing.T) {
+	got := containerArgs(t, withSecure("--set", "auth.authz=null")...)
+	if !slices.Equal(got, containerArgs(t, secureSet...)) {
+		t.Errorf("args = %v", got)
+	}
+	for _, a := range got {
+		if strings.HasPrefix(a, "--authz-cache-ttl") {
+			t.Errorf("unset TTL rendered %q", a)
+		}
+	}
+}
+
+// auth.authz.cacheTTL becomes --authz-cache-ttl in secure mode only.
+func TestAuthzCacheTTLValue(t *testing.T) {
+	if got := containerArgs(t, withSecure("--set", "auth.authz.cacheTTL=5m")...); !slices.Contains(got, "--authz-cache-ttl=5m") {
+		t.Errorf("secure args lack --authz-cache-ttl=5m: %v", got)
+	}
+	if got := containerArgs(t, "--set", "auth.authz.cacheTTL=5m"); !slices.Equal(got, localBase) {
+		t.Errorf("local args = %v, want %v", got, localBase)
 	}
 }

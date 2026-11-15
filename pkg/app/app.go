@@ -29,6 +29,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/audit"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
+	"github.com/DuncanDoyle/snellius/pkg/auth/sar"
 	"github.com/DuncanDoyle/snellius/pkg/auth/session"
 	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/collect"
@@ -59,6 +60,8 @@ type Options struct {
 	CookieInsecure bool
 	// SessionIdle and SessionAbsolute bound a secure-mode session; zero means 30 min and 8 h.
 	SessionIdle, SessionAbsolute time.Duration
+	// AuthzCacheTTL bounds every cached permission check in secure mode; zero means 30 s.
+	AuthzCacheTTL time.Duration
 	// TrustedProxyCIDRs are the peers whose X-Request-Id and X-Forwarded-For are trusted.
 	TrustedProxyCIDRs []netip.Prefix
 	// AllowedHosts are extra Host names local mode serves, besides loopback.
@@ -97,6 +100,8 @@ type Options struct {
 	// ClassOnlyInstalls adds an install per GatewayClass controllerName that no
 	// detector claims, known from Gateway API status alone.
 	ClassOnlyInstalls bool
+	// completeSecure serves secure mode without the data gate. Tests only.
+	completeSecure bool
 }
 
 // Diagnostics toggles the optional inputs (design §18.1): No* turns off a
@@ -267,6 +272,8 @@ type App struct {
 	flow    *oidc.Flow
 	// sessions holds secure-mode sessions; nil in local mode.
 	sessions *session.Store
+	// sar is the secure-mode authoriser whose cache Start sweeps; nil otherwise.
+	sar *sar.Authorizer
 	// discovered is closed after the first model with an install over a settled cache.
 	discovered chan struct{}
 }
@@ -311,7 +318,34 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		env.Clock = o.Clock
 	}
 	packCols := reg.PackCollectors(env)
-	deps := extension.Deps{Current: eng.Current, Authorizer: reg.Authorizer, Capabilities: reg.CapabilityStates, Logger: slog.Default()}
+	levels, err := audit.ParseLevels(o.AuditLevels)
+	if err != nil {
+		return nil, err
+	}
+	auditOut := o.AuditOut
+	if auditOut == nil {
+		auditOut = os.Stdout
+	}
+	metrics := obs.NewRegistry()
+	mode := o.AuthMode
+	if mode == "" {
+		mode = ModeLocal
+	}
+	metrics.Gauge("snellius_auth_mode", "Authentication mode of this process; 1 for the active mode.", "mode").Set(1, mode)
+	auditLog := audit.New(auditOut, levels, metrics)
+	// Extensions get the same authoriser as the core handler.
+	authz := reg.Authorizer
+	var sarAuthz *sar.Authorizer
+	if o.AuthMode == ModeSecure && noAuthorizer(authz) {
+		var clk clock.WithTicker = clock.RealClock{}
+		if o.Clock != nil {
+			clk = o.Clock
+		}
+		sarAuthz = sar.New(sar.Options{Checker: sar.NewKubeChecker(c.Kube), Kinds: newSARKinds(cfg.Served, o.Diagnostics, mon.Catalog),
+			TTL: o.AuthzCacheTTL, Clock: clk, Metrics: metrics})
+		authz = sarAuthz
+	}
+	deps := extension.Deps{Current: eng.Current, Authorizer: authz, Capabilities: reg.CapabilityStates, Logger: slog.Default()}
 	mounts, err := reg.Mounts(deps)
 	if err != nil {
 		return nil, err
@@ -340,32 +374,6 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		}
 		scoped = endpoints.Bounded(cache.NewScopedReader(c.Kube, clk), endpoints.DefaultBounds, clk)
 	}
-	authz := reg.Authorizer
-	if o.AuthMode == ModeSecure && noAuthorizer(authz) {
-		authz = api.DenyAll{}
-	}
-	hopts := []api.HandlerOption{api.WithExtMounts(mounts...), api.WithCoreCapabilities(core), api.WithCapabilitySources(reg.CapabilityStates),
-		api.WithCommands(reg.Commands), api.WithInstallCommands(commands), api.WithInstallFeatures(reg.FeaturesFor),
-		api.WithPacks(reg.Packs()...), api.WithInstallKinds(reg.KindAppliesTo), api.WithScopedReader(scoped), api.WithBackendConsumers(consumers)}
-	if o.AuthMode == ModeSecure {
-		hopts = append(hopts, api.WithSecureMode(false))
-	}
-	h := api.NewHandler(eng, o.UI, authz, hopts...)
-	levels, err := audit.ParseLevels(o.AuditLevels)
-	if err != nil {
-		return nil, err
-	}
-	auditOut := o.AuditOut
-	if auditOut == nil {
-		auditOut = os.Stdout
-	}
-	metrics := obs.NewRegistry()
-	mode := o.AuthMode
-	if mode == "" {
-		mode = ModeLocal
-	}
-	metrics.Gauge("snellius_auth_mode", "Authentication mode of this process; 1 for the active mode.", "mode").Set(1, mode)
-	auditLog := audit.New(auditOut, levels, metrics)
 	var prov *oidc.Provider
 	var flow *oidc.Flow
 	var oidcErr error
@@ -373,7 +381,16 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 	if o.AuthMode == ModeSecure {
 		sessions, prov, flow, oidcErr = buildSignIn(c.Kube, o, auditLog, metrics)
 	}
-	return &App{Engine: eng, oidc: prov, flow: flow, oidcErr: oidcErr, sessions: sessions, Handler: h, Metrics: metrics, Audit: auditLog, cfg: cfg, cache: ca, kinds: mon, opts: o, authz: authz, discovered: discovered, reg: reg,
+	hopts := []api.HandlerOption{api.WithExtMounts(mounts...), api.WithCoreCapabilities(core), api.WithCapabilitySources(reg.CapabilityStates),
+		api.WithCommands(reg.Commands), api.WithInstallCommands(commands), api.WithInstallFeatures(reg.FeaturesFor),
+		api.WithPacks(reg.Packs()...), api.WithInstallKinds(reg.KindAppliesTo), api.WithScopedReader(scoped), api.WithBackendConsumers(consumers)}
+	if o.AuthMode == ModeSecure {
+		// The data gate stays closed in production; only tests set completeSecure.
+		hopts = append(hopts, api.WithSecureMode(o.completeSecure), api.WithCommitCheck(sessions.StillSignedIn),
+			api.WithAuthzAudit(authzAuditor(auditLog)))
+	}
+	h := api.NewHandler(eng, o.UI, authz, hopts...)
+	return &App{Engine: eng, oidc: prov, flow: flow, oidcErr: oidcErr, sessions: sessions, sar: sarAuthz, Handler: h, Metrics: metrics, Audit: auditLog, cfg: cfg, cache: ca, kinds: mon, opts: o, authz: authz, discovered: discovered, reg: reg,
 		packs: extension.NewCore(extension.WithCollectors(packCols...)), collectors: packCols, collected: collected, deps: deps}, nil
 }
 
@@ -389,6 +406,27 @@ func (a *App) Start(ctx context.Context) {
 	go a.kinds.Run(ctx, a.opts.KindsInterval)
 	if a.sessions != nil {
 		go a.sessions.Run(ctx)
+	}
+	if a.sar != nil {
+		go a.sar.Run(ctx)
+	}
+}
+
+// authzAuditor writes a security record for each request answered 503
+// authz-unavailable, with the request's session and Kubernetes identity.
+func authzAuditor(l *audit.Logger) func(r *http.Request, reason string) {
+	return func(r *http.Request, reason string) {
+		rec := audit.FromRequest(r)
+		if rec.Request.Route == "" {
+			rec.Request.Route = r.URL.Path
+		}
+		rec.Level, rec.Action, rec.Outcome, rec.Reason = audit.LevelSecurity, "authz-unavailable", "failure", reason
+		if info, ok := session.FromContext(r.Context()); ok {
+			rec.User = audit.Identity{Issuer: info.Issuer, Subject: info.Subject}
+			rec.Kube = audit.Kube{Username: info.Identity.Username, Groups: info.Identity.Groups}
+			rec.Session = info.AuditID
+		}
+		l.Emit(r.Context(), rec)
 	}
 }
 

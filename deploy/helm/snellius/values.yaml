@@ -60,6 +60,10 @@ auth:
     idle: ""            # a session ends after this long without a request; empty uses 30m
     absolute: ""        # a session ends this long after sign-in; empty uses 8h
     cookieSecure: true  # false only for plain-HTTP testing
+  authz:
+    # How long a permission check is reused, 30s to 15m; empty uses 30s. It is how long a
+    # permission change takes to show in Snellius; a longer TTL means fewer checks.
+    cacheTTL: ""
   # CIDRs of proxies whose X-Request-Id and X-Forwarded-For Snellius trusts (secure mode).
   trustedProxyCIDRs: []
 # Pod hostAliases, for an IdP name that is not in DNS. Passed through unchanged.

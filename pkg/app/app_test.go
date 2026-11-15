@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,6 +22,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	authnv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,7 +38,10 @@ import (
 	clocktesting "k8s.io/utils/clock/testing"
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
+	"github.com/DuncanDoyle/snellius/internal/testutil/scale"
 	"github.com/DuncanDoyle/snellius/pkg/api"
+	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
+	"github.com/DuncanDoyle/snellius/pkg/auth/sar"
 	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/collect"
 	"github.com/DuncanDoyle/snellius/pkg/computed"
@@ -1888,5 +1894,234 @@ func TestBuildRejectsBadPackCollectors(t *testing.T) {
 				t.Fatalf("Build error %v, want one naming %s", err, tc.want)
 			}
 		})
+	}
+}
+
+// secureOpts are the options of a secure-mode app over fake clients.
+func secureOpts() Options {
+	return Options{AuthMode: ModeSecure, PollInterval: 10 * time.Millisecond, MetricsInterval: time.Hour, UI: ui, AuditOut: io.Discard}
+}
+
+// Secure mode without a registry authoriser wires the SAR authoriser, and the data gate stays closed.
+func TestSecureModeWiresSARBehindGate(t *testing.T) {
+	dyn, kube := testutil.Clients(t)
+	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}}, secureOpts(), extension.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s, ok := a.authz.(*sar.Authorizer); !ok || s != a.sar {
+		t.Fatalf("secure-mode authoriser is %T, want the app's *sar.Authorizer", a.authz)
+	}
+	rec := httptest.NewRecorder()
+	a.Handler.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/meta", nil))
+	if rec.Code != http.StatusServiceUnavailable || strings.TrimSpace(rec.Body.String()) != `{"error":"secure-mode-incomplete"}` {
+		t.Fatalf("/api/ = %d %s, want 503 secure-mode-incomplete", rec.Code, rec.Body.String())
+	}
+	local := secureOpts()
+	local.AuthMode = ModeLocal
+	l, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}}, local, extension.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := l.authz.(api.AllowAll); !ok || l.sar != nil {
+		t.Fatalf("local-mode authoriser is %T, want api.AllowAll and no SAR", l.authz)
+	}
+}
+
+// A registry authoriser is kept in secure mode; either form of AllowAll is replaced by SAR.
+func TestRegistryAuthorizerKept(t *testing.T) {
+	dyn, kube := testutil.Clients(t)
+	custom := api.AuthorizerFunc(func(*http.Request, objects.Ref) bool { return true })
+	for name, c := range map[string]struct {
+		authz api.Authorizer
+		want  string
+	}{
+		"value":   {api.AllowAll{}, "*sar.Authorizer"},
+		"pointer": {&api.AllowAll{}, "*sar.Authorizer"},
+		"custom":  {custom, "api.AuthorizerFunc"},
+		"deny":    {api.DenyAll{}, "api.DenyAll"},
+	} {
+		a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}}, secureOpts(),
+			extension.New(extension.WithAuthorizer(c.authz)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fmt.Sprintf("%T", a.authz); got != c.want {
+			t.Errorf("%s: secure-mode authoriser is %s, want %s", name, got, c.want)
+		}
+		if (a.sar != nil) != (c.want == "*sar.Authorizer") {
+			t.Errorf("%s: sweeper authoriser %v", name, a.sar)
+		}
+	}
+}
+
+// Extension handlers and collectors get the authoriser the core handler uses.
+func TestSecureModeDepsShareAuthorizer(t *testing.T) {
+	dyn, kube := testutil.Clients(t)
+	var got api.Authorizer
+	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}}, secureOpts(),
+		extension.New(extension.WithHandlers("probe", func(_ extension.Router, d extension.Deps) { got = d.Authorizer })))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := a.authz.(*sar.Authorizer); !ok || got != a.authz || a.deps.Authorizer != a.authz {
+		t.Fatalf("handler deps %T, collector deps %T, core %T: want one *sar.Authorizer", got, a.deps.Authorizer, a.authz)
+	}
+}
+
+// Every group and kind the Large fixture's index refers to maps to a resource,
+// so no kind is denied for a missing entry.
+func TestSARKindsCoverModelRefs(t *testing.T) {
+	served := testutil.ServedUpstream()
+	e := engine.New(engine.Config{Snapshots: fixedSnap{scale.Snapshot(scale.Large, 1)}, Served: served,
+		Detectors: []install.Detector{install.UpstreamDetector{}}, Scope: install.NamespaceSelectorScope{},
+		Verifier: scopeverify.NewManagedCountVerifier(time.Hour), Checks: health.Upstream(), Now: func() time.Time { return testutil.Now }})
+	m := e.Compute()
+	if len(m.Installs) != 1 || m.Installs[0].Index == nil {
+		t.Fatalf("%d installs, want 1 with an index", len(m.Installs))
+	}
+	ix := m.Installs[0].Index
+	refs := slices.Clone(ix.Refs)
+	for _, keys := range []func(func(objects.Ref) bool){maps.Keys(ix.ByParent), maps.Keys(ix.ByParentRoute), maps.Keys(ix.Declared),
+		maps.Keys(ix.ByBackend), maps.Keys(ix.ParentRoutes), maps.Keys(ix.Findings), maps.Keys(ix.Delegation), maps.Keys(ix.Effective), maps.Keys(ix.Unreached)} {
+		refs = slices.AppendSeq(refs, keys)
+	}
+	for _, ps := range ix.ParentRoutes {
+		refs = append(refs, ps...)
+	}
+	k := newSARKinds(served, Diagnostics{}, func() kinds.Catalog { return kinds.Catalog{} })
+	seen := map[objects.GroupKind]bool{}
+	for _, r := range refs {
+		gk := objects.GroupKind{Group: r.Group, Kind: r.Kind}
+		if seen[gk] {
+			continue
+		}
+		seen[gk] = true
+		if _, ok := k.Lookup(r.Group, r.Kind); !ok {
+			t.Errorf("unmapped kind %s/%s (ref %v)", r.Group, r.Kind, r)
+		}
+	}
+	if len(ix.Routes) < scale.Large.HTTPRoutes || len(seen) < 5 {
+		t.Fatalf("%d routes and %d kinds seen, want the Large world: %v", len(ix.Routes), len(seen), seen)
+	}
+}
+
+// fixedSnap serves one snapshot.
+type fixedSnap struct{ s *cache.Snapshot }
+
+func (f fixedSnap) Snapshot() *cache.Snapshot { return f.s }
+
+// A request whose permission check fails answers 503 authz-unavailable and
+// writes a security record with the session and Kubernetes identity.
+func TestAuthzUnavailableAudited(t *testing.T) {
+	idp, ca := newSignInIdP(t)
+	dyn, kube := testutil.Clients(t, testutil.ControllerDeployment("kgw", "kgateway", "cr.kgateway.dev/kgateway-dev/kgateway:v2.4.0", 1, 1))
+	kube.PrependReactor("create", "tokenreviews", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, &authnv1.TokenReview{Status: authnv1.TokenReviewStatus{Authenticated: true,
+			User: authnv1.UserInfo{Username: "oidc:alice", Groups: []string{"oidc:dev"}}}}, nil
+	})
+	kube.PrependReactor("create", "subjectaccessreviews", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("api server unavailable")
+	})
+	out := &lockedBuf{}
+	o := secureOpts()
+	o.OIDC = oidc.Config{IssuerURL: idp.srv.URL, ClientID: "c", RedirectURL: "https://s.example.com/auth/callback", CAFile: ca}
+	o.AuditOut, o.completeSecure = out, true
+	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}}, o, extension.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.oidc.Run(ctx)
+	eventually(t, "discovery", func() bool { ok, _ := a.oidc.Ready(); return ok })
+	sess := signIn(t, a, idp)
+
+	rec := call(a, "GET", "/api/v1/installs", sess, nil)
+	if rec.Code != http.StatusServiceUnavailable || strings.TrimSpace(rec.Body.String()) != `{"error":"authz-unavailable"}` {
+		t.Fatalf("/api/v1/installs = %d %s, want 503 authz-unavailable", rec.Code, rec.Body.String())
+	}
+	done, stop := context.WithCancel(context.Background())
+	stop()
+	a.Audit.Run(done) // drains the queued records
+	var line string
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.Contains(l, `"action":"authz-unavailable"`) {
+			line = l
+		}
+	}
+	for _, want := range []string{`"level":"security"`, `"outcome":"failure"`, `"reason":"full-read-failed"`, `"username":"oidc:alice"`,
+		`"subject":"alice-sub"`, `"session":"`, `"route":"/api/v1/installs"`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("audit record lacks %s: %q", want, line)
+		}
+	}
+}
+
+// signIn completes a login at idp and returns the session cookie.
+func signIn(t *testing.T, a *App, idp *signInIdP) []*http.Cookie {
+	t.Helper()
+	login := call(a, "GET", "/auth/login?return=/", nil, nil)
+	loc, _ := url.Parse(login.Header().Get("Location"))
+	idp.mu.Lock()
+	idp.nonce = loc.Query().Get("nonce")
+	idp.mu.Unlock()
+	cb := call(a, "GET", "/auth/callback?code=x&state="+url.QueryEscape(loc.Query().Get("state")), login.Result().Cookies(), nil)
+	for _, c := range cb.Result().Cookies() {
+		if c.Name == "snellius_session" {
+			return []*http.Cookie{c}
+		}
+	}
+	t.Fatalf("no session cookie: %d %v", cb.Code, cb.Result().Cookies())
+	return nil
+}
+
+// The authz series are on the probe listener's /metrics in secure mode.
+func TestAuthzMetricsOnProbe(t *testing.T) {
+	dyn, kube := testutil.Clients(t)
+	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}}, secureOpts(), extension.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ls, served := startServe(t, a, ctx)
+	code, body := getBody(t, "http://"+ls.probe.Addr().String()+"/metrics")
+	for _, name := range []string{"snellius_authz_checks_total", "snellius_authz_check_seconds_total", "snellius_authz_cache_total", "snellius_authz_identities"} {
+		if code != 200 || !strings.Contains(body, "# TYPE "+name+" ") {
+			t.Errorf("probe /metrics lacks %s: %d\n%s", name, code, body)
+		}
+	}
+	cancel()
+	if err := testutil.Recv(t, served, "serve to return"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The full-read kinds drop a watched kind the catalog no longer serves, and
+// their key changes with the catalog's.
+func TestSARKindsKeyFollowsCatalog(t *testing.T) {
+	cat := kinds.Catalog{}
+	k := newSARKinds(testutil.ServedUpstream(), Diagnostics{NoEvents: true}, func() kinds.Catalog { return cat })
+	has := func(all []sar.Kind, res string) bool {
+		return slices.ContainsFunc(all, func(x sar.Kind) bool { return x.Resource == res })
+	}
+	all, key := k.All()
+	if !has(all, "httproutes") || !has(all, "services") || has(all, "events") {
+		t.Fatalf("unlisted catalog: %v", all)
+	}
+	var served []schema.GroupKind
+	for _, s := range testutil.ServedUpstream() {
+		if s.Kind != "TCPRoute" {
+			served = append(served, schema.GroupKind{Group: s.Group, Kind: s.Kind})
+		}
+	}
+	cat = kinds.NewCatalog(served, nil)
+	all2, key2 := k.All()
+	if key2 == key || key2 != cat.Key() || has(all2, "tcproutes") || len(all2) != len(all)-1 {
+		t.Fatalf("after TCPRoute left: key %q -> %q, kinds %v", key, key2, all2)
+	}
+	if _, ok := k.Lookup(objects.GatewayAPIGroup, "TCPRoute"); !ok {
+		t.Fatal("Lookup must still map a kind the catalog dropped")
 	}
 }

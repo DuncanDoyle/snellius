@@ -11,7 +11,7 @@ Snellius runs in one of two modes, set with `auth.mode` (default `local`).
   - The issuer and the redirect URL must be https. A redirect on `localhost` or `127.0.0.1` can use http, with `auth.session.cookieSecure: false`.
   - The API server must accept the client ID as an audience, either because the cluster already trusts that client ID or through `audiences` in its structured authentication configuration.
   - Sessions live in memory. The chart runs one replica, and a restart signs everyone out.
-  - The secure-mode ClusterRole gains `create` on `tokenreviews`.
+  - The secure-mode ClusterRole gains `create` on `tokenreviews` and `subjectaccessreviews`.
   - Secrets and tokens never reach the browser or the logs.
 - The ClusterRole never grants Secrets. That is the UI's whole secret-handling guarantee: no other field is redacted, and Deployments and other objects are shown as stored.
 
@@ -60,6 +60,7 @@ helm install ui ./deploy/helm/snellius -n snellius --create-namespace \
 | `auth.session.idle` | `""` | A session ends after this long without a request. Empty uses `30m`. |
 | `auth.session.absolute` | `""` | A session ends this long after sign-in. Empty uses `8h`. |
 | `auth.session.cookieSecure` | `true` | Mark the session cookie Secure. Set `false` only for plain-HTTP testing. |
+| `auth.authz.cacheTTL` | `""` | How long a permission check is reused, `30s` to `15m`. Empty uses `30s`. It is how long a permission change takes to show in Snellius; a longer TTL means fewer checks. Passed as `--authz-cache-ttl`. |
 | `auth.trustedProxyCIDRs` | `[]` | CIDRs of proxies whose `X-Request-Id` and `X-Forwarded-For` Snellius trusts. Passed as `--trusted-proxy-cidrs`. |
 | `hostAliases` | `[]` | Pod `hostAliases`, for an IdP name that is not in DNS. |
 | `audit.levels` | `[security, agent, reads, summaries]` | Audit levels written to stdout as JSON lines, passed as `--audit-levels`. |

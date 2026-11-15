@@ -61,6 +61,9 @@ spec:
             {{- with include "snellius.sessionValue" (dict "root" . "key" "absolute") }}
             - --session-absolute={{ . }}
             {{- end }}
+            {{- with include "snellius.authzValue" (dict "root" . "key" "cacheTTL") }}
+            - --authz-cache-ttl={{ . }}
+            {{- end }}
             {{- if eq (include "snellius.cookieSecure" .) "false" }}
             - --cookie-secure=false
             {{- end }}

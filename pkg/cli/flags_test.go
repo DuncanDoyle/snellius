@@ -10,6 +10,25 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 )
 
+// The cache TTL defaults to 30 s and is refused outside 30 s to 15 min.
+func TestAuthzCacheTTLFlag(t *testing.T) {
+	_, o, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), nil)
+	if err != nil || o.AuthzCacheTTL != 30*time.Second {
+		t.Fatalf("default %v, %v", o.AuthzCacheTTL, err)
+	}
+	for _, bad := range []string{"29s", "16m"} {
+		if _, _, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), []string{"--authz-cache-ttl=" + bad}); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+	for arg, want := range map[string]time.Duration{"30s": 30 * time.Second, "15m": 15 * time.Minute} {
+		_, o, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), []string{"--authz-cache-ttl=" + arg})
+		if err != nil || o.AuthzCacheTTL != want {
+			t.Errorf("%s: %v, %v", arg, o.AuthzCacheTTL, err)
+		}
+	}
+}
+
 // The defaults are the stock binary's; class-only installs are off unless asked for.
 func TestParseDefaultsAndClassOnly(t *testing.T) {
 	kc, o, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), nil)

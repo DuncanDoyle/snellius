@@ -21,6 +21,10 @@ Either use the same client ID as the cluster, or add it as an extra audience
 in the API server's structured authentication configuration.
 Check that the cluster accepts your token with:
   kubectl auth whoami
+
+Permission checks are reused for {{ include "snellius.authzValue" (dict "root" . "key" "cacheTTL") | default "30s" }} (auth.authz.cacheTTL).
+That is how long a revoked permission can stay visible in Snellius;
+a longer TTL trades that freshness for fewer checks on the API server.
 {{- if .Values.httpRoute.enabled }}
 It is exposed through an HTTPRoute.
 {{- end }}

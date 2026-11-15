@@ -12,6 +12,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/app"
 	"github.com/DuncanDoyle/snellius/pkg/audit"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
+	"github.com/DuncanDoyle/snellius/pkg/auth/sar"
 )
 
 // Parse registers the flags on fs and parses args. It returns the kubeconfig
@@ -31,6 +32,7 @@ func Parse(fs *flag.FlagSet, args []string) (kubeconfig string, o app.Options, e
 	cookieSecure := fs.Bool("cookie-secure", true, "secure mode: mark sign-in cookies Secure; false only for plain-HTTP testing")
 	fs.DurationVar(&o.SessionIdle, "session-idle", 30*time.Minute, "secure mode: a session ends after this long without a request")
 	fs.DurationVar(&o.SessionAbsolute, "session-absolute", 8*time.Hour, "secure mode: a session ends this long after sign-in")
+	fs.DurationVar(&o.AuthzCacheTTL, "authz-cache-ttl", sar.DefaultTTL, "secure mode: how long a permission check is reused, 30s to 15m; a revoked permission can stay visible this long")
 	proxies := fs.String("trusted-proxy-cidrs", "", "comma-separated CIDRs of proxies whose X-Request-Id and X-Forwarded-For are trusted")
 	scopes := fs.String("oidc-scopes", strings.Join(oidc.DefaultScopes, ","), "secure mode: comma-separated OIDC scopes")
 	allowedHosts := fs.String("allowed-hosts", "", "comma-separated extra Host names local mode serves (any port)")
@@ -55,6 +57,9 @@ func Parse(fs *flag.FlagSet, args []string) (kubeconfig string, o app.Options, e
 	if o.SessionIdle <= 0 || o.SessionAbsolute <= 0 {
 		return "", app.Options{}, fmt.Errorf("--session-idle (%v) and --session-absolute (%v) must be positive", o.SessionIdle, o.SessionAbsolute)
 	}
+	if o.AuthzCacheTTL < MinAuthzCacheTTL || o.AuthzCacheTTL > MaxAuthzCacheTTL {
+		return "", app.Options{}, fmt.Errorf("--authz-cache-ttl (%v) must be between %v and %v", o.AuthzCacheTTL, MinAuthzCacheTTL, MaxAuthzCacheTTL)
+	}
 	if o.TrustedProxyCIDRs, err = audit.ParseCIDRs(*proxies); err != nil {
 		return "", app.Options{}, err
 	}
@@ -68,6 +73,12 @@ func Parse(fs *flag.FlagSet, args []string) (kubeconfig string, o app.Options, e
 	o.Diagnostics.NoEvents, o.Diagnostics.NoCRDs, o.Diagnostics.NoProxyStats, o.Diagnostics.NoEndpoints = !events, !crds, !proxyStats, !endpoints
 	return kubeconfig, o, nil
 }
+
+// The --authz-cache-ttl range (design §6.2).
+const (
+	MinAuthzCacheTTL = 30 * time.Second
+	MaxAuthzCacheTTL = 15 * time.Minute
+)
 
 // splitList splits a comma list, trimming blanks.
 func splitList(s string) []string {

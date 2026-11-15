@@ -108,6 +108,7 @@ Notes:
 
 - **HTTPS everywhere.** The browser reaches Snellius over https, and the issuer and its endpoints use https. The one exception is a redirect URL on `localhost` or `127.0.0.1`, which can use http for testing. Then also set `auth.session.cookieSecure=false`.
 - **Sessions live in memory.** The chart runs one replica. A restart signs everyone out. A session ends after 30 minutes without a request or 8 hours after sign-in (`auth.session.idle` and `auth.session.absolute`). Snellius keeps at most 5,000 sessions. It checks each user's identity again at least every 15 minutes.
+- **Permission checks.** Snellius checks each user's access with SubjectAccessReview and reuses each answer for 30 seconds (`auth.authz.cacheTTL`, `30s` to `15m`). That is how long a permission change takes to show in Snellius; a longer TTL means fewer checks on the API server.
 - **Sign-out.** The Sign out menu item ends the session and sends the browser to the IdP's end-session endpoint, if the IdP publishes one. Snellius sends `client_id` and a `post_logout_redirect_uri` that is the app root. It sends no ID token hint.
 - **Sign-in errors.** A failed sign-in lands on `/signin-failed` with the reason `unauthenticated` (the API server does not accept the token, for example because it does not accept the client ID as an audience) or `invalid` (the login attempt has no open transaction or a wrong state, the code exchange or ID token check fails, or the token review itself fails).
 - **Routes.** Secure mode serves `/auth/login`, `/auth/callback`, `/auth/me` and `POST /auth/logout`. `/auth/status` reports the mode and whether sign-in is ready. Local mode serves only `/auth/status`.
@@ -378,6 +379,10 @@ Saved theme choices carry over. Finding codes keep the `KGWUI-` prefix, so API v
   - New routes in secure mode: `/auth/login`, `/auth/callback`, `/auth/me`, `POST /auth/logout` and `/signin-failed`. `/auth/status` exists in both modes.
   - The secure-mode ClusterRole gains `create` on `tokenreviews`.
   - Sessions live in memory; the chart keeps one replica. See [Secure mode](#secure-mode).
+- **Permission checks (7.3).**
+  - New flag `--authz-cache-ttl` (default `30s`, `30s` to `15m`) and chart value `auth.authz.cacheTTL`. It is how long a permission change takes to show in Snellius; a longer TTL means fewer checks.
+  - The secure-mode ClusterRole gains `create` on `subjectaccessreviews`.
+  - New metrics: `snellius_authz_checks_total{verb,outcome}`, `snellius_authz_check_seconds_total`, `snellius_authz_cache_total{result}` and `snellius_authz_identities`.
 - **Chart.**
   - New values `auth.mode`, `auth.allowedHosts` and `audit.levels`.
   - In local mode the pod gets the annotation `sidecar.istio.io/inject: "false"` and the label `istio.io/dataplane-mode: none`.
