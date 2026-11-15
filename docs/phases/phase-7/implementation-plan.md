@@ -27,6 +27,7 @@
 3. Local mode reachable from anything other than a loopback `Host` through port-forward. Tested in 7.1 (unit) and e2e.
 4. Sign-in accepting a token meant for another audience, a replayed callback or a stale identity. Tested in 7.2.
 5. Legacy `health` changing for a full-read viewer. Tested in 7.5 with the compatibility matrix.
+6. A cached permission decision served to another identity, or after its TTL (a cache or merge key that misses part of the identity, an expiry that moves). Tested in 7.3 with a fake clock.
 
 ---
 
@@ -228,11 +229,110 @@ Install surface:
 
 ## Sub-phase 7.3 — Authoriser (data still gated)
 
-1. `pkg/auth/sar`: `SARAuthorizer` implementing `api.Authorizer` and `api.ErrAuthorizer`; list-then-get; cluster-scoped kinds; kinds registry mapping; outcome table (design §6.3); per-identity LRU (10,000), TTL from `--authz-cache-ttl` (default 30 s, 30 s–15 min, chart `auth.authz.cacheTTL`) anchored at SAR start and never extended; merged concurrent checks; global identity bound 2,000 (D-099).
-2. Full-read fast path: `list` on every served kind cluster-wide → allow-all projection; a cached decision with the same TTL, from its earliest check, rechecked lazily on the next request (D-099).
-3. `pkg/api`: `ErrAuthorizer` in `view`; buffered response wrapper; per-request uncached-SAR cap 500 → `503 authz-unavailable`; 404 paths through the wrapper.
-4. ClusterRole gains `create subjectaccessreviews` in secure mode.
-5. Bench: denied-list workload on the large fixture, report-only.
+The data gate stays closed: `app.Build` keeps `WithSecureMode(false)`. 7.3 first closes the 7.2 session-ended race, then adds the SubjectAccessReview authoriser (D-091 as amended by D-099) and the response-commit protocol. Tests reach the authoriser below the gate by building the handler with `WithSecureMode(true)`, the value 7.5 ships; no production path sets it.
+
+### Task 16: `session-ended` for every request with the ended cookie
+
+Ruling R20 (7.2 review finding 1). Today `takeNotice` (`refresh.go:65`) deletes the notice on first read and `fromRequest` (`middleware.go`) clears the cookie, so concurrent requests get `sign-in-required` and the browser can restart sign-in by itself.
+
+**Files:** `pkg/auth/session/refresh.go`, `middleware.go`, `store.go`; web `auth/authState.ts`, `api/client.ts`; tests `pkg/auth/session/middleware_test.go`, `store_test.go`, `refresh_test.go`, web `auth/client401.test.tsx`, `auth/fixround.test.tsx`.
+
+**Interfaces:**
+- An end notice is no longer consumed: every `/api/` and `/auth/me` request carrying the ended session's cookie gets `401 {"error":"session-ended","login":…}` until a new sign-in replaces the cookie or the notice expires.
+- A `session-ended` response no longer clears the cookie; `sign-in-required` still does. The cookie maps to no session, so keeping it grants nothing.
+- Bound (the existing one, now stated): a notice lives for `--session-absolute` (8 h) after the end, at most 5,000 notices (the session bound); at the bound the oldest is forgotten, and that cookie then hears `sign-in-required`.
+- `Complete` and `Logout` delete the notice for the cookie they replace or clear.
+- Web: `requestsSettled`, `trackAuthRequest`, `SETTLE_MAX_MS` and the in-flight count go. With the server consistent, a `sign-in-required` means the browser holds no ended session, so waiting adds 1 s and protects nothing. The sticky `ended` state stays: it covers a notice forgotten at the bound mid-burst.
+
+- [ ] Regression first, at the HTTP boundary: change the last assertion of `TestMiddleware` (`middleware_test.go:126`) to expect `session-ended` on the second request; see it fail.
+- [ ] Tests (injected clock): `TestEndedSessionAnswersEveryRequest` (idle expiry, then 20 concurrent `/api/` requests and 5 sequential ones with the cookie: all `session-ended`, none sets a clearing cookie; `-race`); the same for absolute expiry and refresh failure in `refresh_test.go`; `TestEndedNoticeClearedBySignIn` (sign-in with the old cookie: new session works, the old value hears `sign-in-required`); `TestLogoutClearsEndedNotice`; `TestEndedNoticeExpires` (after 8 h: `sign-in-required`, cookie cleared); `TestEndedNoticeBound` (notice 5,001 forgets the oldest). Update the `wantMe` sequences in `store_test.go`/`refresh_test.go` that expect `sign-in-required` after the first ended answer.
+- [ ] Web tests with a backend fake that answers like the server (every request with the cookie `session-ended`): concurrent requests show the signed-out page and never navigate; a `sign-in-required` navigates at once (no settle wait); `session-ended` after `sign-in-required` still wins when navigation has not happened. Remove the one-shot fake in `client401.test.tsx:72-120`.
+- [ ] `go test ./pkg/auth/... -race`, web tests, lint; commit.
+
+### Task 17: SAR authoriser and its cache
+
+**Files:** new `pkg/auth/sar/authorizer.go`, `cache.go`, `checker.go`, `identity.go`, `metrics.go`; `pkg/api/authz.go` (`ErrAuthorizer`, `SpendCheck`); tests `pkg/auth/sar/authorizer_test.go`, `cache_test.go`, `checker_test.go`.
+
+**Interfaces:**
+- `pkg/api` (additive): `type ErrAuthorizer interface { AuthorizeErr(r *http.Request, ref objects.Ref) (bool, error) }` (design §6.3); `func SpendCheck(r *http.Request) error` counts one uncached check for r's request and returns `api.ErrCheckLimit` past 500; nil outside a committed request (Task 19 installs the counter).
+- `sar.Attributes{Verb, Group, Resource, Namespace, Name string}`; `sar.Checker` interface `Check(ctx, oidc.Identity, Attributes) (bool, error)`.
+- `sar.KubeChecker` (`NewKubeChecker(kubernetes.Interface)`): creates an `authorization.k8s.io/v1` SubjectAccessReview with `user`, `groups`, `extra`, `uid` and `resourceAttributes`; per-call timeout 10 s, below the 30 s minimum TTL. Outcomes (design §6.3): `allowed: true` → allow; `allowed: false` (with or without `denied`) → deny; non-empty `evaluationError` (even with `allowed: true`), HTTP error or timeout → `sar.ErrCheck` wrapping a fixed category, never a deny. Errors are logged by category, never with the identity's groups.
+- `sar.Kind{Group, Resource string; Namespaced bool}`; `sar.Kinds` interface `Lookup(group, kind string) (Kind, bool)` and `All() (kinds []Kind, key string)` (Task 18 uses `All`).
+- `sar.Options{Checker, Kinds, TTL, Clock clock.WithTicker, Metrics *obs.Registry, IdentityFrom func(context.Context) (oidc.Identity, bool)}`; `IdentityFrom` defaults to `session.IdentityFrom`, tests inject. `sar.New(Options) *Authorizer`; `(*Authorizer).Run(ctx)` sweeps every minute.
+- `AuthorizeErr`: no identity in the context → `sar.ErrNoIdentity`; unmapped kind, or a namespaced kind with an empty namespace → deny without a SAR; else `list` on the resource in the ref's namespace (`""` for cluster-scoped kinds); allowed → allow; denied → `get` on the named object; a `list` error returns the error without the `get`. `Authorize` is `AuthorizeErr` with an error reported through `api.ReportAuthzError` (Task 19) and answered as deny.
+- Cache: key = identity hash × attributes. Identity hash: SHA-256 over a length-prefixed encoding of username, UID, sorted groups and sorted extra (keys and values). An entry holds the decision and `expires = start + TTL`, `start` read before the SAR is sent; a hit never moves `expires`; an expired entry is checked again, not served. Errors are never cached. A result whose `expires` is not after its completion time is discarded as an error.
+- Merged checks: one in-flight SAR per (identity hash, attributes); waiters get its result, anchored at its start, so no waiter sees a decision older than the TTL allows. Identities never share a flight.
+- Each cache miss calls `api.SpendCheck(r)` first (own SAR or merged wait); a hit does not.
+- Bounds: 10,000 entries per identity (LRU), 2,000 identities (least recently used identity dropped); the sweep drops expired entries and empty identities.
+- Metrics on the 7.1 registry: `snellius_authz_checks_total{verb,outcome}` (`allowed|denied|error`), `snellius_authz_check_seconds_total` (SAR wall time; with the count it gives mean latency, as `obs` has no histogram), `snellius_authz_cache_total{result}` (`hit|miss|merged`), gauge `snellius_authz_identities`.
+
+- [ ] `checker_test.go` against a fake API server (`httptest` serving `/apis/authorization.k8s.io/v1/subjectaccessreviews` behind a client-go config, as `tokenreview_test.go`): `TestKubeCheckerRequest` (user, groups, extra, uid, attributes in the body); `TestKubeCheckerOutcomes` (table: allowed; denied; denied with `denied: true`; `evaluationError` with `allowed` false and true; HTTP 500; a handler slower than the timeout).
+- [ ] `authorizer_test.go` (fake `Checker` counting calls, fake clock): `TestListThenGet` (list allowed → no get; list denied → get by name; a `resourceNames`-only grant shows the named object only); `TestClusterScopedKinds` (GatewayClass, Namespace ask with namespace `""`); `TestUnmappedKindDenied` (no SAR sent); `TestListErrorStopsGet`; `TestNoIdentityIsError`; `TestAuthorizeReportsError`.
+- [ ] `cache_test.go`: `TestTTLAnchoredAtStart` (a SAR taking 5 s with TTL 30 s expires 25 s after it returns); `TestNoExtensionPastExpiry` (hits every second do not move expiry; at start + TTL a new SAR goes out); `TestRevokedAfterTTL` (revoke in the fake: allowed until start + TTL, denied after); `TestIdentitiesNeverShare` (identities differing only in groups, extra or UID, and the `("a","bc")`/`("ab","c")` groups pair, each send their own SAR); `TestMergedChecks` (50 goroutines, one identity and key → one SAR; a second identity is not merged; `-race`); `TestMergedWaiterAnchor` (a waiter joining 9 s into a flight gets `expires = start + TTL`); `TestLateResultDiscarded` (a SAR returning after its expiry is an error and not cached); `TestErrorsNotCached`; `TestPerIdentityLRU` (entry 10,001 evicts the least recently used); `TestIdentityBound` (identity 2,001 evicts the least recently used identity); `TestSweep` (fake ticker; expired entries and empty identities go; gauge follows); `TestSpendOnMissOnly`; `TestMetrics` (exposition through `obs.Registry.ServeHTTP`).
+- [ ] `go test ./pkg/auth/sar/... ./pkg/api/... -race`; commit.
+
+### Task 18: Full-read fast path
+
+**Files:** new `pkg/auth/sar/fullread.go`; `pkg/api/authz.go` (`FullReader`); tests `pkg/auth/sar/fullread_test.go`.
+
+**Interfaces:**
+- `pkg/api` (additive): `type FullReader interface { FullRead(r *http.Request) (bool, error) }`.
+- `(*Authorizer).FullRead`: `list` with namespace `""` on every kind of `Kinds.All()`, at most 8 SARs at a time, each through the Task 17 cache. True only when all are allowed; it stops at the first denial. An error in any one returns the error, never false and never true (the request fails, Task 19).
+- The result (true or false) is cached per identity hash and kinds `key`, with `expires = earliest constituent start + TTL` (D-099); never extended; rechecked only when the identity next calls `FullRead` (no background SARs). A changed kinds `key` (a CRD served or removed) is a miss.
+- Concurrent `FullRead` calls for one identity and key share one evaluation.
+- `snellius_authz_cache_total{result}` counts fast-path lookups under `fullread-hit|fullread-miss`.
+
+- [ ] Tests (fake `Checker`, fake clock): `TestFullReadAllowed` (N SARs, then 0 within the TTL); `TestFullReadExpiresFromEarliest` (constituents start at t, t+1 s … t+3 s; the decision expires at t + TTL); `TestFullReadLazy` (advancing the clock and ticker past expiry sends nothing until the next call); `TestFullReadDeniedStopsEarly` (false, cached with the same rule); `TestFullReadErrorFails` (error, not cached; the next call asks again); `TestFullReadRevoked` (cluster `list` revoked: true until expiry, false after); `TestFullReadKindsChange`; `TestFullReadMerged` (`-race`).
+- [ ] Commit.
+
+### Task 19: Fail closed in `pkg/api` (response-commit protocol)
+
+**Files:** new `pkg/api/commit.go`; `pkg/api/visible.go`, `handlers.go`, `ext.go` (`Visible`), `authz.go`; web `api/client.ts`, `states/PageState.tsx`, `copy/`; tests new `pkg/api/commit_test.go`, new `pkg/auth/sar/handler_test.go` (package `sar_test`, the real authoriser behind a real handler), web alongside.
+
+**Interfaces:**
+- `NewHandler` with `WithSecureMode(true)` and an `ErrAuthorizer` wraps every `/api/` route, extension mounts included, in the commit wrapper. Local mode and the closed gate are unchanged (no buffer, no wrapper).
+- Wrapper order: (1) if the authoriser is a `FullReader`, call it; an error → `503`; true → the request runs unbuffered with an allow-all view, the precomputed projection as `AllowAll` uses (`authz.go:37`); (2) else the handler writes into a buffer (status, headers, body); (3) after it returns, a recorded authorisation error discards the buffer and answers `503 {"error":"authz-unavailable"}` with `Cache-Control: no-store`; otherwise the buffer is written.
+- Per-request state in the context: the uncached-check count (`SpendCheck`, limit 500, `api.ErrCheckLimit`), the first error, and the full-read mark. `func ReportAuthzError(r *http.Request, err error)` records an error (no-op outside the wrapper).
+- `view.can`, and `Visible` for extensions, use `AuthorizeErr` when present: an error is recorded and answered as deny, and later checks in the request return deny without asking. So a denial during an outage never reaches the client as a 404 (`backends.go:135`, `:143`, `details.go:143`, `:439`, `:491`, `:974`, `:978`, `findings.go:291`, `handlers.go:409`): the wrapper turns it into the 503.
+- `WithAuthzAudit(func(r *http.Request, reason string))` handler option; reasons `check-failed`, `check-limit`, `full-read-failed`. Task 20 wires it to an audit `security` record `authz-unavailable`.
+- Web (design §11): a `503` with `authz-unavailable` shows a `PageState` "Can't check your permissions right now" (wording picker; controller supplies the copy) and keeps polling. It is unreachable in production until 7.5 opens the gate.
+
+- [ ] `commit_test.go` (fake `ErrAuthorizer` and `FullReader`, handler built with `WithSecureMode(true)`): `TestCommitOutageNeverPartial` (an error on the Nth ref of each list route: exact 503 body, nothing else written); `TestCommitOutageNever404` (each 404-on-denial route above: error → 503, deny → 404); `TestCommitCheckLimit` (500 uncached checks → 200; 501 → 503); `TestCommitFullReadSkipsChecks` (no `AuthorizeErr` calls; body byte-equal to the `AllowAll` handler's); `TestCommitFullReadError` (503; the route handler never runs); `TestCommitExtMount` (an extension calling `Visible` with an erroring authoriser, and one that writes then has `Authorize` report an error → 503, no partial body); `TestCommitAuditReasons`; `TestGateStillAuthoritative` (`WithSecureMode(false)` with the authoriser: `503 secure-mode-incomplete`, no checks made).
+- [ ] `handler_test.go` (real `sar.Authorizer`, fake `Checker`, `IdentityFrom` injected, scale fixture): `TestTwoViewersOverSAR` (a namespace `list` grant and a `resourceNames`-only grant see different route lists, each only its own); `TestSARFailsMidRequest` (the third SAR errors → 503); `TestEvaluationErrorIs503`; `TestRevokedAfterTTLAtHandler` (fake clock: visible until start + TTL, gone after); `TestFullReaderMatchesAllowAll` (routes, gateways, backends byte-equal to `AllowAll`; zero per-object SARs).
+- [ ] Web test: the `authz-unavailable` page from a real-shaped 503 response.
+- [ ] Commit.
+
+### Task 20: Wiring, flag, chart and RBAC
+
+**Files:** `pkg/cli/flags.go`, `pkg/app/app.go`, `pkg/app/mode.go`, new `pkg/app/kinds_sar.go`; `deploy/helm/snellius/values.yaml`, `templates/deployment.yaml`, `templates/clusterrole.yaml`, `templates/_helpers.tpl`, `templates/NOTES.txt`, `deploy/helm/snellius/README.md`, `README.md`, `docs/documentation-notes.md`; tests `pkg/cli/flags_test.go`, `pkg/app/app_test.go`, `deploy/helm/chart_test.go`.
+
+Install surface (stated, per the team rule):
+- **New flag:** `--authz-cache-ttl` (default `30s`; outside 30 s–15 min is a startup error; ignored in local mode like the other secure-mode flags) → `app.Options.AuthzCacheTTL`.
+- **New value:** `auth.authz.cacheTTL` (default `""`, the binary's 30 s) → `--authz-cache-ttl`, rendered in secure mode only, read nil-safe through a `snellius.authzValue` helper like `snellius.sessionValue`, so `helm upgrade --reuse-values` without the key renders.
+- **Changed RBAC:** the ClusterRole gains `create` on `authorization.k8s.io/subjectaccessreviews` in secure mode only, in the block with `tokenreviews`; its comment says these are the only write verbs.
+- Nothing else changes: no new port, env or mount.
+
+**Interfaces:**
+- `app.Build` in secure mode: when the registry sets no authoriser (`noAuthorizer`), it wires `sar.New` with `sar.NewKubeChecker(c.Kube)`, the TTL, the 7.1 metrics registry and the app clock, and starts its sweeper in `Start`. A registry authoriser is kept, as `DenyAll` is today. `WithSecureMode(false)` stays.
+- Extension `Deps.Authorizer` gets the same authoriser as the handler. Today `app.go:314` passes `reg.Authorizer` before the secure-mode substitution at `:343`, so extensions would see `AllowAll` in secure mode.
+- `sar.Kinds` from the watched served kinds plus a fixed core table of every non-CRD kind the cache watches (Service, EndpointSlice, Pod, Deployment, Namespace, and the rest found in `pkg/cache`); the kinds `key` follows the served-kinds monitor's catalog key.
+- `WithAuthzAudit` → `audit.Record{Level: security, Action: "authz-unavailable", Outcome: "failure", Reason: <reason>}` with the request's session and kube identity.
+- NOTES and README: the TTL as the bound on how long a revoked permission stays visible, and a longer TTL as the operator's trade of freshness for load (D-099).
+
+- [ ] Tests: `TestAuthzCacheTTLFlag` (default 30 s; `29s` and `16m` refused; `15m` accepted); `TestSecureModeWiresSARBehindGate` (`Build` in secure mode: the authoriser is `*sar.Authorizer`, `/api/` still answers `503 secure-mode-incomplete`); `TestSecureModeDepsShareAuthorizer`; `TestRegistryAuthorizerKept`; `TestSARKindsCoverModelRefs` (every group and kind of every ref in the Large fixture's index maps, so no kind is denied by a missing entry); `TestAuthzUnavailableAudited`; `TestAuthzMetricsOnProbe` (the series on the probe listener's `/metrics`).
+- [ ] Chart tests: `TestAuthzCacheTTLValue` (secure mode renders the flag; local mode does not); `TestRendersWithoutAuthzValues` (secure set plus `auth.authz=null`); `TestReviewRulesOnlyInSecureMode` (extends `TestTokenReviewRuleOnlyInSecureMode` with `subjectaccessreviews`).
+- [ ] Commit.
+
+### Task 21: Bench: denied-list workload
+
+**Files:** new `pkg/api/export_bench_test.go` (`//go:build bench`, package `api`: exports a Large-tier handler builder that takes handler options), new `pkg/api/sar_bench_test.go` (`//go:build bench`, package `api_test`, so it can import `pkg/auth/sar` without a cycle); `Makefile` only if the new test name does not match `make bench`'s `-run 'Budget'`.
+
+- `TestBudgetSARDeniedList`, report-only (logs, never fails): the Large fixture behind `WithSecureMode(true)` and a real `sar.Authorizer`; a fake `Checker` that denies every `list` and allows `get` on the objects of one namespace in ten (`resourceNames` grants only). Per page (`/routes`, `/gateways`, `/backends`, `/paths`, deepest route detail, backend detail): SARs per request cold and warm (inside the TTL), whether a cold request hits the 500 cap (503), and p50/p95 latency with fake SAR latency 0 and 2 ms.
+- The same run with namespace-level `list` grants reports SARs per user per minute at a 5 s poll, against the design's typical target of 50 (§6.4).
+- Memory: heap per cached decision with one identity filled to 10,000 entries, and the projection at 2,000 identities, reported against D-057.
+- The existing bench budgets stay green: `make bench` over `pkg/api` with the export file present.
+
+- [ ] Run; paste the numbers into the 7.3 complete record; commit.
 
 ## Sub-phase 7.4 — Visibility everywhere (data still gated)
 
