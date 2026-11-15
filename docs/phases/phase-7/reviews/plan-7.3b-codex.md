@@ -63,3 +63,21 @@ No files edited; no tests run.
 | 6 | Limiter admission vs detached SAR contexts | accept | Task 26: one admission point in the flight leader; queued vs running cancellation; release on every exit; lifecycle tests |
 | 7 | Accounting misses map capacity | accept | Task 25: high-water accounting with compaction; full-read entries in the global LRU; retained-heap churn tests; sessions in the 64 MiB run |
 | 8 | Contradictory tests | accept | Task 23: YAML for the no-probe test; renewed and revoked get at expiry. Task 26: `TestBatchResolve` checks results, bounds, cancellation, discard |
+## Re-review (Codex, scoped)
+
+All eight findings are **ADDRESSED** in the revised plan; implementation remains unverified. Evidence is in [implementation-plan.md](../implementation-plan.md):
+
+| # | Status | File:line evidence |
+|---|---|---|
+| 1 | ADDRESSED | `implementation-plan.md:363,367` — separate named/population memos and pools; both call orders tested. |
+| 2 | ADDRESSED | `implementation-plan.md:392,394` — reset state per attempt, retain check count, repeat session → error → expiry validation; rebuild regressions covered. |
+| 3 | ADDRESSED | `implementation-plan.md:364,368` — named backend subject admitted separately; discovered populations retain list checks; detail/link tests added. |
+| 4 | ADDRESSED | `implementation-plan.md:423,428` — prefetched denial permits named fallback with scanning enabled; equality tested with flag off/on. |
+| 5 | ADDRESSED | `implementation-plan.md:424,428` — roots admitted before dependency prefetch; scope applied first; hidden-root error/cap cases covered. |
+| 6 | ADDRESSED | `implementation-plan.md:421,426–427` — single admission boundary, queued/running cancellation distinction, cleanup and mixed-traffic tests. |
+| 7 | ADDRESSED | `implementation-plan.md:402–409,453` — backing-capacity accounting and compaction, full-read LRU eviction, retained-heap churn checks and representative sessions. |
+| 8 | ADDRESSED | `implementation-plan.md:382,427` — named-only YAML test, renewed/revoked expiry cases, behavioral batch tests. |
+
+**New P1/P2 findings: none identified.** The compaction policy, two-attempt validation loop, roots-first prefetch and single limiter admission point introduce no additional demonstrated P1/P2 defect in this scoped diff.
+
+No files edited; no tests run.
