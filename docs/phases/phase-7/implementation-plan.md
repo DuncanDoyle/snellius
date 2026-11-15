@@ -445,7 +445,7 @@ Install surface: **new flags** (secure mode only) `--authz-max-in-flight` (defau
 
 - `TestBudgetSARDeniedList` rerun, report-only, with the D-100 defaults (allow 60 s, deny 5 min, list enumeration, 8 workers, global limits) for a viewer allowed 10 of the Large fixture's 100 namespaces. Targets, stated in the report next to each number:
   1. `/routes`: at most 400 SARs cold; at most 150 SARs per minute warm at a 5 s poll; every poll 200 without contention.
-  2. `/gateways`, `/listenersets`, `/backends`, `/paths`: at or below `/routes` on each measure.
+  2. `/gateways`, `/listenersets`, `/backends`, `/paths`: at most 400 SARs cold each, and every poll 200 without contention (D-100 item 7, amended).
   3. Details: cold and warm SARs reported.
 - Also with `--authz-named-get-scan` on: SARs and whether `/routes` hits the cap (expected; reported).
 - Latency p50/p95 at fake SAR latency 0 and 2 ms, cold and warm.
