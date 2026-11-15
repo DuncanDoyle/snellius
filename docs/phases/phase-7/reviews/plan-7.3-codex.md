@@ -65,3 +65,11 @@ No files were edited. Tests were not run. The proposed external `sar_test`/`api_
 | 4 | 503 classifiers not migrated | accept | Task 19: `ApiError.code`, shared `apiErrorState`; nine callers migrated; list and detail page tests with recovery |
 | 5 | In-flight requests escape session end | accept | Task 19: commit check `StillSignedIn` answers `session-ended`; barrier test |
 | 6 | No list-only permission check | accept | Task 17: `ListAuthorizer.CanList`, shared cache and cap; named-get test |
+## Re-review (Codex, scoped, 9e38468..7d03c03)
+
+Findings 1–4 and 6 addressed. Finding 5 partial: a full-read error returned 503 before the session commit check. New P2: logout cleared the "had a session" flag, so a late `sign-in-required` could restart sign-in.
+
+| Item | Decision | Change |
+|---|---|---|
+| 5 (partial) | accept | Wrapper: a full-read error is recorded and the commit check runs first, so an ended session answers 401 before any 503; barrier test with a blocked full-read SAR |
+| New P2 logout | accept | "Sign out" sets a signed-out state that suppresses automatic redirects until "Sign in again"; deterministic test of a delayed `sign-in-required` after logout |
