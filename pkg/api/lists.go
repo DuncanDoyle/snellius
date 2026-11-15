@@ -99,7 +99,7 @@ func (ls *list) routeRow(id explore.RowID) RouteRow {
 	for _, p := range r.ParentRoutes {
 		out.ParentRoutes = append(out.ParentRoutes, ls.l.linked(p))
 	}
-	if !ls.v.all {
+	if !ls.v.readsAll() {
 		out.Children = ls.v.recount(ls.ix.ByParentRoute[r.Ref], ls.routeRef)
 	}
 	if len(ls.q.Backends) > 0 {
@@ -206,7 +206,7 @@ func (h *handler) gateways(w http.ResponseWriter, r *http.Request) {
 // notAccepted counts g's not-accepted routes the caller may view, through
 // visible ListenerSets only (rule 3, rule 5).
 func (ls *list) notAccepted(g *explore.GatewayRow) int {
-	if ls.v.all {
+	if ls.v.readsAll() {
 		return len(g.NotAccepted)
 	}
 	n := 0

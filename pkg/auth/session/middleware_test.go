@@ -16,6 +16,7 @@ import (
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/engine"
+	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/platform"
 )
 
@@ -293,14 +294,19 @@ func TestSessionEndsInFlight(t *testing.T) {
 				f := newFixture(t, nil)
 				c := f.signIn(f.result("oidc:dev"))
 				b := barrier{entered: make(chan struct{}, n), release: make(chan struct{})}
-				ext := api.ExtMount{Name: "slow", Pattern: "GET /data", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-					b.wait()
-					api.WriteJSON(w, "buffered")
-				})}
 				var authz api.Authorizer = api.AllowAll{}
 				if inFullRead {
 					authz = blockedFullRead{b: b}
 				}
+				// With a full read the handler waits in it, as its first population question.
+				ext := api.ExtMount{Name: "slow", Pattern: "GET /data", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if inFullRead {
+						api.Visible(r, authz, []objects.Ref{{Kind: "HTTPRoute", Namespace: "shop", Name: "a"}}, func(ref objects.Ref) objects.Ref { return ref })
+					} else {
+						b.wait()
+					}
+					api.WriteJSON(w, "buffered")
+				})}
 				h := f.store.Middleware(api.NewHandler(noModel{}, fstest.MapFS{}, authz, api.WithSecureMode(true), api.WithExtMounts(ext),
 					api.WithCommitCheck(f.store.StillSignedIn)))
 				recs := make([]*httptest.ResponseRecorder, n)

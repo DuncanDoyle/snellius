@@ -1,5 +1,5 @@
 // Package sar authorises each signed-in user's view by asking the API server
-// SubjectAccessReviews, through a per-identity cache (design §6, D-091, D-099).
+// SubjectAccessReviews, through a per-identity cache (design §6, D-091, D-100).
 package sar
 
 import (
@@ -36,9 +36,9 @@ type Kinds interface {
 type Options struct {
 	Checker Checker
 	Kinds   Kinds
-	// TTL bounds every decision from the start of its SAR; zero means DefaultTTL.
-	TTL   time.Duration
-	Clock clock.WithTicker
+	// AllowTTL bounds an allow from the start of its SAR; zero means DefaultAllowTTL.
+	AllowTTL time.Duration
+	Clock    clock.WithTicker
 	// Metrics receives the authz series; nil keeps them unexported.
 	Metrics *obs.Registry
 	// IdentityFrom returns the signed-in identity; nil means session.IdentityFrom.
@@ -47,8 +47,13 @@ type Options struct {
 	NamedGetScan bool
 }
 
-// DefaultTTL is the decision lifetime when Options.TTL is zero (design §6.2).
-const DefaultTTL = 30 * time.Second
+// Decision lifetimes from the start of the SAR (design §6.2, D-100).
+const (
+	// DefaultAllowTTL is an allow's lifetime when Options.AllowTTL is zero.
+	DefaultAllowTTL = 60 * time.Second
+	// DenyTTL is a deny's lifetime: a stale deny only hides.
+	DenyTTL = 5 * time.Minute
+)
 
 // sweepEvery is how often Run drops expired decisions.
 const sweepEvery = time.Minute
@@ -85,8 +90,8 @@ var (
 
 // New returns an Authorizer; call Run to sweep its cache.
 func New(o Options) *Authorizer {
-	if o.TTL == 0 {
-		o.TTL = DefaultTTL
+	if o.AllowTTL == 0 {
+		o.AllowTTL = DefaultAllowTTL
 	}
 	if o.Clock == nil {
 		o.Clock = clock.RealClock{}
@@ -100,7 +105,7 @@ func New(o Options) *Authorizer {
 		namedGetScan: o.NamedGetScan,
 		identityFrom: o.IdentityFrom,
 		clock:        o.Clock,
-		cache:        newCache(o.Checker, o.Clock, o.TTL, m),
+		cache:        newCache(o.Checker, o.Clock, o.AllowTTL, m),
 		full:         newFullCache(o.Clock, m),
 		parallel:     fullReadParallel,
 		spend:        api.SpendCheck,

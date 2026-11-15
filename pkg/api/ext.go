@@ -152,7 +152,7 @@ func WriteError(w http.ResponseWriter, code int, msg string) { writeErr(w, code,
 // AllowAll, a full read or a nil a, it makes no calls and returns items, clipped so an append cannot alias it.
 // An ErrAuthorizer's error is recorded for the request and hides the ref; the API then answers 503.
 func Visible[T any](r *http.Request, a Authorizer, items []T, ref func(T) objects.Ref) (visible []T, hidden int) {
-	if a == nil || allowsAll(a) || fullRead(r) {
+	if a == nil || allowsAll(a) || fullRead(r, a) {
 		return slices.Clip(items), 0
 	}
 	v := &view{a: a, r: r, seen: map[objects.Ref]bool{}}

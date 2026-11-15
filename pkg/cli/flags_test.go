@@ -10,12 +10,16 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 )
 
-// The cache TTL defaults to 30 s and is refused outside 30 s to 15 min.
-func TestAuthzCacheTTLFlag(t *testing.T) {
+// The allow TTL defaults to 60 s (D-100).
+func TestAuthzCacheTTLDefault60s(t *testing.T) {
 	_, o, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), nil)
-	if err != nil || o.AuthzCacheTTL != 30*time.Second {
+	if err != nil || o.AuthzCacheTTL != 60*time.Second {
 		t.Fatalf("default %v, %v", o.AuthzCacheTTL, err)
 	}
+}
+
+// The cache TTL is refused outside 30 s to 15 min.
+func TestAuthzCacheTTLFlag(t *testing.T) {
 	for _, bad := range []string{"29s", "16m"} {
 		if _, _, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), []string{"--authz-cache-ttl=" + bad}); err == nil {
 			t.Errorf("%s accepted", bad)

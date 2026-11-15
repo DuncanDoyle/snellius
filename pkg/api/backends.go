@@ -31,7 +31,7 @@ func (h *handler) backendsInput(p *engine.Published, i *engine.InstallModel, v *
 	if h.consumersFor != nil {
 		in.Consumers = h.consumersFor(i.Resolved.Install, i.Owned)
 	}
-	if !v.all {
+	if !v.readsAll() {
 		in.Visible = func(d explore.DepSet) bool { return v.allowTable(t, d) }
 		in.Can = v.can
 	}
@@ -42,7 +42,7 @@ func (h *handler) backendsInput(p *engine.Published, i *engine.InstallModel, v *
 // canNamed: path rows to ref check it by name, every other dependency stays a population check.
 func withSubject(in paths.BackendsInput, v *view, t *paths.Topology, ref objects.Ref) paths.BackendsInput {
 	in.Subject = &ref
-	if !v.all {
+	if !v.readsAll() {
 		in.Visible = func(d explore.DepSet) bool { return v.allowTableNamed(t, d, &ref) }
 	}
 	return in

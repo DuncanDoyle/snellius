@@ -34,34 +34,23 @@ func WithAuthzAudit(audit func(r *http.Request, reason string)) HandlerOption {
 // commit is the response-commit protocol of secure mode (design §6.3): every
 // /api/ response is built in a buffer and written only when no authorisation
 // error was recorded and the commit check passes. Other paths pass through.
-func commit(next http.Handler, a Authorizer, check func(http.ResponseWriter, *http.Request) bool, audit func(*http.Request, string)) http.Handler {
-	full, _ := a.(FullReader)
+// The full read is asked by the view, only when a population needs it (D-100).
+func commit(next http.Handler, check func(http.ResponseWriter, *http.Request) bool, audit func(*http.Request, string)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/api/") {
 			next.ServeHTTP(w, r)
 			return
 		}
 		r, st := withAuthzState(r)
-		fullFailed := false
-		if full != nil {
-			all, err := full.FullRead(r)
-			if err != nil {
-				ReportAuthzError(r, err)
-				fullFailed = true
-			}
-			st.full = all && err == nil
-		}
 		buf := &bufferedResponse{header: http.Header{}}
-		if !fullFailed {
-			next.ServeHTTP(buf, r)
-		}
+		next.ServeHTTP(buf, r)
 		// An ended session answers 401 even when an authorisation error was recorded.
 		if check != nil && !check(w, r) {
 			return
 		}
 		if err := st.failed(); err != nil {
 			if audit != nil {
-				audit(r, auditReason(err, fullFailed))
+				audit(r, auditReason(err, st.fullReadFailed()))
 			}
 			w.Header().Set("Cache-Control", "no-store")
 			writeErr(w, http.StatusServiceUnavailable, authzUnavailable)

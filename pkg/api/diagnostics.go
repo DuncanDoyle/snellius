@@ -328,7 +328,7 @@ func (h *handler) groupRow(v *view, l linker, g *diagnose.Group, fs []health.Fin
 		row.Affected = append(row.Affected, l.linked(r))
 	}
 	since := g.Since
-	if !v.all {
+	if !v.readsAll() {
 		since = nil
 		for _, k := range g.Members {
 			if s := shownSince(v, &fs[k]); s != nil && (since == nil || s.Before(*since)) {

@@ -19,7 +19,8 @@ const (
 	maxIdentities         = 2_000
 )
 
-// decision is a SAR answer valid until expires, the SAR's start plus the TTL.
+// decision is a SAR answer valid until expires, the SAR's start plus the
+// answer's TTL.
 type decision struct {
 	allowed bool
 	expires time.Time
@@ -51,13 +52,14 @@ type entry struct {
 }
 
 // cache holds decisions per identity and merges identical concurrent checks
-// (design §6.2, D-099). An entry's expiry never moves.
+// (design §6.2, D-100). An allow lives allowTTL, a deny DenyTTL; an entry's
+// expiry never moves.
 type cache struct {
-	checker Checker
-	clock   clock.PassiveClock
-	ttl     time.Duration
-	m       *metrics
-	log     *slog.Logger
+	checker  Checker
+	clock    clock.PassiveClock
+	allowTTL time.Duration
+	m        *metrics
+	log      *slog.Logger
 
 	mu      sync.Mutex
 	ids     map[idHash]*idEntry
@@ -68,11 +70,19 @@ type cache struct {
 	joined, woke func()
 }
 
-func newCache(c Checker, clk clock.PassiveClock, ttl time.Duration, m *metrics) *cache {
+func newCache(c Checker, clk clock.PassiveClock, allowTTL time.Duration, m *metrics) *cache {
 	return &cache{
-		checker: c, clock: clk, ttl: ttl, m: m, log: slog.Default(),
+		checker: c, clock: clk, allowTTL: allowTTL, m: m, log: slog.Default(),
 		ids: map[idHash]*idEntry{}, idLRU: list.New(), flights: map[flightKey]*flight{},
 	}
+}
+
+// ttl is the lifetime of an answer: allowTTL for an allow, DenyTTL for a deny.
+func (c *cache) ttl(allowed bool) time.Duration {
+	if allowed {
+		return c.allowTTL
+	}
+	return DenyTTL
 }
 
 // check answers a for the identity from the cache, a running flight or a new
@@ -142,19 +152,19 @@ func (c *cache) fly(ctx context.Context, f *flight, k flightKey, id oidc.Identit
 	return f.d, f.err
 }
 
-// send runs one SAR, anchoring its expiry at the start. A result that is
-// already expired when it returns is an error. Waiters keep the SAR running
-// when the request that started it goes away, but never past the TTL.
+// send runs one SAR, anchoring its expiry at the start with the answer's TTL.
+// A result already expired when it returns is an error. Waiters keep the SAR
+// running when the request that started it goes away, but never past allowTTL.
 func (c *cache) send(ctx context.Context, id oidc.Identity, a Attributes) (decision, error) {
 	start := c.clock.Now()
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.ttl)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.allowTTL)
 	defer cancel()
 	allowed, err := c.checker.Check(ctx, id, a)
 	if err != nil && !errors.Is(err, ErrCheck) && ctx.Err() != nil {
 		err = checkError(categoryTimeout)
 	}
 	end := c.clock.Now()
-	d := decision{allowed: allowed, expires: start.Add(c.ttl)}
+	d := decision{allowed: allowed, expires: start.Add(c.ttl(allowed))}
 	if err == nil && !d.expires.After(end) {
 		c.log.Warn("authorisation check failed", "category", categoryLate, "verb", a.Verb, "group", a.Group, "resource", a.Resource)
 		err = checkError(categoryLate)

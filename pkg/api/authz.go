@@ -57,8 +57,10 @@ type authzState struct {
 	mu     sync.Mutex
 	checks int
 	err    error
-	// full is set before the handler runs when the caller reads everything (design §6.4).
-	full bool
+	// fullOnce asks the full read at most once, when a population first needs it (D-100).
+	fullOnce sync.Once
+	// full is its answer; fullFailed, under mu, marks that it recorded the request's error.
+	full, fullFailed bool
 }
 
 // failed returns the first recorded error, or nil.
@@ -68,10 +70,36 @@ func (s *authzState) failed() error {
 	return s.err
 }
 
-// fullRead reports whether r's request runs under a full read.
-func fullRead(r *http.Request) bool {
+// fullRead reports whether r's request runs under a full read, asking a the
+// first time (design §6.4, D-100). An error is recorded and answered false.
+func fullRead(r *http.Request, a Authorizer) bool {
 	s := authzStateOf(r)
-	return s != nil && s.full
+	fr, ok := a.(FullReader)
+	if s == nil || !ok {
+		return false
+	}
+	s.fullOnce.Do(func() {
+		if authzFailed(r) {
+			return
+		}
+		all, err := fr.FullRead(r)
+		if err != nil {
+			ReportAuthzError(r, err)
+			s.mu.Lock()
+			s.fullFailed = true
+			s.mu.Unlock()
+			return
+		}
+		s.full = all
+	})
+	return s.full
+}
+
+// fullReadFailed reports whether the full read recorded the request's error.
+func (s *authzState) fullReadFailed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fullFailed
 }
 
 // authzFailed reports whether r's request has recorded an authorisation error.

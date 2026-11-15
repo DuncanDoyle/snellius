@@ -89,7 +89,7 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 	case cfg.secure && !cfg.complete:
 		return secureGate(mux)
 	case cfg.secure:
-		return commit(mux, authz, cfg.commitCheck, cfg.authzAudit)
+		return commit(mux, cfg.commitCheck, cfg.authzAudit)
 	}
 	return mux
 }
@@ -213,7 +213,7 @@ func (h *handler) meta(w http.ResponseWriter, _ *http.Request) {
 // cover every finding, so partial visibility never makes an install look
 // healthier, and the findings keep the order health returned.
 func visibleHealth(v *view, i *engine.InstallModel) health.Report {
-	if v.all {
+	if v.readsAll() {
 		return i.Health
 	}
 	rep := i.Health
@@ -230,7 +230,7 @@ func visibleHealth(v *view, i *engine.InstallModel) health.Report {
 // visibleOverview rebuilds the overview over the owned objects the caller of v
 // may see: denied objects leave the count tiles and the gateway rows.
 func (h *handler) visibleOverview(v *view, m *engine.Model, i *engine.InstallModel, rep health.Report) overview.Overview {
-	if v.all {
+	if v.readsAll() {
 		return i.Overview
 	}
 	can := func(u *unstructured.Unstructured) bool { return v.can(objects.RefOf(u)) }

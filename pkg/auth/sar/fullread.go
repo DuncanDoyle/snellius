@@ -31,7 +31,7 @@ type fullEntry struct {
 }
 
 // fullCache holds one full-read decision per identity and merges concurrent
-// evaluations for the same key (design §6.4, D-099). An expiry never moves.
+// evaluations for the same key (design §6.4, D-100). An expiry never moves.
 type fullCache struct {
 	clock clock.PassiveClock
 	m     *metrics
@@ -150,14 +150,14 @@ func (a *Authorizer) FullRead(r *http.Request) (bool, error) {
 }
 
 // evaluate asks cluster-wide list on every kind, a.parallel at a time,
-// stopping at the first denial or error. The result expires with the
-// earliest constituent; no kinds is false.
+// stopping at the first denial or error (D-100). "False" expires with its
+// latest denying constituent, "true" with its earliest allow; no kinds is false.
 func (a *Authorizer) evaluate(r *http.Request, id oidc.Identity, h idHash, kinds []Kind) (decision, error) {
 	if len(kinds) == 0 {
-		return decision{expires: a.clock.Now().Add(a.cache.ttl)}, nil
+		return decision{expires: a.clock.Now().Add(a.cache.allowTTL)}, nil
 	}
-	// Waiters share this evaluation, so it outlives its request but not the TTL.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), a.cache.ttl)
+	// Waiters share this evaluation, so it outlives its request but not the allow TTL.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), a.cache.allowTTL)
 	defer cancel()
 	r = r.WithContext(ctx)
 
@@ -165,7 +165,8 @@ func (a *Authorizer) evaluate(r *http.Request, id oidc.Identity, h idHash, kinds
 		mu       sync.Mutex
 		next     int
 		stop     bool
-		agg      = decision{allowed: true}
+		allowExp time.Time
+		denyExp  time.Time
 		firstErr error
 		panicked any
 	)
@@ -187,13 +188,16 @@ func (a *Authorizer) evaluate(r *http.Request, id oidc.Identity, h idHash, kinds
 				firstErr = err
 			}
 			stop = true
+		case d.allowed:
+			if allowExp.IsZero() || d.expires.Before(allowExp) {
+				allowExp = d.expires
+			}
 		default:
-			if agg.expires.IsZero() || d.expires.Before(agg.expires) {
-				agg.expires = d.expires
+			// Any denial is a witness for "false"; incidental allows never shorten it.
+			if d.expires.After(denyExp) {
+				denyExp = d.expires
 			}
-			if !d.allowed {
-				agg.allowed, stop = false, true
-			}
+			stop = true
 		}
 	}
 	var wg sync.WaitGroup
@@ -233,5 +237,8 @@ func (a *Authorizer) evaluate(r *http.Request, id oidc.Identity, h idHash, kinds
 	if firstErr != nil {
 		return decision{}, firstErr
 	}
-	return agg, nil
+	if !denyExp.IsZero() {
+		return decision{expires: denyExp}, nil
+	}
+	return decision{allowed: true, expires: allowExp}, nil
 }

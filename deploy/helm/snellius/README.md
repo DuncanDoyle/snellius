@@ -60,7 +60,7 @@ helm install ui ./deploy/helm/snellius -n snellius --create-namespace \
 | `auth.session.idle` | `""` | A session ends after this long without a request. Empty uses `30m`. |
 | `auth.session.absolute` | `""` | A session ends this long after sign-in. Empty uses `8h`. |
 | `auth.session.cookieSecure` | `true` | Mark the session cookie Secure. Set `false` only for plain-HTTP testing. |
-| `auth.authz.cacheTTL` | `""` | How long a permission check is reused, `30s` to `15m`. Empty uses `30s`. It is how long a permission change takes to show in Snellius; a longer TTL means fewer checks. Passed as `--authz-cache-ttl`. |
+| `auth.authz.cacheTTL` | `""` | How long an allowed permission check is reused, `30s` to `15m`. Empty uses `60s`. It is how long a revoked permission stays visible in Snellius; a longer TTL means fewer checks. A denied check is reused for 5 minutes. Passed as `--authz-cache-ttl`. |
 | `auth.authz.namedGetScan` | `false` | Also show in lists, counts and facets the objects a viewer may only `get` by name (`resourceNames` grants). Off by default: it costs one check per hidden object. Passed as `--authz-named-get-scan`, secure mode only. |
 | `auth.trustedProxyCIDRs` | `[]` | CIDRs of proxies whose `X-Request-Id` and `X-Forwarded-For` Snellius trusts. Passed as `--trusted-proxy-cidrs`. |
 | `hostAliases` | `[]` | Pod `hostAliases`, for an IdP name that is not in DNS. |

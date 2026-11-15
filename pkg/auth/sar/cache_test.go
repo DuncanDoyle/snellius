@@ -233,22 +233,58 @@ func TestLateResultDiscarded(t *testing.T) {
 	f.expectSARs(t, 2, "after a late result")
 }
 
-func TestErrorsNotCached(t *testing.T) {
-	fail := true
-	f := newFixture(func(oidc.Identity, Attributes) (bool, error) {
-		if fail {
-			return false, checkError(categoryTimeout)
-		}
-		return true, nil
+// The allow lives the default 60 s and the deny 5 min, each from its own SAR's start.
+func TestAllowAndDenyTTL(t *testing.T) {
+	var f *fixture
+	f = newFixture(func(_ oidc.Identity, a Attributes) (bool, error) {
+		f.clock.Step(5 * time.Second) // each SAR takes 5 s
+		return a.Namespace == "shop", nil
 	})
-	if _, err := f.a.AuthorizeErr(request(user("alice")), route("shop", "web")); !errors.Is(err, ErrCheck) {
-		t.Fatalf("error = %v, want ErrCheck", err)
+	f.a = New(Options{Checker: f.checker, Kinds: testKinds, Clock: f.clock, Metrics: obs.NewRegistry(), IdentityFrom: identityFrom})
+	if d := f.checkAt(t, user("alice"), listAt("shop")); !d.allowed || !d.expires.Equal(t0.Add(DefaultAllowTTL)) {
+		t.Fatalf("allow %+v, want expiry at start + 60 s", d)
 	}
-	fail = false
-	if !mustAuthorize(t, f.a, user("alice"), route("shop", "web")) {
-		t.Fatal("denied after the error cleared")
+	if d := f.checkAt(t, user("alice"), listAt("ops")); d.allowed || !d.expires.Equal(t0.Add(5*time.Second+DenyTTL)) {
+		t.Fatalf("deny %+v, want expiry at start + 5 min", d)
 	}
-	f.expectSARs(t, 2, "after an error")
+	f.clock.SetTime(t0.Add(DefaultAllowTTL))
+	f.checkAt(t, user("alice"), listAt("shop"))
+	f.checkAt(t, user("alice"), listAt("ops"))
+	f.expectSARs(t, 3, "at the allow's expiry, the deny still cached")
+	f.clock.SetTime(t0.Add(5*time.Second + DenyTTL))
+	f.checkAt(t, user("alice"), listAt("ops"))
+	f.expectSARs(t, 4, "at the deny's expiry")
+}
+
+// An error is never cached, on the list and on the named get after it.
+func TestErrorsNeverCached(t *testing.T) {
+	for _, verb := range []string{"list", "get"} {
+		t.Run(verb, func(t *testing.T) {
+			fail := true
+			f := newFixture(func(_ oidc.Identity, a Attributes) (bool, error) {
+				if a.Verb == verb && fail {
+					return false, checkError(categoryTimeout)
+				}
+				return a.Verb == "get", nil
+			})
+			if _, err := f.a.AuthorizeNamedErr(request(user("alice")), route("shop", "web")); !errors.Is(err, ErrCheck) {
+				t.Fatalf("error = %v, want ErrCheck", err)
+			}
+			fail = false
+			if !mustAuthorizeNamed(t, f.a, user("alice"), route("shop", "web")) {
+				t.Fatal("denied after the error cleared")
+			}
+			asked := 0
+			for _, c := range f.checker.recorded() {
+				if c.a.Verb == verb {
+					asked++
+				}
+			}
+			if asked != 2 {
+				t.Fatalf("%s asked %d times, want 2 (the error is not cached)", verb, asked)
+			}
+		})
+	}
 }
 
 func TestPerIdentityLRU(t *testing.T) {
@@ -381,7 +417,7 @@ func TestFlightBoundedByTTL(t *testing.T) {
 	block := true
 	// A tiny TTL: the flight deadline is wall time; the checker waits for it only once the waiter joined.
 	f := newFixture(nil)
-	f.a = New(Options{Checker: blockingCtx(started, gate, &block), Kinds: testKinds, TTL: 20 * time.Millisecond, Clock: f.clock, Metrics: obs.NewRegistry(), IdentityFrom: identityFrom})
+	f.a = New(Options{Checker: blockingCtx(started, gate, &block), Kinds: testKinds, AllowTTL: 20 * time.Millisecond, Clock: f.clock, Metrics: obs.NewRegistry(), IdentityFrom: identityFrom})
 	f.a.cache.joined = func() { joined <- struct{}{} }
 	errs := make(chan error, 2)
 	authorize := func() {

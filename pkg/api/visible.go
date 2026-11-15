@@ -18,9 +18,12 @@ import (
 // Population answers (can) and named answers (canNamed) never share storage
 // (D-100): a named allow must never answer a population question.
 type view struct {
-	a    Authorizer
-	r    *http.Request
-	all  bool
+	a Authorizer
+	r *http.Request
+	// all is AllowAll or, once asked, the full read; read it through readsAll.
+	all bool
+	// lazy is set until readsAll asks the full read (D-100): canNamed never does.
+	lazy bool
 	seen map[objects.Ref]bool
 	// seenNamed memoises canNamed.
 	seenNamed map[objects.Ref]bool
@@ -33,14 +36,25 @@ type view struct {
 	tableDeps []int8
 }
 
-// view returns the view of the caller of r. Under a full read it is the
-// allow-all view.
+// view returns the view of the caller of r. Under a full read, asked the
+// first time a population needs it, it is the allow-all view.
 func (h *handler) view(r *http.Request) *view {
-	v := &view{a: h.authz, r: r, all: allowsAll(h.authz) || fullRead(r)}
+	v := &view{a: h.authz, r: r, all: allowsAll(h.authz)}
 	if !v.all {
+		v.lazy = true
 		v.seen, v.seenNamed = map[objects.Ref]bool{}, map[objects.Ref]bool{}
 	}
 	return v
+}
+
+// readsAll reports whether v is the allow-all view, asking the request's
+// full read the first time (D-100). Every population question starts here.
+func (v *view) readsAll() bool {
+	if v.lazy {
+		v.lazy = false
+		v.all = fullRead(v.r, v.a)
+	}
+	return v.all
 }
 
 // seenPool recycles the memos of route list requests, which ask about
@@ -60,7 +74,7 @@ var namedPool interface {
 
 // borrow swaps v's memos for ones from seenPool and namedPool; release returns them.
 func (v *view) borrow() {
-	if v.all || v.pooled {
+	if v.readsAll() || v.pooled {
 		return
 	}
 	v.seen, v.seenNamed, v.pooled = seenPool.Get().(map[objects.Ref]bool), namedPool.Get().(map[objects.Ref]bool), true
@@ -82,7 +96,7 @@ func (v *view) release() {
 // can reports whether the caller may view ref as a member of a population:
 // a list row, count, facet or aggregate (D-100).
 func (v *view) can(ref objects.Ref) bool {
-	if v.all {
+	if v.readsAll() {
 		return true
 	}
 	ok, asked := v.seen[ref]
@@ -96,6 +110,7 @@ func (v *view) can(ref objects.Ref) bool {
 // canNamed reports whether the caller may view ref by name: a detail page's
 // subject, or a ref written in an object the caller may read (D-100).
 // Without a NamedAuthorizer both questions have one answer, so it is can.
+// It uses a full read already asked but never asks one.
 func (v *view) canNamed(ref objects.Ref) bool {
 	if v.all {
 		return true
@@ -114,7 +129,7 @@ func (v *view) canNamed(ref objects.Ref) bool {
 // canList reports whether the caller may list gk in namespace, "" meaning
 // cluster-wide: true under a full read, false without a ListAuthorizer.
 func (v *view) canList(gk objects.GroupKind, namespace string) bool {
-	if v.all {
+	if v.readsAll() {
 		return true
 	}
 	return decideList(v.r, v.a, gk, namespace)
@@ -123,7 +138,7 @@ func (v *view) canList(gk objects.GroupKind, namespace string) bool {
 // visible is can in the form the explore queries take: nil under AllowAll,
 // so they keep their precomputed values.
 func (v *view) visible() func(objects.Ref) bool {
-	if v.all {
+	if v.readsAll() {
 		return nil
 	}
 	return v.can
@@ -133,7 +148,7 @@ func (v *view) visible() func(objects.Ref) bool {
 // (design §7.4 rule 4). Answers are memoised per ref index; under AllowAll it
 // is true without calls (rule 10). A view serves one index.
 func (v *view) allowDeps(ix *explore.Index, d explore.DepSet) bool {
-	if v.all {
+	if v.readsAll() {
 		return true
 	}
 	if v.deps == nil {
@@ -164,7 +179,7 @@ func (v *view) allowTable(t *paths.Topology, d explore.DepSet) bool {
 // allowTableNamed is allowTable with named, when set, checked by canNamed: a
 // ref written in a readable object. Its answer never enters the population memo.
 func (v *view) allowTableNamed(t *paths.Topology, d explore.DepSet, named *objects.Ref) bool {
-	if v.all {
+	if v.readsAll() {
 		return true
 	}
 	if v.table != t {
@@ -213,7 +228,7 @@ func (v *view) allOf(refs []objects.Ref) bool {
 
 // recount is the number of ids whose ref the caller may view (rule 5).
 func (v *view) recount(ids []explore.RowID, ref func(explore.RowID) objects.Ref) int {
-	if v.all {
+	if v.readsAll() {
 		return len(ids)
 	}
 	n := 0
@@ -229,7 +244,7 @@ func (v *view) recount(ids []explore.RowID, ref func(explore.RowID) objects.Ref)
 // caller may not view. It takes no filter, so no query changes it, and it
 // is the only hidden count the API sends (rule 2).
 func (v *view) deniedInInstall(n int, ref func(explore.RowID) objects.Ref) int {
-	if v.all {
+	if v.readsAll() {
 		return 0
 	}
 	d := 0

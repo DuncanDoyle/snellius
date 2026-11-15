@@ -2034,7 +2034,10 @@ func TestAuthzUnavailableAudited(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.oidc.Run(ctx)
+	// The install list asks the full read only over a model (D-100).
+	a.Start(ctx)
 	eventually(t, "discovery", func() bool { ok, _ := a.oidc.Ready(); return ok })
+	eventually(t, "model", func() bool { p := a.Engine.Current(); return p != nil && p.Model.Snapshot.Synced })
 	sess := signIn(t, a, idp)
 
 	rec := call(a, "GET", "/api/v1/installs", sess, nil)
@@ -2051,7 +2054,7 @@ func TestAuthzUnavailableAudited(t *testing.T) {
 		}
 	}
 	for _, want := range []string{`"level":"security"`, `"outcome":"failure"`, `"reason":"full-read-failed"`, `"username":"oidc:alice"`,
-		`"subject":"alice-sub"`, `"session":"`, `"route":"/api/v1/installs"`} {
+		`"subject":"alice-sub"`, `"session":"`, `"route":"GET /api/v1/installs"`} {
 		if !strings.Contains(line, want) {
 			t.Errorf("audit record lacks %s: %q", want, line)
 		}

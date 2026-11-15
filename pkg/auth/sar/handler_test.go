@@ -352,11 +352,11 @@ func TestRevokedAfterTTLAtHandler(t *testing.T) {
 	mu.Lock()
 	revoked = true
 	mu.Unlock()
-	clk.SetTime(t0.Add(sar.DefaultTTL - time.Nanosecond))
+	clk.SetTime(t0.Add(sar.DefaultAllowTTL - time.Nanosecond))
 	if got := routeNames(t, srv, "team", base); !slices.Equal(got, before) {
 		t.Errorf("before the TTL: %v, want %v", got, before)
 	}
-	clk.SetTime(t0.Add(sar.DefaultTTL))
+	clk.SetTime(t0.Add(sar.DefaultAllowTTL))
 	if got := routeNames(t, srv, "team", base); len(got) != 0 {
 		t.Errorf("at the TTL a revoked viewer still sees %v", got)
 	}
@@ -386,5 +386,124 @@ func TestFullReaderMatchesAllowAll(t *testing.T) {
 	}
 	if len(calls) != len(kinds) {
 		t.Errorf("%d SARs, want one list per kind (%d)", len(calls), len(kinds))
+	}
+}
+
+// countedFull counts the times a request asks the full read.
+type countedFull struct {
+	*sar.Authorizer
+	mu sync.Mutex
+	n  int
+}
+
+func (c *countedFull) FullRead(r *http.Request) (bool, error) {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+	return c.Authorizer.FullRead(r)
+}
+
+func (c *countedFull) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+// isClusterList reports whether a is a cluster-wide list, as the full read asks.
+func isClusterList(a sar.Attributes) bool { return a.Verb == "list" && a.Namespace == "" }
+
+// namedOnly allows only a get on the route ns/name, while granted.
+func namedOnly(ns, name string, granted func() bool) func(string, sar.Attributes, int) (bool, error) {
+	return func(_ string, a sar.Attributes, _ int) (bool, error) {
+		return granted() && isRoutes(a) && a.Verb == "get" && a.Namespace == ns && a.Name == name, nil
+	}
+}
+
+// A named get allowed under a denied list expires at its own 60 s; the list
+// denial lasts 5 min. At 60 s only the get is sent again: renewed, the detail
+// stays 200; revoked, it is 404.
+func TestMixedListGetExpiry(t *testing.T) {
+	src, base := world(t)
+	ns, name, _ := strings.Cut(routeNames(t, serve(t, src, api.AllowAll{}), "", base)[0], "/")
+	clk := clocktesting.NewFakeClock(t0)
+	var mu sync.Mutex
+	granted := true
+	c := &checker{decide: namedOnly(ns, name, func() bool { mu.Lock(); defer mu.Unlock(); return granted })}
+	srv := serve(t, src, newAuthz(c, clk))
+	detail := base + "/routes/" + routesGroup + "/HTTPRoute/" + ns + "/" + name
+	get := sar.Attributes{Verb: "get", Group: routesGroup, Resource: "httproutes", Namespace: ns, Name: name}
+	// expect fetches the detail and checks its status and the SARs it sent.
+	expect := func(when string, code int, sent []sar.Attributes) {
+		t.Helper()
+		n := len(c.recorded())
+		if got, b := call(t, srv, "named", detail); got != code {
+			t.Fatalf("%s: detail %d %s, want %d", when, got, b, code)
+		}
+		if got := c.recorded()[n:]; !slices.Equal(got, sent) {
+			t.Errorf("%s: sent %+v, want %+v", when, got, sent)
+		}
+	}
+	if code, b := call(t, srv, "named", detail); code != http.StatusOK {
+		t.Fatalf("detail %d %s", code, b)
+	}
+	if !slices.Contains(c.recorded(), get) {
+		t.Fatal("the named get was never sent")
+	}
+	clk.SetTime(t0.Add(sar.DefaultAllowTTL - time.Nanosecond))
+	expect("before the allow expires", http.StatusOK, nil)
+	clk.SetTime(t0.Add(sar.DefaultAllowTTL))
+	expect("renewed at 60 s", http.StatusOK, []sar.Attributes{get})
+	mu.Lock()
+	granted = false
+	mu.Unlock()
+	clk.SetTime(t0.Add(2 * sar.DefaultAllowTTL))
+	expect("revoked at 120 s", http.StatusNotFound, []sar.Attributes{get})
+}
+
+// Resource YAML is a purely named operation: no full read, no cluster-wide list.
+func TestNamedOnlyDoesNotProbeFullRead(t *testing.T) {
+	src, base := world(t)
+	ns, name, _ := strings.Cut(routeNames(t, serve(t, src, api.AllowAll{}), "", base)[0], "/")
+	c := &checker{decide: namedOnly(ns, name, func() bool { return true })}
+	a := &countedFull{Authorizer: newAuthz(c, clocktesting.NewFakeClock(t0))}
+	srv := serve(t, src, a)
+	if code, b := call(t, srv, "named", base+"/resources/"+routesGroup+"/HTTPRoute/"+ns+"/"+name); code != http.StatusOK {
+		t.Fatalf("YAML %d %s", code, b)
+	}
+	if n := a.count(); n != 0 {
+		t.Errorf("YAML asked the full read %d times", n)
+	}
+	if slices.ContainsFunc(c.recorded(), isClusterList) {
+		t.Errorf("YAML sent a cluster-wide list: %+v", c.recorded())
+	}
+}
+
+// /routes asks the full read once per request; its cached "false" sends no
+// cluster-wide list on the next request.
+func TestListProbesFullReadOnce(t *testing.T) {
+	src, base := world(t)
+	c := &checker{decide: grant(nil)}
+	a := &countedFull{Authorizer: newAuthz(c, clocktesting.NewFakeClock(t0))}
+	srv := serve(t, src, a)
+	clusterLists := func() int {
+		n := 0
+		for _, at := range c.recorded() {
+			if isClusterList(at) {
+				n++
+			}
+		}
+		return n
+	}
+	routeNames(t, srv, "team", base)
+	if n := a.count(); n != 1 {
+		t.Fatalf("one /routes request asked the full read %d times", n)
+	}
+	first := clusterLists()
+	if first == 0 {
+		t.Fatal("no cluster-wide list for the full read")
+	}
+	routeNames(t, srv, "team", base)
+	if n, lists := a.count(), clusterLists(); n != 2 || lists != first {
+		t.Errorf("second request: %d full reads, %d cluster-wide lists (first %d)", n, lists, first)
 	}
 }

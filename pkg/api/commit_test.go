@@ -77,6 +77,12 @@ func (a *fullAuthz) FullRead(*http.Request) (bool, error) {
 	return a.all, a.err
 }
 
+func (a *fullAuthz) readCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.reads
+}
+
 // listAuthz adds CanList to errAuthz, failing with err when set.
 type listAuthz struct {
 	*errAuthz
@@ -237,20 +243,25 @@ func TestCommitFullReadSkipsChecks(t *testing.T) {
 	}
 }
 
-// A full-read error answers 503 without running the route.
+// A full-read error answers 503 for a route that asks a population, with no
+// check after it; a route that asks none never runs the full read (D-100).
 func TestCommitFullReadError(t *testing.T) {
-	ran := 0
 	ext := ExtMount{Name: "probe", Pattern: "GET /data", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		ran++
 		WriteJSON(w, "data")
 	})}
 	full := &fullAuthz{errAuthz: &errAuthz{}, err: errOutage}
-	srv := secureServer(t, staticModel{}, full, WithExtMounts(ext))
-	for _, p := range []string{"/api/ext/probe/data", "/api/v1/installs", "/api/v1/meta", "/api/v1/unknown"} {
-		wantUnavailable(t, srv, p)
+	srv := secureServer(t, staticModel{}, full, WithExtMounts(ext, refsExt(full, 3)))
+	for _, p := range []string{"/api/ext/probe/data", "/api/v1/meta"} {
+		if code, _, _ := fetchRaw(t, srv, p); code != http.StatusOK {
+			t.Errorf("GET %s: %d without a population", p, code)
+		}
 	}
-	if ran != 0 || full.count() != 0 {
-		t.Errorf("route ran %d times, %d checks", ran, full.count())
+	if n := full.readCount(); n != 0 {
+		t.Errorf("%d full reads without a population", n)
+	}
+	wantUnavailable(t, srv, "/api/ext/refs/n")
+	if n := full.readCount(); n != 1 || full.count() != 0 {
+		t.Errorf("%d full reads, %d checks", n, full.count())
 	}
 	if code, _, body := fetchRaw(t, srv, "/"); code != http.StatusOK || !strings.Contains(body, "spa") {
 		t.Errorf("SPA: %d %q", code, body)
@@ -289,7 +300,10 @@ func TestCommitExtMount(t *testing.T) {
 // A commit check answering false replaces the handler's response, also over
 // a recorded authorisation error; true lets the response through.
 func TestCommitCheckReplacesBody(t *testing.T) {
-	ext := ExtMount{Name: "probe", Pattern: "GET /data", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var a Authorizer
+	// The handler asks a population, so a failing full read records its error.
+	ext := ExtMount{Name: "probe", Pattern: "GET /data", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		Visible(r, a, []int{1}, func(int) objects.Ref { return objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: "a"} })
 		w.Header().Set("X-Partial", "1")
 		w.WriteHeader(http.StatusTeapot)
 		_, _ = w.Write([]byte("handler body"))
@@ -303,7 +317,7 @@ func TestCommitCheckReplacesBody(t *testing.T) {
 		}
 		return signedIn
 	}
-	for _, a := range []Authorizer{&errAuthz{}, &fullAuthz{errAuthz: &errAuthz{}, err: errOutage}} {
+	for _, a = range []Authorizer{&errAuthz{}, &fullAuthz{errAuthz: &errAuthz{}, err: errOutage}} {
 		srv := secureServer(t, staticModel{}, a, WithExtMounts(ext), WithCommitCheck(check))
 		signedIn = false
 		if code, h, body := fetchRaw(t, srv, "/api/ext/probe/data"); code != http.StatusUnauthorized || body != `{"error":"session-ended"}` || h.Get("X-Partial") != "" {
@@ -387,11 +401,10 @@ func TestViewCanList(t *testing.T) {
 	if v := h.view(r); !v.canList(routes, "shop") || v.canList(routes, "blog") {
 		t.Error("CanList answers not followed")
 	}
-	st.full = true
-	if !h.view(r).canList(routes, "blog") {
+	full, _ := withAuthzState(httptest.NewRequest("GET", "/api/x", nil))
+	if !(&handler{authz: &fullAuthz{errAuthz: &errAuthz{}, all: true}}).view(full).canList(routes, "blog") {
 		t.Error("a full read must allow every list")
 	}
-	st.full = false
 	h.authz = listAuthz{errAuthz: &errAuthz{}, err: errOutage}
 	if h.view(r).canList(routes, "shop") || st.failed() != errOutage {
 		t.Errorf("error not recorded: %v", st.failed())

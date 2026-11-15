@@ -91,7 +91,7 @@ Topics the user-facing documentation must cover when it is written. Each entry s
 ## Permission checks (2026-11-15, Phase 7 sub-phase 7.3)
 
 - **How access is checked.** One SubjectAccessReview per resource and namespace (`list`, then `get` on the object), cached per identity. A user who may list every served kind cluster-wide takes the full-read path and needs no per-object checks.
-- **Cache TTL.** `--authz-cache-ttl` (chart `auth.authz.cacheTTL`), `30s` to `15m`, default `30s`. It is the only bound on how long a revoked permission stays visible; there is no RBAC watch (D-099). A longer TTL trades freshness for fewer checks.
+- **Cache TTL.** `--authz-cache-ttl` (chart `auth.authz.cacheTTL`), `30s` to `15m`, default `60s`, for allowed answers; denied ones last 5 min (D-100). It is the only bound on how long a revoked permission stays visible; there is no RBAC watch (D-099). A longer TTL trades freshness for fewer checks.
 - **Failing closed.** A failed check answers `503 authz-unavailable`, never a partial page or a 404, and writes a `security` audit record `authz-unavailable` with the reason (`check-failed`, `check-limit`, `full-read-failed`). Explain the 500-check limit per request.
 - **RBAC.** Secure mode adds `create` on `subjectaccessreviews`. Say which kinds a user needs `list` on for the full-read path.
 - **Metrics.** `snellius_authz_checks_total{verb,outcome}`, `snellius_authz_check_seconds_total`, `snellius_authz_cache_total{result}`, `snellius_authz_identities`.

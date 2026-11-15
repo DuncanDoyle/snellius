@@ -57,7 +57,7 @@ func clusterList(resource string) Attributes {
 func newFullFixture(n int, decide func(oidc.Identity, Attributes) (bool, error)) (*fixture, *orderedKinds) {
 	kinds := &orderedKinds{kinds: kindsN(n), key: "v1"}
 	f := &fixture{checker: &fakeChecker{decide: decide}, clock: clocktesting.NewFakeClock(t0), reg: obs.NewRegistry()}
-	f.a = New(Options{Checker: f.checker, Kinds: kinds, TTL: 30 * time.Second, Clock: f.clock, Metrics: f.reg, IdentityFrom: identityFrom})
+	f.a = New(Options{Checker: f.checker, Kinds: kinds, AllowTTL: 30 * time.Second, Clock: f.clock, Metrics: f.reg, IdentityFrom: identityFrom})
 	return f, kinds
 }
 
@@ -107,6 +107,50 @@ func TestFullReadAllowed(t *testing.T) {
 			t.Errorf("%s = %q, want %s", name, got, want)
 		}
 	}
+}
+
+// defaultTTL rebuilds f's Authorizer over kinds with the default allow TTL, one kind at a time.
+func defaultTTL(f *fixture, kinds Kinds) {
+	f.a = New(Options{Checker: f.checker, Kinds: kinds, Clock: f.clock, Metrics: f.reg, IdentityFrom: identityFrom})
+	f.a.parallel = 1
+}
+
+// A denial at t with an allow at t+1 s caches "false" until t + 5 min, not t + 61 s.
+func TestFullReadFalseWitness(t *testing.T) {
+	f, kinds := newFullFixture(2, func(_ oidc.Identity, a Attributes) (bool, error) { return a.Resource == "k0", nil })
+	f.reg = obs.NewRegistry()
+	defaultTTL(f, kinds)
+	f.checkAt(t, user("alice"), clusterList("k1")) // the denial, at t
+	f.clock.Step(time.Second)
+	if mustFullRead(t, f.a, user("alice")) { // k0 allowed at t+1 s, k1 the cached denial
+		t.Fatal("a denied kind gave a full read")
+	}
+	if e, ok := cachedFull(f); !ok || e.d.allowed || !e.d.expires.Equal(t0.Add(DenyTTL)) {
+		t.Fatalf("cached %+v, want the denial's expiry t + 5 min", e)
+	}
+	f.clock.SetTime(t0.Add(DenyTTL - time.Nanosecond))
+	if mustFullRead(t, f.a, user("alice")) {
+		t.Fatal("the cached false turned true")
+	}
+	f.expectSARs(t, 2, "past the allow's expiry, before the denial's")
+}
+
+// "True" expires at its earliest allowing constituent, a cached one included.
+func TestFullReadTrueEarliestAllow(t *testing.T) {
+	f, kinds := newFullFixture(2, allowAll)
+	f.reg = obs.NewRegistry()
+	defaultTTL(f, kinds)
+	f.checkAt(t, user("alice"), clusterList("k1")) // allowed until t + 60 s
+	f.clock.Step(10 * time.Second)
+	if !mustFullRead(t, f.a, user("alice")) { // k0 allowed until t + 70 s
+		t.Fatal("not a full reader")
+	}
+	if e, ok := cachedFull(f); !ok || !e.d.allowed || !e.d.expires.Equal(t0.Add(DefaultAllowTTL)) {
+		t.Fatalf("cached %+v, want the earliest allow's expiry t + 60 s", e)
+	}
+	f.clock.SetTime(t0.Add(DefaultAllowTTL))
+	mustFullRead(t, f.a, user("alice"))
+	f.expectSARs(t, 3, "k1 asked again at its expiry")
 }
 
 func TestFullReadExpiresFromEarliest(t *testing.T) {
@@ -169,8 +213,8 @@ func TestFullReadDeniedStopsEarly(t *testing.T) {
 		t.Fatal("a denied kind gave a full read")
 	}
 	f.expectSARs(t, fullReadParallel, "stopped at the denial")
-	if e, ok := cachedFull(f); !ok || e.d.allowed || !e.d.expires.Equal(t0.Add(30*time.Second)) {
-		t.Fatalf("cached %+v, want a deny until start + TTL", e)
+	if e, ok := cachedFull(f); !ok || e.d.allowed || !e.d.expires.Equal(t0.Add(DenyTTL)) {
+		t.Fatalf("cached %+v, want a deny until start + the deny TTL", e)
 	}
 	f.clock.Step(29 * time.Second)
 	if mustFullRead(t, f.a, user("alice")) {
@@ -296,8 +340,9 @@ func TestFullReadNearExpiryHit(t *testing.T) {
 		t.Fatal("returned the expired aggregate")
 	}
 	f.expectSARs(t, 3, "k0 cached, k1, then k0 again")
-	if e, ok := cachedFull(f); !ok || !e.d.expires.Equal(t0.Add(61*time.Second)) {
-		t.Fatalf("cached %+v, want the re-evaluation's expiry", e)
+	// The re-evaluation's k0 denial, from t+31 s, is the "false" witness.
+	if e, ok := cachedFull(f); !ok || !e.d.expires.Equal(t0.Add(31*time.Second+DenyTTL)) {
+		t.Fatalf("cached %+v, want the re-evaluation's denial expiry", e)
 	}
 }
 

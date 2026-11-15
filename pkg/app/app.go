@@ -60,7 +60,7 @@ type Options struct {
 	CookieInsecure bool
 	// SessionIdle and SessionAbsolute bound a secure-mode session; zero means 30 min and 8 h.
 	SessionIdle, SessionAbsolute time.Duration
-	// AuthzCacheTTL bounds every cached permission check in secure mode; zero means 30 s.
+	// AuthzCacheTTL bounds every cached allowed permission check in secure mode; zero means 60 s.
 	AuthzCacheTTL time.Duration
 	// AuthzNamedGetScan adds a named get to secure-mode list checks the list denies (D-100).
 	AuthzNamedGetScan bool
@@ -344,7 +344,7 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 			clk = o.Clock
 		}
 		sarAuthz = sar.New(sar.Options{Checker: sar.NewKubeChecker(c.Kube), Kinds: newSARKinds(cfg.Served, mon.Catalog),
-			TTL: o.AuthzCacheTTL, Clock: clk, Metrics: metrics, NamedGetScan: o.AuthzNamedGetScan})
+			AllowTTL: o.AuthzCacheTTL, Clock: clk, Metrics: metrics, NamedGetScan: o.AuthzNamedGetScan})
 		authz = sarAuthz
 	}
 	deps := extension.Deps{Current: eng.Current, Authorizer: authz, Capabilities: reg.CapabilityStates, Logger: slog.Default()}

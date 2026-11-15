@@ -102,7 +102,7 @@ func projectInput(p *engine.Published, i *engine.InstallModel) paths.ProjectInpu
 // pathsPage is the page of t, projected by proj, that q asks for, as the caller of v may see it, linked by l.
 func pathsPage(l linker, p *engine.Published, i *engine.InstallModel, v *view, t *paths.Topology, proj *paths.Projection, kept bool, q paths.Query) (PathsResponse, error) {
 	var visible func(explore.DepSet) bool
-	if !v.all {
+	if !v.readsAll() {
 		visible = func(d explore.DepSet) bool { return v.allowTable(t, d) }
 	}
 	pg, err := paths.Run(t, proj, q, visible)

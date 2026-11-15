@@ -32,7 +32,7 @@ func Parse(fs *flag.FlagSet, args []string) (kubeconfig string, o app.Options, e
 	cookieSecure := fs.Bool("cookie-secure", true, "secure mode: mark sign-in cookies Secure; false only for plain-HTTP testing")
 	fs.DurationVar(&o.SessionIdle, "session-idle", 30*time.Minute, "secure mode: a session ends after this long without a request")
 	fs.DurationVar(&o.SessionAbsolute, "session-absolute", 8*time.Hour, "secure mode: a session ends this long after sign-in")
-	fs.DurationVar(&o.AuthzCacheTTL, "authz-cache-ttl", sar.DefaultTTL, "secure mode: how long a permission check is reused, 30s to 15m; a revoked permission can stay visible this long")
+	fs.DurationVar(&o.AuthzCacheTTL, "authz-cache-ttl", sar.DefaultAllowTTL, "secure mode: how long an allowed permission check is reused, 30s to 15m; a revoked permission can stay visible this long")
 	fs.BoolVar(&o.AuthzNamedGetScan, "authz-named-get-scan", false, "secure mode: also show in lists the objects a viewer may only get by name (resourceNames grants); costs one check per hidden object")
 	proxies := fs.String("trusted-proxy-cidrs", "", "comma-separated CIDRs of proxies whose X-Request-Id and X-Forwarded-For are trusted")
 	scopes := fs.String("oidc-scopes", strings.Join(oidc.DefaultScopes, ","), "secure mode: comma-separated OIDC scopes")

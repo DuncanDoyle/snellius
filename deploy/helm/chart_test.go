@@ -801,7 +801,7 @@ func TestSecureNotes(t *testing.T) {
 	}
 	notes := string(out[strings.Index(string(out), "NOTES:"):])
 	for _, want := range []string{"https://ui.example.com/auth/callback", "https://ui.example.com/", "client ID \"snellius\"", "kubectl auth whoami",
-		"reused for 30s (auth.authz.cacheTTL)"} {
+		"reused for 60s (auth.authz.cacheTTL)", "Denied checks are reused for 5m"} {
 		if !strings.Contains(notes, want) {
 			t.Errorf("NOTES lack %q:\n%s", want, notes)
 		}
