@@ -1,4 +1,5 @@
 import { Navigate } from "react-router-dom";
+import { ApiErrorState } from "../api/errorState";
 import { useInstalls, useMeta } from "../api/hooks";
 import { PageState } from "../states/PageState";
 import { type CorePages, useVocabulary } from "./extension";
@@ -12,9 +13,7 @@ export function RootRedirect({ ClusterLanding }: Pick<CorePages, "ClusterLanding
   const vocab = useVocabulary();
   // Loaded installs stay in use after a failed poll; the landing shows the error over them.
   if (!data) {
-    if (error?.status === 503) return <PageState kind="connecting" title={vocab.connecting} message={error.message} />;
-    if (error)
-      return <PageState kind="error" title="Cannot load installs" message={error.message} copyText={error.message} />;
+    if (error) return <ApiErrorState error={error} title="Cannot load installs" />;
     return <PageState kind="loading" title="Loading installs…" />;
   }
   // The empty state's copy depends on the server's packs, so it waits for /meta.

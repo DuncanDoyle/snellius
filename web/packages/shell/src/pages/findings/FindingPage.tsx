@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useNow } from "../../api/clock";
 import { useFindingDetail } from "../../api/diagHooks";
+import { ApiErrorState, apiErrorState } from "../../api/errorState";
 import { isStale } from "../../api/hooks";
 import type { LinkedRef, NextStep } from "../../api/types";
 import { columnCopy, findingsCopy, listCopy } from "../../copy/explorer";
@@ -13,7 +14,7 @@ import { SuggestedFixView, withCode } from "../../diagnostics/SuggestedFix";
 import { LinkedName } from "../../explore/LinkedName";
 import { type ObjectColumn, ObjectTable } from "../../explore/ObjectTable";
 import { StaleView } from "../../health/staleView";
-import { useInstallId, useVocabulary } from "../../shell/extension";
+import { useInstallId } from "../../shell/extension";
 import { layout } from "../../shell/layout";
 import { installPath } from "../../shell/paths";
 import { BackLink } from "../../states/controls";
@@ -110,7 +111,6 @@ interface FindingPageProps {
 export function FindingPage({ stylesOverride }: FindingPageProps = {}) {
   const id = useInstallId();
   const { findingId = "" } = useParams();
-  const vocab = useVocabulary();
   // The affected cursor is local, as on a detail page's sub-lists, so the page URL stays short.
   const [cursor, setCursor] = useState<{ finding: string; c: string }>();
   const c = cursor?.finding === findingId ? cursor.c : undefined;
@@ -128,10 +128,9 @@ export function FindingPage({ stylesOverride }: FindingPageProps = {}) {
   const finding = f && data ? { ...f, install: id, message: f.message ?? "", evidence: data.evidence } : undefined;
   // Stale data or a failed poll turns every state on the page unknown (design §6.3).
   const stale = !!data && (!!error || isStale(data.collectedAt, now));
-  const body = data ? null : error?.status === 503 ? (
-    <PageState kind="connecting" title={vocab.connecting} message={error.message} />
-  ) : error && !cursorRejected ? (
-    <PageState kind="error" title={errorTitle} message={error.message} copyText={error.message} />
+  // A rejected cursor is fixed in place, so only a 503 state replaces the skeleton then.
+  const body = data ? null : error && (!cursorRejected || apiErrorState(error) !== "failed") ? (
+    <ApiErrorState error={error} title={errorTitle} />
   ) : (
     <Skeleton aria-busy="true" data-testid="detail-skeleton">
       <Shimmer h={60} />

@@ -3,9 +3,9 @@ import styled from "@emotion/styled";
 import { Search } from "lucide-react";
 import type { ReactNode } from "react";
 import type { ApiError } from "../api/client";
+import { ApiErrorState } from "../api/errorState";
 import { listCopy } from "../copy/explorer";
 import { DataAge } from "../pages/DataAge";
-import { useVocabulary } from "../shell/extension";
 import { layout } from "../shell/layout";
 import { installPath } from "../shell/paths";
 import { BackLink, QuietButton, SearchBox } from "../states/controls";
@@ -84,7 +84,6 @@ export function ListFrame({
   children,
   stylesOverride,
 }: ListFrameProps) {
-  const vocab = useVocabulary();
   const errorTitle = listCopy.cannotLoad(noun[1]);
   // A list 404s only for an unknown install (design §7.2).
   if (error?.status === 404)
@@ -126,13 +125,7 @@ export function ListFrame({
           </QuietButton>
         ) : null}
       </Bar>
-      {!failed ? (
-        children
-      ) : error.status === 503 ? (
-        <PageState kind="connecting" title={vocab.connecting} message={error.message} />
-      ) : (
-        <PageState kind="error" title={errorTitle} message={error.message} copyText={error.message} />
-      )}
+      {!failed ? children : <ApiErrorState error={error} title={errorTitle} />}
     </Page>
   );
 }

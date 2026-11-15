@@ -8,6 +8,8 @@ export class ApiError extends Error {
     message: string,
     /** The sign-in URL a 401 carries. */
     public login?: string,
+    /** The body's `error` code, e.g. "authz-unavailable". */
+    public code?: string,
   ) {
     super(message);
   }
@@ -46,15 +48,17 @@ async function request<T>(path: string): Promise<{ body: T; headers: Headers }> 
   if (!res.ok) {
     let msg = res.statusText;
     let login: string | undefined;
+    let code: string | undefined;
     try {
       const body = (await res.json()) as { error?: string; login?: string };
       msg = body.error ?? msg;
       login = body.login;
+      code = body.error;
     } catch {
       // body was not JSON
     }
     if (res.status === 401) handleUnauthorized(msg, login);
-    throw new ApiError(res.status, msg, login);
+    throw new ApiError(res.status, msg, login, code);
   }
   // Only answers carrying data set the clock their timestamps are read against.
   observeServerDate(res.headers.get("Date"));

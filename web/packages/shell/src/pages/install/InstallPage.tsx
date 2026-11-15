@@ -4,16 +4,16 @@ import { useContext, useId } from "react";
 import { Link } from "react-router-dom";
 import { useNow } from "../../api/clock";
 import { useDiagnostics } from "../../api/diagHooks";
+import { ApiErrorState } from "../../api/errorState";
 import { isStale, useCapabilities, useInstallFeature, useInstalls, useMeta, useOverview } from "../../api/hooks";
 import { diagnosticsCopy } from "../../copy/explorer";
 import { plural } from "../../format";
 import { StaleView } from "../../health/staleView";
 import { Slot, useInstallPanels } from "../../shell/contributions";
-import { CorePagesContext, type DiagnosticsSectionProps, useInstallId, useVocabulary } from "../../shell/extension";
+import { CorePagesContext, type DiagnosticsSectionProps, useInstallId } from "../../shell/extension";
 import { layout } from "../../shell/layout";
 import { installPath } from "../../shell/paths";
 import { PageNotice } from "../../states/PageNotice";
-import { PageState } from "../../states/PageState";
 import { Shimmer } from "../../states/Shimmer";
 import { VisuallyHidden } from "../../states/VisuallyHidden";
 import { CheckedSection } from "./CheckedList";
@@ -94,7 +94,6 @@ interface InstallPageProps {
 /** The install page (layout A, D-011): verdict strip, Needs attention, Processes, what was checked, tiles, Gateways. */
 export function InstallPage({ stylesOverride }: InstallPageProps = {}) {
   const id = useInstallId();
-  const vocab = useVocabulary();
   const ov = useOverview(id);
   const d = useDiagnostics(id);
   const { data: meta } = useMeta();
@@ -109,9 +108,7 @@ export function InstallPage({ stylesOverride }: InstallPageProps = {}) {
   // Render only data that belongs to this route's install, never the previous install's (design §6.6).
   // Once loaded, a failed poll keeps the page under a notice, with its health shown unknown.
   if (!ov.data || !d.data || ov.data.header.id !== id || d.data.install !== id) {
-    if (err?.status === 503) return <PageState kind="connecting" title={vocab.connecting} message={err.message} />;
-    if (err)
-      return <PageState kind="error" title="Cannot load this install" message={err.message} copyText={err.message} />;
+    if (err) return <ApiErrorState error={err} title="Cannot load this install" />;
     // One tile per counted kind (Deployments and parameters kinds have none) plus the scope tile where the platform has scope.
     const tiles = meta
       ? meta.kinds.filter((k) => k.category !== "workload" && k.category !== "parameters").length +

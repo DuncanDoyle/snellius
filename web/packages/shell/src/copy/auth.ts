@@ -1,6 +1,9 @@
 /** User-facing copy of the sign-in pages and the account menu; the wording was picked from options for plain, accurate text. */
 export const authCopy = {
   redirecting: "Taking you to sign-in",
+  authzUnavailableTitle: "Can't check your access",
+  authzUnavailableBody:
+    "The Kubernetes API server isn't answering permission checks. Snellius tries again every few seconds.",
   notConfiguredTitle: "Sign-in isn't set up yet",
   notConfiguredBody: "The sign-in provider settings are missing. Your platform team sets them in the Helm values.",
   notConfiguredLink: "Set up sign-in",

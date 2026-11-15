@@ -4,6 +4,7 @@ import { FileCode, LayoutList, type LucideIcon } from "lucide-react";
 import { createContext, type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import type { ApiError } from "../../api/client";
 import { useNow } from "../../api/clock";
+import { ApiErrorState } from "../../api/errorState";
 import { isStale } from "../../api/hooks";
 import type { Candidate, DetailReason, LinkedRef, Page } from "../../api/types";
 import { detailCopy, listCopy } from "../../copy/explorer";
@@ -18,7 +19,6 @@ import { ResourceName } from "../../resource/ResourceName";
 import { ResourceYaml } from "../../resource/ResourceYaml";
 import { TrailRefsProvider, useReportTrailRefs, useTrailRefsCollector } from "../../shell/Breadcrumbs";
 import { Slot, useShownDetailTabs, useSideSectionContributions } from "../../shell/contributions";
-import { useVocabulary } from "../../shell/extension";
 import { DetailColumns, layout, useTwoColumns } from "../../shell/layout";
 import { OBJECT_HEADER_H, ObjectHeader } from "../../shell/ObjectHeader";
 import { installPath } from "../../shell/paths";
@@ -146,7 +146,6 @@ export function DetailFrame({
   stylesOverride,
 }: DetailFrameProps) {
   const wide = useTwoColumns();
-  const vocab = useVocabulary();
   const urlParams = useUrlParams();
   const [params, update] = urlParams;
   const coreIds = useMemo(() => [...CORE_TAB_IDS, ...(extraTabs ?? []).map((t) => t.id)], [extraTabs]);
@@ -228,10 +227,8 @@ export function DetailFrame({
         }
       />
     )
-  ) : error?.status === 503 ? (
-    <PageState kind="connecting" title={vocab.connecting} message={error.message} />
   ) : error ? (
-    <PageState kind="error" title={errorTitle} message={error.message} copyText={error.message} />
+    <ApiErrorState error={error} title={errorTitle} />
   ) : (
     <div aria-busy="true" data-testid="detail-skeleton">
       <DetailColumns
