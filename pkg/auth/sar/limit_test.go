@@ -13,6 +13,7 @@ import (
 
 	clocktesting "k8s.io/utils/clock/testing"
 
+	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
@@ -500,4 +501,68 @@ func TestMixedTrafficSharesLimit(t *testing.T) {
 		}
 	}
 	settled(t, before)
+}
+
+// A full read's constituents queue under its request: when the only requester
+// cancels, they leave the queue at once and none is sent; a waiter that remains
+// leads the evaluation again and each kind is sent once.
+func TestFullReadQueuedCancel(t *testing.T) {
+	for _, withWaiter := range []bool{false, true} {
+		t.Run(fmt.Sprintf("waiter=%v", withWaiter), func(t *testing.T) {
+			before := runtime.NumGoroutine()
+			started, waiting, joined, gate := make(chan Attributes, 8), make(chan struct{}, 8), make(chan struct{}, 1), make(chan struct{})
+			kinds := &orderedKinds{kinds: kindsN(3), key: "v1"}
+			a := New(Options{Checker: checkerFunc(func(_ context.Context, _ oidc.Identity, at Attributes) (bool, error) {
+				started <- at
+				<-gate
+				return true, nil
+			}), Kinds: mixedKinds{orderedKinds: kinds}, Clock: clocktesting.NewFakeClock(t0), Metrics: obs.NewRegistry(), IdentityFrom: identityFrom,
+				MaxInFlight: 1, Rate: unlimited, Burst: unlimited})
+			a.cache.lim.waiting = func() { waiting <- struct{}{} }
+			a.full.joined = func() { joined <- struct{}{} }
+			held := make(chan error, 1)
+			go func() { _, err := a.AuthorizeErr(request(user("alice")), route("held", "r")); held <- err }()
+			<-started
+			r, cancel := cancellable(user("alice"))
+			leader, waiter := make(chan error, 1), make(chan error, 1)
+			go func() { _, err := a.FullRead(r); leader <- err }()
+			receive(t, waiting, 3, "constituents queued")
+			if withWaiter {
+				go func() {
+					ok, err := a.FullRead(request(user("alice")))
+					if err == nil && !ok {
+						err = errors.New("false")
+					}
+					waiter <- err
+				}()
+				<-joined
+			}
+			cancel()
+			if err := testutil.Recv(t, leader, "the cancelled leader to return"); !errors.Is(err, context.Canceled) {
+				t.Fatalf("leader: %v, want context.Canceled", err)
+			}
+			if !withWaiter {
+				if n, w, q := limiterState(a.cache.lim); n != 1 || w != 0 || q != 0 {
+					t.Fatalf("after cancel: in flight %d, waiting %d, queued %d; want 1, 0, 0", n, w, q)
+				}
+			} else {
+				receive(t, waiting, 3, "constituents queued by the waiter")
+			}
+			close(gate)
+			if err := <-held; err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if withWaiter {
+				if err := <-waiter; err != nil {
+					t.Fatalf("waiter: %v", err)
+				}
+				want = 3
+			}
+			if len(started) != want {
+				t.Fatalf("%d constituent SARs sent, want %d", len(started), want)
+			}
+			settled(t, before)
+		})
+	}
 }

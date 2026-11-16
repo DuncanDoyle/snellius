@@ -37,7 +37,8 @@ type flightKey struct {
 }
 
 // flight is one SAR in progress; done closes once d and err are set.
-// retry marks a leader whose context ended before admission: nothing was sent.
+// retry marks a leader whose context ended before admission, so nothing was sent
+// for it (for a full read, before its evaluation finished): a waiter leads again.
 type flight struct {
 	done  chan struct{}
 	d     decision
