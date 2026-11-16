@@ -60,6 +60,8 @@ type Header struct {
 	ControllerNames []string      `json:"controllerNames"`
 	Readiness       Readiness     `json:"readiness"`
 	Scope           *ScopeSummary `json:"scope,omitempty"`
+	// DetailsHidden is set when the API left out fields whose source the caller may not read.
+	DetailsHidden bool `json:"detailsHidden,omitempty"`
 }
 
 // Count is one count tile.

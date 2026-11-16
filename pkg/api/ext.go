@@ -156,6 +156,7 @@ func WriteError(w http.ResponseWriter, code int, msg string) { writeErr(w, code,
 // and the number hidden, asking a about each ref once (D-013). Under
 // AllowAll, a full read or a nil a, it makes no calls and returns items, clipped so an append cannot alias it.
 // An ErrAuthorizer's error is recorded for the request and hides the ref; the API then answers 503.
+// In secure mode hidden is always 0 (D-085); Deps.View with VisibleTo is the secure-mode form.
 func Visible[T any](r *http.Request, a Authorizer, items []T, ref func(T) objects.Ref) (visible []T, hidden int) {
 	if a == nil || allowsAll(a) || fullRead(r, a) {
 		return slices.Clip(items), 0
@@ -168,6 +169,9 @@ func Visible[T any](r *http.Request, a Authorizer, items []T, ref func(T) object
 		} else {
 			hidden++
 		}
+	}
+	if secureRequest(r) {
+		return visible, 0
 	}
 	return visible, hidden
 }

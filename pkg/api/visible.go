@@ -60,13 +60,18 @@ type projection struct {
 // view returns the view of the caller of r. Under a full read, asked the
 // first time a population needs it, it is the allow-all view.
 func (h *handler) view(r *http.Request) *view {
-	v := &view{a: h.authz, r: r, all: allowsAll(h.authz), secure: h.secure && !h.bypass}
+	return newView(r, h.authz, h.secure && !h.bypass)
+}
+
+// newView is the view of r's caller through a; secure turns the projection on.
+func newView(r *http.Request, a Authorizer, secure bool) *view {
+	v := &view{a: a, r: r, all: allowsAll(a), secure: secure}
 	if !v.all {
 		v.lazy = true
 		v.seen, v.seenNamed = map[objects.Ref]bool{}, map[objects.Ref]bool{}
-		if _, ok := h.authz.(BatchAuthorizer); ok {
+		if _, ok := a.(BatchAuthorizer); ok {
 			v.lists = map[ListQuery]bool{}
-			ls, ok := h.authz.(ListScanner)
+			ls, ok := a.(ListScanner)
 			v.listFinal = ok && !ls.NamedGetScan()
 		}
 	}

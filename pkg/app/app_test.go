@@ -1969,6 +1969,38 @@ func TestSecureModeDepsShareAuthorizer(t *testing.T) {
 	}
 }
 
+// Deps.View answers through the authoriser the core handler uses, for handlers and collectors.
+func TestDepsViewSharesAuthorizer(t *testing.T) {
+	dyn, kube := testutil.Clients(t)
+	var asked []objects.Ref
+	custom := api.AuthorizerFunc(func(_ *http.Request, ref objects.Ref) bool {
+		asked = append(asked, ref)
+		return ref.Name == "allowed"
+	})
+	var got extension.Deps
+	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}}, secureOpts(),
+		extension.New(extension.WithAuthorizer(custom), extension.WithHandlers("probe", func(_ extension.Router, d extension.Deps) { got = d })))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprintf("%T", a.authz) != "api.AuthorizerFunc" {
+		t.Fatalf("core authoriser %T, want the registry's", a.authz)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/ext/probe/x", nil)
+	for _, view := range []func(*http.Request) api.Viewer{got.View, a.deps.View} {
+		if view == nil {
+			t.Fatal("Deps.View is nil")
+		}
+		v := view(req)
+		if !v.Can(objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: "allowed"}) || v.Can(objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: "denied"}) {
+			t.Error("Deps.View does not answer through the core authoriser")
+		}
+	}
+	if len(asked) != 4 {
+		t.Errorf("the core authoriser was asked %d times, want 4", len(asked))
+	}
+}
+
 // Every group and kind the Large fixture's index refers to maps to a resource,
 // so no kind is denied for a missing entry.
 func TestSARKindsCoverModelRefs(t *testing.T) {

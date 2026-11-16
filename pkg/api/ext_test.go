@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -210,4 +211,33 @@ func TestExtHandlersSeeOnePublication(t *testing.T) {
 			t.Errorf("snapshot %v: want the model and confirmation of one publication", got)
 		}
 	}
+}
+
+// In secure mode Visible still hides what the caller may not see, but its
+// hidden count is 0, so a hidden object leaves no trace (D-085).
+func TestVisibleHiddenZeroInSecureMode(t *testing.T) {
+	refOf := func(i int) objects.Ref { return objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: fmt.Sprint(i)} }
+	odd := func(ref objects.Ref) bool { return strings.ContainsAny(ref.Name[len(ref.Name)-1:], "13579") }
+	ext := func(a Authorizer) ExtMount {
+		return ExtMount{Name: "rows", Pattern: "GET /n", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			vis, hidden := Visible(r, a, []int{0, 1, 2, 3}, refOf)
+			WriteJSON(w, [2]int{len(vis), hidden})
+		})}
+	}
+	secure := &errAuthz{deny: odd}
+	if _, _, body := fetchRaw(t, secureServer(t, staticModel{}, secure, WithExtMounts(ext(secure))), "/api/ext/rows/n"); body != "[2,0]\n" {
+		t.Errorf("secure mode: %q, want two visible and no hidden count", body)
+	}
+	local := &errAuthz{deny: odd}
+	if _, _, body := fetch(t, httptestServer(t, NewHandler(staticModel{}, fstest.MapFS{}, local, WithExtMounts(ext(local)))), "/api/ext/rows/n"); body != "[2,2]\n" {
+		t.Errorf("local mode: %q, want the hidden count", body)
+	}
+}
+
+// httptestServer serves h until the test ends.
+func httptestServer(t *testing.T, h http.Handler) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv
 }

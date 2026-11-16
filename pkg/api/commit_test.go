@@ -269,23 +269,24 @@ func TestCommitFullReadSkipsChecks(t *testing.T) {
 
 // A full-read error answers 503 for a route that asks a population, with no
 // check after it; a route that asks none never runs the full read (D-100).
+// /meta asks the full read for limitedView (design §7.5).
 func TestCommitFullReadError(t *testing.T) {
 	ext := ExtMount{Name: "probe", Pattern: "GET /data", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		WriteJSON(w, "data")
 	})}
 	full := &fullAuthz{errAuthz: &errAuthz{}, err: errOutage}
 	srv := secureServer(t, staticModel{}, full, WithExtMounts(ext, refsExt(full, 3)))
-	for _, p := range []string{"/api/ext/probe/data", "/api/v1/meta"} {
-		if code, _, _ := fetchRaw(t, srv, p); code != http.StatusOK {
-			t.Errorf("GET %s: %d without a population", p, code)
-		}
+	if code, _, _ := fetchRaw(t, srv, "/api/ext/probe/data"); code != http.StatusOK {
+		t.Errorf("GET /api/ext/probe/data: %d without a population", code)
 	}
 	if n := full.readCount(); n != 0 {
 		t.Errorf("%d full reads without a population", n)
 	}
-	wantUnavailable(t, srv, "/api/ext/refs/n")
-	if n := full.readCount(); n != 1 || full.count() != 0 {
-		t.Errorf("%d full reads, %d checks", n, full.count())
+	for k, p := range []string{"/api/ext/refs/n", "/api/v1/meta"} {
+		wantUnavailable(t, srv, p)
+		if n := full.readCount(); n != k+1 || full.count() != 0 {
+			t.Errorf("GET %s: %d full reads, %d checks", p, n, full.count())
+		}
 	}
 	if code, _, body := fetchRaw(t, srv, "/"); code != http.StatusOK || !strings.Contains(body, "spa") {
 		t.Errorf("SPA: %d %q", code, body)

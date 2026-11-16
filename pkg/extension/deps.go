@@ -22,6 +22,10 @@ type Deps struct {
 	Current func() *engine.Published
 	// Authorizer is the registry's; filter objects with api.Visible.
 	Authorizer api.Authorizer
+	// View is the caller's api.Viewer, through the core handler's authoriser.
+	// A handler that serves cluster objects must use it (api.VisibleTo, Viewer.Shown),
+	// so a change to an object the caller cannot read never changes its response.
+	View func(r *http.Request) api.Viewer
 	// Capabilities returns the states every WithCapabilities source reports now,
 	// in registration order; /api/v1/meta lists the same.
 	Capabilities func() []api.Capability
@@ -83,6 +87,10 @@ func WithHandlers(name string, f func(r Router, d Deps)) Option {
 func (r *Registry) Mounts(d Deps) ([]api.ExtMount, error) {
 	if d.Authorizer == nil {
 		d.Authorizer = api.AllowAll{}
+	}
+	if d.View == nil {
+		a := d.Authorizer
+		d.View = func(r *http.Request) api.Viewer { return api.ViewerOf(r, a) }
 	}
 	if d.Logger == nil {
 		d.Logger = slog.Default()

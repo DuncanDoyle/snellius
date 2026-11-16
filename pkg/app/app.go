@@ -361,7 +361,8 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 			MaxInFlight: o.AuthzMaxInFlight, Rate: o.AuthzRate, Burst: o.AuthzBurst})
 		authz = sarAuthz
 	}
-	deps := extension.Deps{Current: eng.Current, Authorizer: authz, Capabilities: reg.CapabilityStates, Logger: slog.Default()}
+	deps := extension.Deps{Current: eng.Current, Authorizer: authz, Capabilities: reg.CapabilityStates, Logger: slog.Default(),
+		View: func(r *http.Request) api.Viewer { return api.ViewerOf(r, authz) }}
 	mounts, err := reg.Mounts(deps)
 	if err != nil {
 		return nil, err

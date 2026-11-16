@@ -35,6 +35,9 @@ type InstallSummary struct {
 	// Features are the install's UI features (Feature*); always sent, so an
 	// absent list means an older server (Phase 5 design §10).
 	Features []string `json:"features"`
+	// DetailsHidden is set when the caller may not read the source of every
+	// metadata field, which is then empty (design §7.4).
+	DetailsHidden bool `json:"detailsHidden,omitempty"`
 }
 
 // HealthSummary is the state and per-severity counts.
@@ -77,6 +80,9 @@ type MetaResponse struct {
 	Filters map[string][]string `json:"filters,omitempty"`
 	// AuthMode is "secure" when the server was built with WithSecureMode, else "local" (no sign-in).
 	AuthMode string `json:"authMode"`
+	// LimitedView is set in secure mode when the caller may not list every
+	// served kind cluster-wide; only the caller's own rights decide it (design §7.5).
+	LimitedView bool `json:"limitedView,omitempty"`
 }
 
 // addedFilters are the list filters added after API v1 (design §7.2). The

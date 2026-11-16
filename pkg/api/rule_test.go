@@ -26,6 +26,7 @@ import (
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/internal/testutil/scale"
 	"github.com/DuncanDoyle/snellius/pkg/api"
+	"github.com/DuncanDoyle/snellius/pkg/app"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/auth/sar"
 	"github.com/DuncanDoyle/snellius/pkg/cache"
@@ -34,6 +35,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/ctrllogs"
 	"github.com/DuncanDoyle/snellius/pkg/ctrlmetrics"
 	"github.com/DuncanDoyle/snellius/pkg/engine"
+	"github.com/DuncanDoyle/snellius/pkg/extension"
 	"github.com/DuncanDoyle/snellius/pkg/health"
 	"github.com/DuncanDoyle/snellius/pkg/install"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
@@ -60,6 +62,9 @@ const (
 	fullUser       = "full"
 	restrictedUser = "restricted"
 	routeReader    = "route-reader"
+	// nobodyUser may read nothing; metaUser+"dcn" reads the controller Deployment, GatewayClasses and Namespaces.
+	nobodyUser = "nobody"
+	metaUser   = "meta-"
 )
 
 var (
@@ -486,6 +491,74 @@ func (c extCheck) Run(ctx health.RunContext) ([]health.Finding, health.CheckResu
 	return out, res
 }
 
+// ruleInstallOf is the rule install of d's current publication.
+func ruleInstallOf(d extension.Deps) *engine.InstallModel {
+	m := d.Current().Model
+	for k := range m.Installs {
+		if m.Installs[k].Resolved.ID() == ruleInstall {
+			return &m.Installs[k]
+		}
+	}
+	return nil
+}
+
+// extBackend is a row of the rule extension: a Backend and the codes of the findings on it the caller is shown.
+type extBackend struct {
+	Ref   objects.Ref `json:"ref"`
+	Codes []string    `json:"codes"`
+}
+
+// viewerAnswers are ViewerOf's answers about the rule install, for TestViewerOfMatchesView.
+type viewerAnswers struct {
+	Secure, ReadsAll bool
+	// Gateways are the Gateways Can admits; Shown the IDs of the findings Shown admits.
+	Gateways, Shown []string
+	// Named is CanNamed of the namedOnly route; Lists are CanList answers by "kind/namespace".
+	Named bool
+	Lists map[string]bool
+}
+
+// ruleExt serves the cluster's Backends through Deps.View, as an extension
+// serving cluster objects must, and the Viewer's raw answers. It reads the
+// snapshot, not the install's Backends: hidden consumer routes decide those (D-107).
+func ruleExt(r extension.Router, d extension.Deps) {
+	r.Handle("GET /backends", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		v, i := d.View(req), ruleInstallOf(d)
+		k := testutil.ServedUpstream()[slices.IndexFunc(testutil.ServedUpstream(), func(k kinds.Served) bool { return k.Kind == "Backend" })]
+		out := []extBackend{}
+		for _, u := range api.VisibleTo(v, d.Current().Model.Snapshot.Objects[k.GVR()], objects.RefOf) {
+			row := extBackend{Ref: objects.RefOf(u), Codes: []string{}}
+			for k := range i.Health.Findings {
+				if f := &i.Health.Findings[k]; f.Resource != nil && *f.Resource == row.Ref && v.Shown(f) {
+					row.Codes = append(row.Codes, f.Code)
+				}
+			}
+			out = append(out, row)
+		}
+		api.WriteJSON(w, out)
+	}))
+	r.Handle("GET /viewer", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		v, i := d.View(req), ruleInstallOf(d)
+		out := viewerAnswers{Secure: v.Secure(), ReadsAll: v.ReadsAll(), Gateways: []string{}, Shown: []string{}, Lists: map[string]bool{}}
+		for _, u := range i.Owned.Gateways {
+			if ref := objects.RefOf(u); v.Can(ref) {
+				out.Gateways = append(out.Gateways, ref.Namespace+"/"+ref.Name)
+			}
+		}
+		for k := range i.Health.Findings {
+			if f := &i.Health.Findings[k]; v.Shown(f) {
+				out.Shown = append(out.Shown, f.ID)
+			}
+		}
+		out.Named = v.CanNamed(objects.Ref{Group: objects.GatewayAPIGroup, Kind: "HTTPRoute", Namespace: hiddenNS, Name: namedOnly})
+		route := objects.GroupKind{Group: objects.GatewayAPIGroup, Kind: "HTTPRoute"}
+		for _, ns := range []string{ns0, hiddenNS, ""} {
+			out.Lists["HTTPRoute/"+ns] = v.CanList(route, ns)
+		}
+		api.WriteJSON(w, out)
+	}))
+}
+
 // holder serves the snapshot a world's current publication reads.
 type holder struct {
 	mu sync.Mutex
@@ -585,6 +658,8 @@ func (ruleKinds) Lookup(group, kind string) (sar.Kind, bool) {
 		return sar.Kind{Resource: "pods", Namespaced: true}, true
 	case group == "" && kind == "Service":
 		return sar.Kind{Resource: "services", Namespaced: true}, true
+	case group == "" && kind == "Namespace":
+		return sar.Kind{Resource: "namespaces"}, true
 	}
 	for _, s := range testutil.ServedUpstream() {
 		if s.Group == group && s.Kind == kind {
@@ -612,10 +687,18 @@ func ruleIdentity(ctx context.Context) (oidc.Identity, bool) {
 // ruleChecker allows the full viewer everything and the restricted one every
 // list and get in the first ten scale namespaces, apart from kindLimited in
 // kindLimitedNS, plus a get of namedOnly. routeReader is restricted plus every
-// route kind in every namespace and cluster-wide.
+// route kind in every namespace and cluster-wide. nobody may read nothing;
+// a metaUser reads only the install metadata sources its name lists.
 type ruleChecker struct{}
 
 func (ruleChecker) Check(_ context.Context, id oidc.Identity, a sar.Attributes) (bool, error) {
+	if id.Username == nobodyUser {
+		return false, nil
+	}
+	if src, ok := strings.CutPrefix(id.Username, metaUser); ok {
+		return a.Verb == "list" && (strings.Contains(src, "d") && a.Resource == "deployments" && a.Namespace == "kgw" ||
+			strings.Contains(src, "c") && a.Resource == "gatewayclasses" || strings.Contains(src, "n") && a.Resource == "namespaces"), nil
+	}
 	if id.Username == fullUser || id.Username == routeReader && strings.HasSuffix(a.Resource, "routes") {
 		return true, nil
 	}
@@ -643,13 +726,28 @@ var (
 const namedOnly = "named-only"
 
 // ruleServe serves src in complete secure mode through a real sar.Authorizer,
-// the user taken from X-User.
+// the user taken from X-User, with the core capabilities and the rule extension.
 func ruleServe(t *testing.T, src api.ModelSource, opts ...api.HandlerOption) *httptest.Server {
 	t.Helper()
+	return ruleServeWith(t, src, ruleChecker{}, opts...)
+}
+
+// ruleServeWith is ruleServe answering SARs through c.
+func ruleServeWith(t *testing.T, src api.ModelSource, c sar.Checker, opts ...api.HandlerOption) *httptest.Server {
+	t.Helper()
 	const unlimited = 1 << 30
-	az := sar.New(sar.Options{Checker: ruleChecker{}, Kinds: ruleKinds{}, Clock: clocktesting.NewFakeClock(ruleCommit), IdentityFrom: ruleIdentity,
+	az := sar.New(sar.Options{Checker: c, Kinds: ruleKinds{}, Clock: clocktesting.NewFakeClock(ruleCommit), IdentityFrom: ruleIdentity,
 		MaxInFlight: unlimited, Rate: unlimited, Burst: unlimited})
-	opts = append([]api.HandlerOption{api.WithSecureMode(true), api.WithCommitClock(func() time.Time { return ruleCommit })}, opts...)
+	mounts, err := extension.NewCore(extension.WithHandlers("rule", ruleExt)).Mounts(extension.Deps{Current: src.Current, Authorizer: az})
+	if err != nil {
+		t.Fatal(err)
+	}
+	core := func() []api.Capability {
+		m := src.Current().Model
+		return app.CoreCapabilities(m.Snapshot, app.Diagnostics{ControllerLogs: true}, m.Collected)
+	}
+	opts = append([]api.HandlerOption{api.WithSecureMode(true), api.WithCommitClock(func() time.Time { return ruleCommit }),
+		api.WithExtMounts(mounts...), api.WithCoreCapabilities(core)}, opts...)
 	h := api.NewHandler(src, fstest.MapFS{}, az, opts...)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ruleUserKey{}, r.Header.Get("X-User"))))
@@ -805,6 +903,16 @@ var ruleSurfaces = []ruleSurface{
 	{name: "Gateway detail (selector)", path: fixed("/gateways/" + ns0 + "/" + readerSelectorGW), changes: []string{}},
 	{name: "YAML (finding only)", path: fixed("/resources/" + objects.GatewayAPIGroup + "/HTTPRoute/" + ns0 + "/" + namesAbsent), changes: []string{}},
 	{name: "YAML (hidden)", path: fixed("/resources/" + objects.GatewayAPIGroup + "/HTTPRoute/" + hiddenNS + "/hidden-route"), changes: []string{"faulty"}},
+	// Installs, the overview, meta and an extension mount (Task 34).
+	{name: "/installs", path: abs("/api/v1/installs"), changes: []string{"faulty", "threshold", "proxyReadyDeployment"}},
+	{name: "/overview", path: fixed("/overview"), changes: []string{"proxyReadyDeployment", "backendConsumer"}},
+	{name: "/meta", path: abs("/api/v1/meta"), changes: []string{"controller"}},
+	{name: "extension", path: abs("/api/ext/rule/backends"), changes: []string{"backendConsumer"}},
+}
+
+// abs is the fixed path p outside the install's base.
+func abs(p string) func(*testing.T, *httptest.Server, *httptest.Server) string {
+	return func(*testing.T, *httptest.Server, *httptest.Server) string { return p }
 }
 
 // ruleMasks are, per surface and change, the JSON paths (dot-separated) a
@@ -814,6 +922,8 @@ var ruleMasks = map[[2]string][]string{
 	// Deleting hidden-gw takes hidden-parent's child out of the install (D-107); nothing else moves.
 	{"/routes", "deleted"}:                      {"items.@child", "total"},
 	{"route detail (hidden parent)", "deleted"}: {""},
+	// The same move takes child out of the overview's HTTPRoute count.
+	{"/overview", "deleted"}: {"counts"},
 }
 
 // ruleNotApplicable are the pairs a change cannot reach for the full viewer either.

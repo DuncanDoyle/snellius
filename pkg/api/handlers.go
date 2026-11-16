@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io/fs"
 	"net/http"
@@ -85,13 +86,20 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 	// Unknown /api/ paths, extension ones included, get a JSON 404, never the SPA.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { writeErr(w, http.StatusNotFound, "not found") })
 	mux.Handle("/", spa(ui, authMode(cfg.secure)))
+	var next http.Handler = mux
+	if cfg.bypass {
+		// Extension Viewers see the bypass through the request.
+		next = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), bypassKey{}, true)))
+		})
+	}
 	switch {
 	case cfg.secure && !cfg.complete:
-		return secureGate(mux)
+		return secureGate(next)
 	case cfg.secure:
-		return commit(mux, cfg.commitCheck, cfg.authzAudit, cfg.commitClock)
+		return commit(next, cfg.commitCheck, cfg.authzAudit, cfg.commitClock)
 	}
-	return mux
+	return next
 }
 
 // secureGate answers every /api/ path with 503 and passes the rest (SPA, probes) on.
@@ -180,7 +188,7 @@ func (h *handler) load(w http.ResponseWriter) *engine.Published {
 // synced reports whether m exists and was computed over a synced cache.
 func synced(m *engine.Model) bool { return m != nil && m.Snapshot != nil && m.Snapshot.Synced }
 
-func (h *handler) meta(w http.ResponseWriter, _ *http.Request) {
+func (h *handler) meta(w http.ResponseWriter, r *http.Request) {
 	m, plat := h.current(), h.src.Platform()
 	resp := MetaResponse{Version: version.Version, Platform: plat.Name, Capabilities: append([]string{}, plat.Capabilities...), Kinds: []kinds.Served{},
 		Packs: append([]string{}, h.packs...), AuthMode: authMode(h.secure)}
@@ -206,7 +214,25 @@ func (h *handler) meta(w http.ResponseWriter, _ *http.Request) {
 	}
 	resp.Filters = addedFilters
 	addCapabilities(&resp, plat.Capabilities, h.coreSource, h.capSources)
+	if h.secure {
+		v := h.view(r)
+		resp.LimitedView = !v.readsAll()
+		if v.projects() {
+			dropControllerLogs(&resp)
+		}
+	}
 	writeJSON(w, resp)
+}
+
+// dropControllerLogs removes the controller log state unless it is off: its
+// other states come from the controller Pods' log content (design §7.2).
+func dropControllerLogs(resp *MetaResponse) {
+	const name = "controllerLogs"
+	if j := slices.IndexFunc(resp.CapabilityStates, func(c Capability) bool { return c.Name == name }); j < 0 || resp.CapabilityStates[j].State == CapOff {
+		return
+	}
+	resp.CapabilityStates = slices.DeleteFunc(resp.CapabilityStates, func(c Capability) bool { return c.Name == name })
+	resp.Capabilities = slices.DeleteFunc(resp.Capabilities, func(c string) bool { return c == name })
 }
 
 // visibleHealth returns the install's report as the caller of v may see it:
@@ -256,9 +282,34 @@ func (h *handler) visibleOverview(v *view, m *engine.Model, i *engine.InstallMod
 		return out
 	}
 	o := i.Owned
+	unattached := []install.UnattachedRoute{}
+	for _, u := range o.Unattached {
+		if can(u.Route.Obj) {
+			unattached = append(unattached, u)
+		}
+	}
 	owned := &install.Owned{GatewayClasses: keep(o.GatewayClasses), Gateways: keep(o.Gateways), ListenerSets: keep(o.ListenerSets),
-		Routes: keepObjs(o.Routes), Policies: keepObjs(o.Policies), Listed: keepObjs(o.Listed), Unattached: o.Unattached, Backends: keep(o.Backends)}
+		Routes: keepObjs(o.Routes), Policies: keepObjs(o.Policies), Listed: keepObjs(o.Listed), Unattached: unattached, Backends: keep(o.Backends)}
+	if v.omits() {
+		owned.Backends = consumed(i, owned.Routes, owned.Backends)
+	}
 	return overview.Build(i.Resolved, owned, m.Snapshot, m.Served, rep, h.src.Platform())
+}
+
+// consumed keeps the backends of bs that one of routes names: a Backend joins
+// an install through its consumer routes, which are not install context (D-107).
+func consumed(i *engine.InstallModel, routes []install.OwnedObject, bs []*unstructured.Unstructured) []*unstructured.Unstructured {
+	var dec objects.Decoder = objects.Direct{}
+	if i.Index != nil {
+		dec = indexViews{ix: i.Index}
+	}
+	named := map[objects.Ref]bool{}
+	for _, r := range routes {
+		for _, t := range dec.Route(r.Obj).Targets {
+			named[t.Ref] = true
+		}
+	}
+	return slices.DeleteFunc(bs, func(b *unstructured.Unstructured) bool { return !named[objects.RefOf(b)] })
 }
 
 func (h *handler) installs(w http.ResponseWriter, r *http.Request) {
@@ -274,15 +325,56 @@ func (h *handler) installs(w http.ResponseWriter, r *http.Request) {
 		confirmed = &at
 	}
 	out, v := []InstallSummary{}, h.view(r)
+	computed := wireTime(m.ComputedAt)
+	if v.projects() && confirmed != nil {
+		// When the model was computed is when the cluster last changed, hidden objects included (D-085).
+		computed = *confirmed
+	}
 	for k := range m.Installs {
 		i := &m.Installs[k]
-		hd, rep := i.Overview.Header, visibleHealth(v, i)
+		hd, rep := v.installHeader(i), visibleHealth(v, i)
 		out = append(out, InstallSummary{ID: hd.ID, DisplayName: hd.DisplayName, Namespace: hd.Namespace, Name: hd.Name, Version: hd.Version,
-			Edition: hd.Edition, ControllerNames: hd.ControllerNames, Readiness: hd.Readiness, Scope: hd.Scope,
+			Edition: hd.Edition, ControllerNames: hd.ControllerNames, Readiness: hd.Readiness, Scope: hd.Scope, DetailsHidden: hd.DetailsHidden,
 			Health: HealthSummary{State: rep.State, Counts: rep.Counts}, GroupRows: min(groupTotal(v.diagnosis(i)), maxGroups),
-			ComputedAt: wireTime(m.ComputedAt), ConfirmedAt: confirmed, Features: h.features(i)})
+			ComputedAt: computed, ConfirmedAt: confirmed, Features: h.features(i)})
 	}
 	writeJSON(w, out)
+}
+
+// Kinds the install header reads besides the controller Deployment (design §7.4).
+var (
+	gatewayClassKind = objects.GroupKind{Group: objects.GatewayAPIGroup, Kind: "GatewayClass"}
+	namespaceKind    = objects.GroupKind{Kind: "Namespace"}
+)
+
+// installHeader is i's header as the caller of v may see it (design §7.4,
+// D-102): the model's unless v projects; else the ID, and each other field
+// only when the caller may read its source. Each check is a permission, so
+// hidden objects never change the answer.
+func (v *view) installHeader(i *engine.InstallModel) overview.Header {
+	hd := i.Overview.Header
+	if !v.projects() {
+		return hd
+	}
+	classes := v.canList(gatewayClassKind, "")
+	// A class-only install has no Deployment: its name comes from its classes.
+	ctrl := classes
+	if d := i.Resolved.Deployment; d != nil {
+		ctrl = v.can(objects.Ref{Group: "apps", Kind: "Deployment", Namespace: d.Namespace, Name: d.Name})
+	}
+	out := overview.Header{ID: hd.ID, ControllerNames: []string{}, Readiness: overview.Readiness{State: overview.ReadinessUnknown}}
+	if ctrl {
+		out.DisplayName, out.Namespace, out.Name, out.Version, out.Edition, out.Readiness = hd.DisplayName, hd.Namespace, hd.Name, hd.Version, hd.Edition, hd.Readiness
+	}
+	if classes {
+		out.ControllerNames = hd.ControllerNames
+	}
+	// The scope's settings come from the Deployment, its counts from the Namespaces.
+	if hd.Scope != nil && ctrl && v.canList(namespaceKind, "") {
+		out.Scope = hd.Scope
+	}
+	out.DetailsHidden = !ctrl || !classes || hd.Scope != nil && out.Scope == nil
+	return out
 }
 
 // find loads the publication and the install named by the request, or writes 503 or 404.
@@ -305,10 +397,12 @@ func (h *handler) overview(w http.ResponseWriter, r *http.Request) {
 	if p, i := h.find(w, r); i != nil {
 		v := h.view(r)
 		ov := h.visibleOverview(v, p.Model, i, visibleHealth(v, i))
-		ov.Counts = h.applicableCounts(i, ov.Counts)
+		ov.Header, ov.Counts = v.installHeader(i), h.applicableCounts(i, ov.Counts)
 		rows, l := make([]OverviewGatewayRow, 0, len(ov.Gateways)), h.linker(v, p, i, nil, nil)
-		rejecting, withheld := rejectingGateways(i), withheldGateways(i)
-		checked := slices.ContainsFunc(i.Health.Checks, func(c health.CheckResult) bool { return c.Name == xdsCheckName && c.OK })
+		// Over the findings and checks the caller is shown: a Not checked result proves nothing.
+		rejecting := gatewaysWith(i, health.CodeXDSRejected, "", v.shown)
+		withheld := gatewaysWith(i, health.CodeConfigWithheld, health.SeverityError, v.shown)
+		checked := slices.ContainsFunc(v.report(i).Checks, func(c health.CheckResult) bool { return c.Name == xdsCheckName && c.OK && !c.NotAssessed })
 		for _, g := range ov.Gateways {
 			// A reject, then withheld config, shows even while the check is not OK; otherwise only an OK check proves "ok".
 			dp := DataPlaneUnknown

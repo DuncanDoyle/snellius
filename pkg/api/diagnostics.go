@@ -431,11 +431,6 @@ func dataPlane(v *view, i *engine.InstallModel) DataPlaneSummary {
 	return out
 }
 
-// rejectingGateways is the set of i's Gateways with a KGWUI-001.
-func rejectingGateways(i *engine.InstallModel) map[objects.Ref]bool {
-	return gatewaysWith(i, health.CodeXDSRejected, "", nil)
-}
-
 // withheldGateways is the set of i's Gateways with a KGWUI-024 error; its
 // warning (config released early) still updates the proxies.
 func withheldGateways(i *engine.InstallModel) map[objects.Ref]bool {
