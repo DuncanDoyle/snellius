@@ -61,6 +61,7 @@ func (h *handler) pathList(w http.ResponseWriter, r *http.Request) {
 	t, proj, kept := h.pathModel(p, i)
 	v := h.view(r)
 	prefetchPaths(v, i.Index, t)
+	proj = proj.For(t, v.projectionFilter(p, i))
 	resp, err := pathsPage(h.linker(v, p, i, t, proj), p, i, v, t, proj, kept, q)
 	if err != nil {
 		fail(w, err)
@@ -128,7 +129,8 @@ func projectInput(p *engine.Published, i *engine.InstallModel) paths.ProjectInpu
 	return paths.ProjectInput{Model: i, Next: m.Next, Snapshot: m.Snapshot, Now: m.ComputedAt, EndpointsCap: endpointsCap(i)}
 }
 
-// pathsPage is the page of t, projected by proj, that q asks for, as the caller of v may see it, linked by l.
+// pathsPage is the page of t, projected by proj, that q asks for, as the
+// caller of v may see it, linked by l. proj is already the caller's (Projection.For).
 func pathsPage(l linker, p *engine.Published, i *engine.InstallModel, v *view, t *paths.Topology, proj *paths.Projection, kept bool, q paths.Query) (PathsResponse, error) {
 	var visible func(explore.DepSet) bool
 	if !v.readsAll() {
@@ -139,7 +141,9 @@ func pathsPage(l linker, p *engine.Published, i *engine.InstallModel, v *view, t
 		return PathsResponse{}, err
 	}
 	pg.Summary.Unmemoised = !kept
-	titles := findingTitles(i, proj, pg.Rows)
+	// Secure mode says nothing of what was left out: the permissions note replaces it (design §7.5).
+	pg.Summary.Hidden = pg.Summary.Hidden && !v.omits()
+	titles := findingTitles(v, i, proj, pg.Rows)
 	rows := make([]PathRowDTO, 0, len(pg.Rows))
 	for _, k := range pg.Rows {
 		rows = append(rows, pathRow(l, titles, t, proj, k))
@@ -159,19 +163,19 @@ type titleKey struct {
 }
 
 // findingTitles maps the code and resource of each finding signal on the
-// page's rows to its finding's message, the first finding's when several
-// share both. Only the page's keys are held, so a request allocates per row
-// shown, not per finding.
-func findingTitles(i *engine.InstallModel, proj *paths.Projection, rows []int32) map[titleKey]string {
+// page's rows to its finding's message, the first shown finding's when
+// several share both. Only the page's keys are held, so a request allocates
+// per row shown, not per finding.
+func findingTitles(v *view, i *engine.InstallModel, proj *paths.Projection, rows []int32) map[titleKey]string {
 	sets := make([][]paths.Signal, 0, len(rows))
 	for _, k := range rows {
 		sets = append(sets, proj.Problems[k].Signals)
 	}
-	return signalTitles(i, sets...)
+	return signalTitles(v, i, sets...)
 }
 
 // signalTitles is findingTitles for the finding signals in sets.
-func signalTitles(i *engine.InstallModel, sets ...[]paths.Signal) map[titleKey]string {
+func signalTitles(v *view, i *engine.InstallModel, sets ...[]paths.Signal) map[titleKey]string {
 	var out map[titleKey]string
 	for _, set := range sets {
 		for _, s := range set {
@@ -192,7 +196,7 @@ func signalTitles(i *engine.InstallModel, sets ...[]paths.Signal) map[titleKey]s
 			continue
 		}
 		k := titleKey{f.Code, *f.Resource}
-		if t, ok := out[k]; ok && t == "" {
+		if t, ok := out[k]; ok && t == "" && v.shown(f) {
 			out[k] = f.Message
 		}
 	}

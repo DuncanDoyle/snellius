@@ -571,3 +571,41 @@ func TestProjectDelegatedChildStatus(t *testing.T) {
 		}
 	}
 }
+
+// For projects again over a viewer's filter: dropped finding signals fall back
+// to what readable status and counts say, and a namespace whose EndpointSlices
+// the viewer may not list has no counts. The shared projection is untouched.
+func TestProjectionFor(t *testing.T) {
+	svcs, eps := cart([]cache.ServicePort{httpPort}, []int{0}, 2)
+	edgeRef := gwEdge.Ref()
+	reject := health.Finding{Code: health.CodeXDSRejected, Severity: health.SeverityError, Resource: &edgeRef, Message: "rejected"}
+	top, p, m := projectAt(t, endpointsSnap(t, svcs, eps, edge("http"), accepted("r", svc("cart"))), "on", matured, reject)
+	in := paths.ProjectInput{Model: &m.Installs[0], Next: m.Next, Snapshot: m.Snapshot, Now: testutil.Now, EndpointsCap: "on"}
+	if p.For(top, nil) != p {
+		t.Fatal("For(nil) must return the shared projection")
+	}
+	noFindings := func(s paths.Signal) bool { return s.Kind != paths.SignalFinding }
+	got := p.For(top, &paths.ProjectionFilter{Input: in, Signal: noFindings})
+	if pr := got.Problems[0]; pr.State != health.StateUnknown || hasSignal(pr, paths.SignalFinding, health.StateError) ||
+		!slices.ContainsFunc(pr.Signals, func(s paths.Signal) bool {
+			return s.Kind == paths.SignalWaiting && s.Code == health.CodeBackendNoReadyEndpoints
+		}) {
+		t.Errorf("without findings: problem %+v, want waiting on the empty port", pr)
+	}
+	if ep := got.Endpoints[0]; ep.Complete != paths.EndpointsComplete || *ep.Ready != 0 {
+		t.Errorf("without findings: endpoints %+v, want the counts", ep)
+	}
+	if p.Problems[0].State != health.StateError {
+		t.Errorf("the shared projection changed: %+v", p.Problems[0])
+	}
+	denied := p.For(top, &paths.ProjectionFilter{Input: in, Signal: noFindings, Endpoints: func(string) bool { return false }})
+	if ep := denied.Endpoints[0]; ep.Complete != paths.EndpointsNotPermitted || ep.Ready != nil || ep.Total != nil || ep.PortName != "http" {
+		t.Errorf("not permitted: endpoints %+v", ep)
+	}
+	if pr := denied.Problems[0]; pr.State != health.StateUnknown || len(pr.Signals) != 1 || pr.Signals[0].Code != paths.EndpointsNotPermitted {
+		t.Errorf("not permitted: problem %+v, want one not-permitted signal", pr)
+	}
+	if denied.Digest(denied.Order) == got.Digest(got.Order) {
+		t.Error("the digest does not follow the viewer's endpoints")
+	}
+}

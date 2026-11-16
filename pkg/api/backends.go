@@ -128,7 +128,7 @@ func (h *handler) backendList(w http.ResponseWriter, r *http.Request) {
 	t, proj, _ := h.pathModel(p, i)
 	in := h.backendsInput(p, i, v, t)
 	h.prefetchBackends(p, i, v, t, in)
-	set := paths.Backends(t, proj, in)
+	set := paths.Backends(t, proj.For(t, v.projectionFilter(p, i)), in)
 	pg, err := paths.RunBackends(set, q)
 	if err != nil {
 		fail(w, err)
@@ -139,7 +139,7 @@ func (h *handler) backendList(w http.ResponseWriter, r *http.Request) {
 	for _, k := range pg.Items {
 		sets = append(sets, set.Items[k].Problem.Signals)
 	}
-	titles := signalTitles(i, sets...)
+	titles := signalTitles(v, i, sets...)
 	rows := make([]BackendRowDTO, 0, len(pg.Items))
 	for _, k := range pg.Items {
 		b := &set.Items[k]
@@ -150,7 +150,8 @@ func (h *handler) backendList(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, row)
 	}
-	writeJSON(w, BackendsResponse{Install: i.Resolved.ID(), Rows: rows, Next: pg.Next, Prev: pg.Prev, Hidden: set.Hidden,
+	// Secure mode says nothing of what was left out (design §7.5).
+	writeJSON(w, BackendsResponse{Install: i.Resolved.ID(), Rows: rows, Next: pg.Next, Prev: pg.Prev, Hidden: set.Hidden && !v.omits(),
 		Facets: backendFacetsDTO(l, pg.Facets), CollectedAt: wireTime(p.ConfirmedAt)})
 }
 
@@ -203,6 +204,8 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, proj, kept := h.pathModel(p, i)
+	f := v.projectionFilter(p, i)
+	proj = proj.For(t, f)
 	in := withSubject(h.backendsInput(p, i, v, t), v, t, ref)
 	in.Only = &ref
 	set := paths.Backends(t, proj, in)
@@ -217,7 +220,7 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	titles := signalTitles(i, b.Problem.Signals)
+	titles := signalTitles(v, i, b.Problem.Signals)
 	out := BackendDetail{Install: i.Resolved.ID(), Ref: l.linkedNamed(ref), Kind: backendKind(b), Type: b.Type, Problem: problemDTO(l, titles, b.Problem),
 		Status: problemDTO(l, titles, paths.Problem{Signals: b.Own}).Signals, Exposure: exposure, Consumers: make([]ConsumerDTO, 0, len(b.Consumers)),
 		Sources: []EndpointsDTO{}, PortChain: []PortChainDTO{}, Explanations: []RefExplanationDTO{}, CollectedAt: wireTime(p.ConfirmedAt)}
@@ -231,7 +234,7 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case ref.Group == "" && ref.Kind == "Service":
-		if h.serviceDetail(r.Context(), &out, p.Model, i.Resolved.ID(), b) {
+		if h.serviceDetail(r.Context(), &out, p.Model, i.Resolved.ID(), b, f == nil || f.Endpoints(ref.Namespace)) {
 			// The read contradicts the cache the problem comes from: unknown at best, never its green.
 			w := paths.Signal{Kind: paths.SignalWaiting, Code: health.CodeBackendNoReadyEndpoints, Ref: ref, State: health.StateUnknown}
 			pr := paths.Problem{State: b.Problem.State, Signals: append(slices.Clip(b.Problem.Signals), w)}
@@ -254,9 +257,14 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 
 // serviceDetail fills a Service's facts, its endpoints per referenced port
 // and its port chain (design §9). The caller has authorised the Service. It
-// reports whether a complete read found no ready endpoint on a port the cache counts ready.
-func (h *handler) serviceDetail(ctx context.Context, out *BackendDetail, m *engine.Model, install string, b *paths.Backend) (disagree bool) {
+// reports whether a complete read found no ready endpoint on a port the cache
+// // counts ready. A caller who may not list EndpointSlices (listSlices false)
+// gets not-permitted sources and no slice ports; the scoped reader is not called.
+func (h *handler) serviceDetail(ctx context.Context, out *BackendDetail, m *engine.Model, install string, b *paths.Backend, listSlices bool) (disagree bool) {
 	svc, ss := serviceFacts(m.Snapshot, b.Ref)
+	if !listSlices {
+		ss = nil
+	}
 	if svc != nil {
 		out.Service = &ServiceFactDTO{Type: svc.Type, Ports: make([]PortDTO, 0, len(svc.Ports))}
 		for _, sp := range svc.Ports {
@@ -265,7 +273,10 @@ func (h *handler) serviceDetail(ctx context.Context, out *BackendDetail, m *engi
 	}
 	external := svc != nil && svc.Type == "ExternalName"
 	var res endpoints.Result
-	if !external && len(b.Ports) > 0 {
+	switch {
+	case !listSlices:
+		res = endpoints.Result{Complete: paths.EndpointsNotPermitted, ReadAt: m.Snapshot.TakenAt}
+	case !external && len(b.Ports) > 0:
 		var err error
 		if res, err = h.scoped.Endpoints(ctx, install, b.Ref); err != nil || res.Complete == "" {
 			res.Complete = cmp.Or(res.Complete, endpoints.Failed)

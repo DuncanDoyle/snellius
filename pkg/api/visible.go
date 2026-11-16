@@ -446,6 +446,36 @@ func (v *view) viewer(i *engine.InstallModel) explore.Viewer {
 	return vw
 }
 
+// endpointSlices is the kind whose list permission endpoint counts need (design §7.6).
+var endpointSlices = objects.GroupKind{Group: "discovery.k8s.io", Kind: "EndpointSlice"}
+
+// projectionFilter is what the caller of v may see of install i's path
+// projection in p: finding signals of shown findings only, and endpoint counts
+// only where it may list EndpointSlices. Nil when v does not project.
+func (v *view) projectionFilter(p *engine.Published, i *engine.InstallModel) *paths.ProjectionFilter {
+	if !v.projects() {
+		return nil
+	}
+	v.prefetchFindings(i.Health.Findings)
+	var shown map[titleKey]bool
+	signal := func(s paths.Signal) bool {
+		if s.Kind != paths.SignalFinding {
+			return true
+		}
+		if shown == nil {
+			shown = map[titleKey]bool{}
+			for k := range i.Health.Findings {
+				if f := &i.Health.Findings[k]; f.Resource != nil && v.shown(f) {
+					shown[titleKey{f.Code, *f.Resource}] = true
+				}
+			}
+		}
+		return shown[titleKey{s.Code, s.Ref}]
+	}
+	return &paths.ProjectionFilter{Input: projectInput(p, i), Signal: signal,
+		Endpoints: func(ns string) bool { return v.canList(endpointSlices, ns) }}
+}
+
 // requiredNotOK reports whether a required check of cs is not OK.
 func requiredNotOK(cs []health.CheckResult) bool {
 	return slices.ContainsFunc(cs, func(c health.CheckResult) bool { return c.Required && !c.OK })

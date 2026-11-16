@@ -116,6 +116,7 @@ type PathCountsDTO struct {
 
 // PathSummaryDTO summarises the whole filtered result the caller may see
 // (design §5, §13). Hidden says some paths were left out for the caller;
+// secure mode never sets it, since the permissions note replaces it (design §7.5).
 // Unmemoised says the topology was over the memo cap and derived per request.
 // NotComputed says why there are no paths to compute, such as no computed views.
 type PathSummaryDTO struct {
@@ -166,9 +167,10 @@ type EndpointsDTO struct {
 	Source  string      `json:"source"`
 	Port    *PortDTO    `json:"port,omitempty"`
 	Runtime *RuntimeDTO `json:"runtime,omitempty"`
-	// ReadAt is meaningless when Complete is not-applicable: nothing was read.
+	// ReadAt is meaningless when Complete is not-applicable or not-permitted: nothing was read.
 	ReadAt time.Time `json:"readAt"`
-	// Complete is complete, partial, failed, unavailable, stale or not-applicable;
+	// Complete is complete, partial, failed, unavailable, stale, not-applicable
+	// or not-permitted (the caller may not list the Service's EndpointSlices);
 	// a backend detail's scoped read may also be timed-out or busy.
 	Complete string `json:"complete"`
 	// Ready and Total are absent unless the read establishes a count.

@@ -542,7 +542,7 @@ func (h *handler) routeDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	tr := d.trace(ref)
 	out.Serves = tr.serves
-	titles := signalTitles(d.i, tr.signalSets()...)
+	titles := signalTitles(d.v, d.i, tr.signalSets()...)
 	for _, rule := range v.Rules {
 		dto := d.rule(ref, rule)
 		for i := range dto.BackendRefs {

@@ -312,12 +312,12 @@ func TestGroupIDsWithoutHiddenProgress(t *testing.T) {
 func TestDataPlaneShownOnly(t *testing.T) {
 	srv := ruleServe(t, ruleWorld(t, ruleChange{name: "rejecting", rejects: []ctrlmetrics.GatewayKey{{Namespace: hiddenNS, Name: "hidden-gw"}, {Namespace: ns0, Name: testutil.ScaleGateway(0)}}}))
 	full := decode[api.Diagnostics](t, srv, fullUser, ruleBase+"/diagnostics").DataPlane
-	if full.Rejecting != 2 || full.Gateways != 14 {
-		t.Fatalf("full data plane %+v, want 2 of 14 rejecting", full)
+	if full.Rejecting != 2 || full.Gateways != 15 {
+		t.Fatalf("full data plane %+v, want 2 of 15 rejecting", full)
 	}
-	// 001 is derived, so the restricted viewer counts no reject, only its ten Gateways.
-	if r := decode[api.Diagnostics](t, srv, restrictedUser, ruleBase+"/diagnostics").DataPlane; r.Rejecting != 0 || r.Withheld != 0 || r.Gateways != 10 {
-		t.Errorf("restricted data plane %+v, want 0 of 10 rejecting", r)
+	// 001 is derived, so the restricted viewer counts no reject, only its eleven Gateways.
+	if r := decode[api.Diagnostics](t, srv, restrictedUser, ruleBase+"/diagnostics").DataPlane; r.Rejecting != 0 || r.Withheld != 0 || r.Gateways != 11 {
+		t.Errorf("restricted data plane %+v, want 0 of 11 rejecting", r)
 	}
 }
 

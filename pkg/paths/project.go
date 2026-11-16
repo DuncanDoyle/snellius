@@ -36,10 +36,40 @@ const (
 	EndpointsFailed        = "failed"
 	EndpointsUnavailable   = "unavailable"
 	EndpointsNotApplicable = "not-applicable"
+	// EndpointsNotPermitted marks a Service whose EndpointSlices the viewer may not list (design §7.6).
+	EndpointsNotPermitted = "not-permitted"
 )
 
 // EndpointsOn is the endpoints capability state in which counts are read.
 const EndpointsOn = "on"
+
+// ProjectionFilter is what one viewer may see of a projection (D-106, design
+// §7.6). Input is what the projection read, so For can project it again.
+type ProjectionFilter struct {
+	Input ProjectInput
+	// Signal keeps a signal; a finding signal is asked before its finding is used.
+	Signal func(Signal) bool
+	// Endpoints reports whether the viewer may list EndpointSlices in namespace.
+	Endpoints func(namespace string) bool
+}
+
+// For is p as the viewer of f sees it: a per-request copy whose row
+// problems, endpoint summaries, order and digests are projected again over f.
+// A nil f returns p. The copy is never memoised.
+func (p *Projection) For(t *Topology, f *ProjectionFilter) *Projection {
+	if f == nil {
+		return p
+	}
+	return project(t, f.Input, f)
+}
+
+// keeps reports whether f keeps s; a nil f or Signal keeps every signal.
+func (f *ProjectionFilter) keeps(s Signal) bool { return f == nil || f.Signal == nil || f.Signal(s) }
+
+// permits reports whether f lets the viewer read endpoints in namespace; a nil f or Endpoints permits all.
+func (f *ProjectionFilter) permits(namespace string) bool {
+	return f == nil || f.Endpoints == nil || f.Endpoints(namespace)
+}
 
 // Signal is one existing signal on a row's chain. Code is a finding code, a
 // condition type, a capability state or a view C reason; Ref is its object.
@@ -91,6 +121,8 @@ type Projection struct {
 	Next engine.Deadline
 	// digests are each row's content digest, made once per projection for Digest.
 	digests []uint64
+	// filter is the viewer filter For projected this copy over; nil for a shared projection.
+	filter *ProjectionFilter
 }
 
 // gatewayCodes are the Gateway-scoped findings that describe its proxies.
@@ -170,35 +202,39 @@ type projector struct {
 	entries map[[2]objects.Ref][]computed.Class
 	// setDigests are the interned signal sets' digests, by their first signal.
 	setDigests map[*Signal]uint64
+	// filter is the viewer's filter; nil projects for every viewer.
+	filter *ProjectionFilter
 }
 
 // Project maps each row of t to its problem: the worst existing signal along
 // its whole chain (design §4.5). It adds no checks. in.Model must be set.
-func Project(t *Topology, in ProjectInput) *Projection {
+func Project(t *Topology, in ProjectInput) *Projection { return project(t, in, nil) }
+
+// project is Project as the viewer of f sees it: only the findings and
+// signals f keeps, and no endpoint counts where f does not permit them.
+func project(t *Topology, in ProjectInput, f *ProjectionFilter) *Projection {
 	p := &projector{t: t, in: in, findings: map[objects.Ref][]*health.Finding{}, atts: make([]attSignals, len(t.atts)),
 		ctxs: map[int32][]Signal{}, edges: map[[2]objects.Ref]*Signal{}, refs: map[objects.Ref][]refFinding{}, ports: map[portKey]*portHealth{},
 		backends: map[objects.Ref]*unstructured.Unstructured{}, shares: map[*objects.Rule][]Share{}, sets: map[string][]Signal{}, na: map[int32]*Endpoints{},
-		setDigests: map[*Signal]uint64{}}
+		setDigests: map[*Signal]uint64{}, filter: f}
 	p.facts.snap = in.Snapshot
-	for i := range in.Model.Health.Findings {
-		f := &in.Model.Health.Findings[i]
-		if f.Resource != nil {
-			p.findings[*f.Resource] = append(p.findings[*f.Resource], f)
-		}
-	}
+	p.findings = indexFindings(in.Model.Health.Findings, f, nil)
 	if in.Model.Owned != nil {
 		for _, b := range in.Model.Owned.Backends {
 			p.backends[objects.RefOf(b)] = b
 		}
 	}
 	out := &Projection{Problems: make([]Problem, len(t.Rows)), Shares: make([]Share, len(t.Rows)), Endpoints: make([]*Endpoints, len(t.Rows)),
-		Order: make([]int32, len(t.Rows)), Next: in.Next, digests: make([]uint64, len(t.Rows))}
+		Order: make([]int32, len(t.Rows)), Next: in.Next, digests: make([]uint64, len(t.Rows)), filter: f}
 	// ids are the rows' RowID hashes, made once for the digests and the order's ties.
 	ids := make([]uint64, len(t.Rows))
 	var sigs []Signal
 	for i, r := range t.Rows {
 		ids[i] = t.rowHash(r)
 		sigs = p.row(sigs[:0], r, out, i)
+		if f != nil && f.Signal != nil {
+			sigs = slices.DeleteFunc(sigs, func(s Signal) bool { return !f.keeps(s) })
+		}
 		pr := Problem{State: health.StateHealthy}
 		for _, s := range sigs {
 			if stateRank(s.State) < stateRank(pr.State) {
@@ -222,6 +258,21 @@ func Project(t *Topology, in ProjectInput) *Projection {
 		}
 		return cmp.Or(cmp.Compare(ids[a], ids[b]), cmp.Compare(ra.dup, rb.dup))
 	})
+	return out
+}
+
+// indexFindings indexes fs by resource: those f keeps as a finding signal,
+// and only resources want admits when it is set.
+func indexFindings(fs []health.Finding, f *ProjectionFilter, want func(objects.Ref) bool) map[objects.Ref][]*health.Finding {
+	out := map[objects.Ref][]*health.Finding{}
+	for i := range fs {
+		fd := &fs[i]
+		if fd.Resource == nil || want != nil && !want(*fd.Resource) ||
+			!f.keeps(Signal{Kind: SignalFinding, Code: fd.Code, Ref: *fd.Resource, State: sevState(fd.Severity)}) {
+			continue
+		}
+		out[*fd.Resource] = append(out[*fd.Resource], fd)
+	}
 	return out
 }
 
@@ -432,18 +483,15 @@ func (p *projector) attachmentInto(s *attSignals, a int32, root objects.Ref) {
 
 // AttachmentProblems is the own problem of each row's attachment, index-aligned
 // with rows: its Gateway, listener and route parent status signals as Project
-// derives them, a current ResolvedRefs=False included. Nothing is retained.
-func AttachmentProblems(t *Topology, in ProjectInput, rows []int32) []Problem {
-	p := &projector{t: t, in: in, findings: map[objects.Ref][]*health.Finding{}}
+// derives them, a current ResolvedRefs=False included, as the viewer of f
+// sees them (nil for every viewer). Nothing is retained.
+func AttachmentProblems(t *Topology, in ProjectInput, rows []int32, f *ProjectionFilter) []Problem {
+	p := &projector{t: t, in: in, filter: f}
 	gws := map[objects.Ref]bool{}
 	for _, k := range rows {
 		gws[t.Gateway(t.Rows[k])] = true
 	}
-	for i := range in.Model.Health.Findings {
-		if f := &in.Model.Health.Findings[i]; f.Resource != nil && gws[*f.Resource] {
-			p.findings[*f.Resource] = append(p.findings[*f.Resource], f)
-		}
-	}
+	p.findings = indexFindings(in.Model.Health.Findings, f, func(r objects.Ref) bool { return gws[r] })
 	out := make([]Problem, len(rows))
 	for j, k := range rows {
 		r := t.Rows[k]
@@ -453,6 +501,9 @@ func AttachmentProblems(t *Topology, in ProjectInput, rows []int32) []Problem {
 		sigs := s.sigs
 		if s.refsFalse {
 			sigs = append(sigs, Signal{Kind: SignalRouteStatus, Code: "ResolvedRefs", Ref: root, State: health.StateError})
+		}
+		if f != nil && f.Signal != nil {
+			sigs = slices.DeleteFunc(slices.Clone(sigs), func(s Signal) bool { return !f.keeps(s) })
 		}
 		pr := Problem{State: health.StateHealthy, Signals: sigs}
 		for _, sg := range sigs {
@@ -715,7 +766,7 @@ func (p *projector) port(k portKey) *portHealth {
 	if ph, ok := p.ports[k]; ok {
 		return ph
 	}
-	ph := portHealthOf(p.in, &p.facts, k, p.findings[objects.Ref{Kind: "Service", Namespace: k.ns, Name: k.name}])
+	ph := portHealthOf(p.in, &p.facts, k, p.findings[objects.Ref{Kind: "Service", Namespace: k.ns, Name: k.name}], p.filter.permits(k.ns))
 	p.ports[k] = ph
 	return ph
 }
@@ -750,8 +801,9 @@ func (f *facts) service(ns, name string) (*cache.ServiceFact, []*cache.SliceFact
 }
 
 // portHealthOf is Service port k's summary in f, counted as KGWUI-023 counts
-// it, with the Service's findings found.
-func portHealthOf(in ProjectInput, f *facts, k portKey, found []*health.Finding) *portHealth {
+// it, with the Service's findings found. Without permitted no slice is
+// counted: the summary is not-permitted, its one signal unknown.
+func portHealthOf(in ProjectInput, f *facts, k portKey, found []*health.Finding, permitted bool) *portHealth {
 	ph := &portHealth{}
 	snap := in.Snapshot
 	ref := objects.Ref{Kind: "Service", Namespace: k.ns, Name: k.name}
@@ -776,6 +828,12 @@ func portHealthOf(in ProjectInput, f *facts, k portKey, found []*health.Finding)
 	svc, slices := f.service(k.ns, k.name)
 	if svc != nil && svc.Type == "ExternalName" {
 		ph.ep = &Endpoints{Complete: EndpointsNotApplicable, Port: k.port, ReadAt: snap.TakenAt}
+		return ph
+	}
+	// The Service's own port decides this; no slice is passed.
+	if ev, _ := health.PortEndpoints(svc, nil, k.port); !permitted && ev != nil {
+		ph.ep = &Endpoints{Complete: EndpointsNotPermitted, Port: k.port, PortName: ev.PortName, ReadAt: snap.TakenAt}
+		ph.sig = &Signal{Kind: SignalCoverage, Code: EndpointsNotPermitted, Ref: ref, State: health.StateUnknown}
 		return ph
 	}
 	// A Service or port the cache lacks is waiting for 013 from the route's status, never healthy.

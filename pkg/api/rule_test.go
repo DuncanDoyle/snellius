@@ -199,8 +199,13 @@ func ruleSnapshot(t *testing.T) ruleSnap {
 	// hidden-spare is a hidden Gateway no readable object depends on; its proxy is not ready either.
 	s.add(testutil.Gateway(hiddenNS, "hidden-spare", scale.Class, nil))
 	s.Deployments = append(s.Deployments, testutil.ProxyDeployment(hiddenNS, "hidden-spare", 1, 0))
-	s.Services = append(s.Services, service(hiddenNS, "hidden-svc"), service(ns0, "shared"))
-	s.EndpointSlices = append(s.EndpointSlices, slice(hiddenNS, "hidden-svc", 2), slice(ns0, "shared", 2))
+	s.Services = append(s.Services, service(hiddenNS, "hidden-svc"), service(ns0, "shared"), service(kindLimitedNS, limitedSvc))
+	s.EndpointSlices = append(s.EndpointSlices, slice(hiddenNS, "hidden-svc", 2), slice(ns0, "shared", 2), slice(kindLimitedNS, limitedSvc, 2))
+	// limited-svc is a visible Service whose EndpointSlices the restricted viewer may not list.
+	ok := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionTrue, "Accepted"), testutil.Cond("Programmed", metav1.ConditionTrue, "Programmed")}
+	s.add(testutil.Gateway(kindLimitedNS, limitedSvc+"-gw", scale.Class, nil, testutil.Listener{Name: "http", Attached: 1, Conds: ok}),
+		serviceRoute(kindLimitedNS, limitedSvc+"-route", []objects.ParentRef{testutil.GwRef(kindLimitedNS, limitedSvc+"-gw")}, kindLimitedNS, limitedSvc))
+	s.Deployments = append(s.Deployments, testutil.ProxyDeployment(kindLimitedNS, limitedSvc+"-gw", 1, 1))
 	for _, g := range []schema.GroupVersionResource{cache.ServicesGVR, cache.EndpointSlicesGVR, cache.EventsGVR, cache.CRDsGVR} {
 		s.Access[g] = cache.Access{OK: true}
 	}
@@ -374,10 +379,10 @@ var ruleChanges = []ruleChange{
 		failFirstParent(s.get("HTTPRoute", hiddenNS, "hidden-route"))
 		setCondition(s.get("Backend", hiddenNS, "hidden-be"), "Accepted", metav1.ConditionFalse)
 		setCondition(s.get("Gateway", hiddenNS, "hidden-gw"), "Programmed", metav1.ConditionFalse)
-		// A hidden Service with no ready endpoints.
+		// A hidden Service, and a visible one whose slices the viewer may not list, with no ready endpoints.
 		for i := range s.EndpointSlices {
-			if s.EndpointSlices[i].Namespace == hiddenNS && s.EndpointSlices[i].Service == "hidden-svc" {
-				s.EndpointSlices[i].Ready = []int{0}
+			if es := &s.EndpointSlices[i]; es.Namespace == hiddenNS && es.Service == "hidden-svc" || es.Namespace == kindLimitedNS && es.Service == limitedSvc {
+				es.Ready = []int{0}
 			}
 		}
 	}},
@@ -576,13 +581,16 @@ func (h *holder) Snapshot() *cache.Snapshot {
 	return h.s
 }
 
-// sortObjects orders each kind by "namespace/name", as the cache does.
+// sortObjects orders each kind and the Services by "namespace/name", as the cache does.
 func sortObjects(s *cache.Snapshot) {
 	for _, objs := range s.Objects {
 		slices.SortFunc(objs, func(x, y *unstructured.Unstructured) int {
 			return strings.Compare(x.GetNamespace()+"/"+x.GetName(), y.GetNamespace()+"/"+y.GetName())
 		})
 	}
+	slices.SortFunc(s.Services, func(x, y cache.ServiceFact) int {
+		return strings.Compare(x.Namespace+"/"+x.Name, y.Namespace+"/"+y.Name)
+	})
 }
 
 // ruleWorld computes the base world with c applied, through a fresh engine
@@ -665,6 +673,8 @@ func (ruleKinds) Lookup(group, kind string) (sar.Kind, bool) {
 		return sar.Kind{Resource: "services", Namespaced: true}, true
 	case group == "" && kind == "Namespace":
 		return sar.Kind{Resource: "namespaces"}, true
+	case group == "discovery.k8s.io" && kind == "EndpointSlice":
+		return sar.Kind{Group: "discovery.k8s.io", Resource: "endpointslices", Namespaced: true}, true
 	}
 	for _, s := range testutil.ServedUpstream() {
 		if s.Group == group && s.Kind == kind {
@@ -721,14 +731,17 @@ func (ruleChecker) Check(_ context.Context, id oidc.Identity, a sar.Attributes) 
 	return false, nil
 }
 
-// In kindLimitedNS the restricted viewer reads routes and Gateways but not the
-// kindLimited resources; namedOnly, in hiddenNS, it may get by name only.
+// In kindLimitedNS the restricted viewer reads routes, Gateways and Services
+// but not the kindLimited resources; namedOnly, in hiddenNS, it may get by name only.
 var (
 	kindLimitedNS = testutil.ScaleNamespace(9)
-	kindLimited   = []string{"deployments", "listenerpolicies"}
+	kindLimited   = []string{"deployments", "listenerpolicies", "endpointslices"}
 )
 
-const namedOnly = "named-only"
+const (
+	namedOnly  = "named-only"
+	limitedSvc = "limited-svc"
+)
 
 // ruleServe serves src in complete secure mode through a real sar.Authorizer,
 // the user taken from X-User, with the core capabilities and the rule extension.
@@ -913,6 +926,10 @@ var ruleSurfaces = []ruleSurface{
 	{name: "/overview", path: fixed("/overview"), changes: []string{"proxyReadyDeployment", "backendConsumer"}},
 	{name: "/meta", path: abs("/api/v1/meta"), changes: []string{"controller"}},
 	{name: "extension", path: abs("/api/ext/rule/backends"), changes: []string{"backendConsumer"}},
+	// Paths and backends (Task 35).
+	{name: "/paths", path: fixed("/paths?limit=200"), changes: []string{"faulty", "proxyReadyDeployment"}},
+	{name: "/backends", path: fixed("/backends?limit=200"), changes: []string{"faulty", "proxyReadyDeployment"}},
+	{name: "backend detail (slices not listable)", path: fixed("/backends/-/Service/" + kindLimitedNS + "/" + limitedSvc), changes: []string{"faulty"}},
 }
 
 // abs is the fixed path p outside the install's base.
@@ -927,8 +944,9 @@ var ruleMasks = map[[2]string][]string{
 	// Deleting hidden-gw takes hidden-parent's child out of the install (D-107); nothing else moves.
 	{"/routes", "deleted"}:                      {"items.@child", "total"},
 	{"route detail (hidden parent)", "deleted"}: {""},
-	// The same move takes child out of the overview's HTTPRoute count.
+	// The same move takes child out of the overview's HTTPRoute count and be-0000's routes.
 	{"/overview", "deleted"}: {"counts"},
+	{"/backends", "deleted"}: {"rows.@be-0000"},
 }
 
 // ruleNotApplicable are the pairs a change cannot reach for the full viewer either.

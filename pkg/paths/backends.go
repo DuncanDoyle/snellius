@@ -447,22 +447,14 @@ func (b *backends) finish() {
 	}
 	f := &facts{snap: b.in.Snapshot, need: func(ns, name string) bool { return need[ns+"/"+name] }}
 	if len(b.set.Items) > 0 {
-		b.found = map[objects.Ref][]*health.Finding{}
-		for j := range b.in.Model.Health.Findings {
-			fd := &b.in.Model.Health.Findings[j]
-			if fd.Resource != nil {
-				if _, ok := b.index[*fd.Resource]; ok {
-					b.found[*fd.Resource] = append(b.found[*fd.Resource], fd)
-				}
-			}
-		}
+		b.found = indexFindings(b.in.Model.Health.Findings, b.p.filter, func(r objects.Ref) bool { _, ok := b.index[r]; return ok })
 	}
 	for i := range b.set.Items {
 		it := &b.set.Items[i]
 		switch {
 		case isService(it.Ref):
 			for _, port := range it.Ports {
-				ph := portHealthOf(b.in.ProjectInput, f, portKey{it.Ref.Namespace, it.Ref.Name, port}, b.found[it.Ref])
+				ph := portHealthOf(b.in.ProjectInput, f, portKey{it.Ref.Namespace, it.Ref.Name, port}, b.found[it.Ref], b.p.filter.permits(it.Ref.Namespace))
 				if ph.ep != nil {
 					it.Endpoints = append(it.Endpoints, ph.ep)
 				}
@@ -484,6 +476,9 @@ func (b *backends) finish() {
 				found = nil
 			}
 			it.Own = backendSignals(nil, b.in.Model, it.Ref, u, found)
+		}
+		if fl := b.p.filter; fl != nil && fl.Signal != nil {
+			it.Own = slices.DeleteFunc(it.Own, func(s Signal) bool { return !fl.keeps(s) })
 		}
 		it.Own = merge("", nil, it.Own).Signals
 		it.Problem = merge(it.Problem.State, b.sets[i], it.Own)

@@ -19,7 +19,8 @@ type BackendRowDTO struct {
 }
 
 // BackendsResponse is GET …/backends. Hidden says a backend, path, route or
-// consumer was left out for the caller (design §13).
+// consumer was left out for the caller (design §13); secure mode never sets
+// it, since the permissions note replaces it (design §7.5).
 type BackendsResponse struct {
 	Install string          `json:"install"`
 	Rows    []BackendRowDTO `json:"rows"`
