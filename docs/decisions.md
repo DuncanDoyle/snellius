@@ -1544,3 +1544,16 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** In secure mode every signed-in viewer sees every install's ID (D-102) and a neutral name, whatever they can read in it. No reachability check runs. Everything else about an install stays per viewer (design §7.4): GatewayClass names, controller readiness and version, scope details, and every row, count and finding.
 
 **Consequences:** Creating or removing a controller install is visible to every signed-in viewer: a stated exception to D-085, like D-102. An install with nothing the viewer can read shows empty pages, never a 404. No permission checks are spent on reachability.
+
+## D-104 — A restricted viewer sees a check's result only with read access to everything it reads (2026-11-16, Phase 7, implements design §7.6)
+**Status:** our call (2026-11-16), after four Codex passes over the 7.4 plan (`reviews/plan-7.4-codex.md`). The user may override.
+
+**Context:** Design §7.6 shows an object-derived check result to a restricted viewer only when they can read its whole basis. The plan tried to project each result piece by piece: stable basis, held items, re-rendered text, per-note bases. Each review pass found more text, counts, timers and branches that hidden objects still decide (proxy stats, xDS, delegation grace, Events cap, extension checks).
+
+**Decision:**
+1. Every check declares, statically, the kinds it reads. A viewer without the full read sees a check's result (state, text, notes, holds, deadlines) only when they may `list` every one of those kinds cluster-wide. Otherwise the result is "Not checked", whatever its state.
+2. Collection and access failures (a watch denied, the cache not synced) stay visible to every viewer, with fixed text.
+3. A check that declares nothing, extensions included, is "Not checked" for such a viewer.
+4. Findings keep their per-finding basis (design §7.3). Anything decided by history or a threshold (grace timers, `Since`, deadlines, global caps such as the Events cap) has its whole population in the basis, as a permission, never derived from which objects exist.
+
+**Consequences:** The decision depends only on permissions, so hidden objects never change it. Restricted viewers mostly see "Not checked" in "What was checked"; full-read viewers and local mode are unchanged. The per-result projection machinery is not built.
