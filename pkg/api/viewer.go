@@ -14,6 +14,7 @@ import (
 // that serve cluster objects (design §7.2). It answers as the core handlers
 // do, so an extension applies the same rule (D-085). One request uses it, on one goroutine.
 // Install.Owned.Backends depends on hidden consumer routes: use Backends instead.
+// Only pkg/api implements it, so methods may be added.
 type Viewer interface {
 	// Secure reports whether the request runs in secure mode.
 	Secure() bool

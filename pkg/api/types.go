@@ -26,7 +26,8 @@ type InstallSummary struct {
 	// GroupRows is the number of groups diagnostics lists: the install page
 	// reserves that many Needs attention rows while diagnostics load.
 	GroupRows int `json:"groupRows"`
-	// ComputedAt is when the model behind Health was computed. Clients fall back
+	// ComputedAt is when the model behind Health was computed; in secure mode without
+	// the full read it is the confirmation time (D-109). Clients fall back
 	// to it when ConfirmedAt is absent.
 	ComputedAt time.Time `json:"computedAt"`
 	// ConfirmedAt is when the model was last confirmed to match the cluster
