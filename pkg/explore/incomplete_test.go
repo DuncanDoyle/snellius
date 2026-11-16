@@ -172,6 +172,12 @@ func beRef(name string) map[string]any {
 	return map[string]any{"group": "gateway.kgateway.dev", "kind": "Backend", "name": name}
 }
 
+// withNS sets the namespace of a backendRef.
+func withNS(ref map[string]any, ns string) map[string]any {
+	ref["namespace"] = ns
+	return ref
+}
+
 func backendObj(name string) objects.Ref {
 	return objects.Ref{Group: "gateway.kgateway.dev", Kind: "Backend", Namespace: "shop", Name: name}
 }
@@ -316,30 +322,85 @@ func TestIncompleteDelegationRefs(t *testing.T) {
 	}
 }
 
-// A readable ListenerSet outside the install is read from its own object:
-// its unreadable Gateway makes the path incomplete whether or not that
-// Gateway exists, or which class it is in.
+// A readable ListenerSet of any served kind outside the install is read from
+// its own object: its unreadable Gateway makes the path incomplete whether or
+// not that Gateway exists, or which class it is in. The owned case (Gateway
+// edge, which the install owns) is covered too.
 func TestIncompleteForeignListenerSet(t *testing.T) {
-	hid := objects.Ref{Group: objects.GatewayAPIGroup, Kind: "Gateway", Namespace: "infra", Name: "hid"}
-	ls := objects.ParentRef{Group: objects.GatewayAPIGroup, Kind: "ListenerSet", Namespace: "shop", Name: "ls"}
-	for _, v := range []string{"absent", "present", "other class"} {
-		objs := []*unstructured.Unstructured{
-			testutil.ListenerSet("shop", "ls", testutil.GwRef("infra", "hid"), nil),
-			testutil.HTTPRoute("shop", "r", []objects.ParentRef{gw, ls}, accepted(gw)),
+	const xGroup = "gateway.networking.x-k8s.io"
+	for _, kind := range []string{"ListenerSet", "XListenerSet"} {
+		group := objects.GatewayAPIGroup
+		if kind == "XListenerSet" {
+			group = xGroup
 		}
-		switch v {
-		case "present":
-			objs = append(objs, testutil.Gateway("infra", "hid", "kgateway", nil))
-		case "other class":
-			objs = append(objs, testutil.GatewayClass("other", "example.com/other", true), testutil.Gateway("infra", "hid", "other", nil))
+		ls := objects.ParentRef{Group: group, Kind: kind, Namespace: "shop", Name: "ls"}
+		for _, v := range []string{"owned", "absent", "present", "other class"} {
+			hid := objects.Ref{Group: objects.GatewayAPIGroup, Kind: "Gateway", Namespace: "infra", Name: "hid"}
+			set := testutil.ListenerSet("shop", "ls", testutil.GwRef("infra", "hid"), nil)
+			if v == "owned" {
+				hid.Name = "edge"
+				set = testutil.ListenerSet("shop", "ls", gw, nil)
+			}
+			if kind == "XListenerSet" {
+				set.SetAPIVersion(xGroup + "/v1alpha1")
+				set.SetKind(kind)
+			}
+			route := testutil.HTTPRoute("shop", "r", []objects.ParentRef{gw, ls}, accepted(gw))
+			if v == "owned" {
+				route = testutil.HTTPRoute("shop", "r", []objects.ParentRef{ls}, accepted(ls))
+			}
+			objs := []*unstructured.Unstructured{set, route}
+			switch v {
+			case "present":
+				objs = append(objs, testutil.Gateway("infra", "hid", "kgateway", nil))
+			case "other class":
+				objs = append(objs, testutil.GatewayClass("other", "example.com/other", true), testutil.Gateway("infra", "hid", "other", nil))
+			}
+			ix := newWorld(objs...).build(t)
+			if !incomplete(t, ix, "r", perms{noGet: map[objects.Ref]bool{hid: true}}) {
+				t.Errorf("%s, Gateway %s: an unreadable ListenerSet Gateway is complete", kind, v)
+			}
+			if incomplete(t, ix, "r", perms{}) {
+				t.Errorf("%s, Gateway %s: a readable path is incomplete", kind, v)
+			}
 		}
-		ix := newWorld(objs...).build(t)
-		if !incomplete(t, ix, "r", perms{noGet: map[objects.Ref]bool{hid: true}}) {
-			t.Errorf("Gateway %s: an unreadable ListenerSet Gateway is complete", v)
+	}
+}
+
+// parentRowCase is a readable parent route "p" that delegates to shop/kid,
+// with or without a row: out of scope it has none.
+func parentRowCase(t *testing.T, ns string) *Index {
+	t.Helper()
+	p := testutil.WithRules(testutil.HTTPRoute(ns, "p", []objects.ParentRef{testutil.GwRef("infra", "hid")}), incRule(testutil.DelegateTo("shop", "kid"), withNS(beRef("be"), "shop")))
+	r := testutil.HTTPRoute("shop", "r", []objects.ParentRef{gw, testutil.HTTPRouteRef(ns, "p")}, accepted(gw))
+	return newWorld(p, r).build(t)
+}
+
+// Membership never flips the answer for the same readable parent: a parent
+// with a row and one without agree, on delegation and on ordinary targets.
+func TestIncompleteParentRowAgreesWithoutRow(t *testing.T) {
+	perm := map[string]perms{
+		"all allowed":       {},
+		"no HTTPRoute list": {noList: map[objects.GroupKind]map[string]bool{routeGK: {"shop": true}}},
+		"no slice list":     {noList: map[objects.GroupKind]map[string]bool{sliceGK: {"shop": true}}},
+		"no kid get":        {noGet: map[objects.Ref]bool{routeRef("shop", "kid"): true}},
+		"no backend get":    {noGet: map[objects.Ref]bool{backendObj("be"): true}},
+	}
+	with, without := parentRowCase(t, "shop"), parentRowCase(t, "out")
+	if _, ok := with.Row(routeRef("shop", "p")); !ok {
+		t.Fatal("the in-scope parent has no row")
+	}
+	if _, ok := without.Row(routeRef("out", "p")); ok {
+		t.Fatal("the out-of-scope parent has a row")
+	}
+	for name, p := range perm {
+		if a, b := incomplete(t, with, "r", p), incomplete(t, without, "r", p); a != b {
+			t.Errorf("%s: with a row %v, without %v", name, a, b)
 		}
-		if incomplete(t, ix, "r", perms{}) {
-			t.Errorf("Gateway %s: a readable path is incomplete", v)
-		}
+	}
+	// The unreadable delegation list is what makes the path incomplete.
+	if !incomplete(t, without, "r", perm["no HTTPRoute list"]) {
+		t.Error("a row-less parent with an unlistable delegation namespace is complete")
 	}
 }
 

@@ -45,7 +45,7 @@ func (ix *Index) PathIncomplete(id RowID, p Permissions) bool {
 			if pid, ok := ix.Row(parent); ok {
 				queue = append(queue, ix.routeData(&ix.Routes[pid]))
 			} else if u := ix.object(parent); u != nil {
-				queue = append(queue, ix.routeData(&RouteRow{Ref: parent, Obj: u}))
+				queue = append(queue, ix.routeData(&RouteRow{Ref: parent, Obj: u, View: objects.DecodeHTTPRoute(u)}))
 			}
 		}
 	}
@@ -132,11 +132,9 @@ func (ix *Index) refsIncomplete(d pathData, p Permissions) bool {
 // spec.parentRef Gateway cannot be got or its namespace listed. The
 // ListenerSet is read from its own object, member of the install or not.
 func (ix *Index) listenerSetGatewayIncomplete(ref objects.Ref, p Permissions) bool {
-	if ref.Kind != "ListenerSet" {
-		return false
-	}
+	// parentObjs holds only ListenerSets of any served kind and HTTPRoutes.
 	u := ix.object(ref)
-	if u == nil {
+	if u == nil || ref.Group == httpRouteGK.Group && ref.Kind == httpRouteGK.Kind {
 		return false
 	}
 	g := objects.DecodeListenerSet(u).Parent.Ref()
