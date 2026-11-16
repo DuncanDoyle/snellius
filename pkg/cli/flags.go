@@ -13,6 +13,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/audit"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/auth/sar"
+	"github.com/DuncanDoyle/snellius/pkg/auth/session"
 )
 
 // Parse registers the flags on fs and parses args. It returns the kubeconfig
@@ -32,6 +33,7 @@ func Parse(fs *flag.FlagSet, args []string) (kubeconfig string, o app.Options, e
 	cookieSecure := fs.Bool("cookie-secure", true, "secure mode: mark sign-in cookies Secure; false only for plain-HTTP testing")
 	fs.DurationVar(&o.SessionIdle, "session-idle", 30*time.Minute, "secure mode: a session ends after this long without a request")
 	fs.DurationVar(&o.SessionAbsolute, "session-absolute", 8*time.Hour, "secure mode: a session ends this long after sign-in")
+	fs.IntVar(&o.SessionMax, "session-max", session.DefaultMax, "secure mode: most sessions held at once; past it the one unused longest ends")
 	fs.DurationVar(&o.AuthzCacheTTL, "authz-cache-ttl", sar.DefaultAllowTTL, "secure mode: how long an allowed permission check is reused, 30s to 15m; a revoked permission can stay visible this long")
 	fs.BoolVar(&o.AuthzNamedGetScan, "authz-named-get-scan", false, "secure mode: also show in lists the objects a viewer may only get by name (resourceNames grants); costs one check per hidden object")
 	fs.IntVar(&o.AuthzMaxInFlight, "authz-max-in-flight", sar.DefaultMaxInFlight, "secure mode: most permission checks sent to the API server at once, across all viewers")
@@ -60,6 +62,9 @@ func Parse(fs *flag.FlagSet, args []string) (kubeconfig string, o app.Options, e
 	}
 	if o.SessionIdle <= 0 || o.SessionAbsolute <= 0 {
 		return "", app.Options{}, fmt.Errorf("--session-idle (%v) and --session-absolute (%v) must be positive", o.SessionIdle, o.SessionAbsolute)
+	}
+	if o.SessionMax < 1 {
+		return "", app.Options{}, fmt.Errorf("--session-max (%d) must be at least 1", o.SessionMax)
 	}
 	if o.AuthzCacheTTL < MinAuthzCacheTTL || o.AuthzCacheTTL > MaxAuthzCacheTTL {
 		return "", app.Options{}, fmt.Errorf("--authz-cache-ttl (%v) must be between %v and %v", o.AuthzCacheTTL, MinAuthzCacheTTL, MaxAuthzCacheTTL)

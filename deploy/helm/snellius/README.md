@@ -12,7 +12,7 @@ Snellius runs in one of two modes, set with `auth.mode` (default `local`).
   - The API server must accept the client ID as an audience, either because the cluster already trusts that client ID or through `audiences` in its structured authentication configuration.
   - Sessions live in memory. The chart runs one replica, and a restart signs everyone out.
   - The secure-mode ClusterRole gains `create` on `tokenreviews` and `subjectaccessreviews`.
-  - An allowed permission check is reused for `auth.authz.cacheTTL` (default `60s`), a denied one for 5 minutes. Lists show only objects a user may `list`. The defaults are the secure choice. The [README](https://github.com/DuncanDoyle/snellius#secure-mode) explains how to tighten or relax them, and when to raise `auth.authz.maxInFlight`, `rate` and `burst`.
+  - An allowed permission check is reused for `auth.authz.cacheTTL` (default `60s`), a denied one for 4 to 5 minutes. Lists show only objects a user may `list`. The defaults are the secure choice. The [README](https://github.com/DuncanDoyle/snellius#secure-mode) explains how to tighten or relax them, and when to raise `auth.authz.maxInFlight`, `rate` and `burst`.
   - Secrets and tokens never reach the browser or the logs.
 - The ClusterRole never grants Secrets. That is the UI's whole secret-handling guarantee: no other field is redacted, and Deployments and other objects are shown as stored.
 
@@ -60,6 +60,7 @@ helm install ui ./deploy/helm/snellius -n snellius --create-namespace \
 | `auth.oidc.ca.key` | `ca.pem` | Key inside that ConfigMap. |
 | `auth.session.idle` | `""` | A session ends after this long without a request. Empty uses `30m`. |
 | `auth.session.absolute` | `""` | A session ends this long after sign-in. Empty uses `8h`. |
+| `auth.session.max` | `""` | Most sessions held at once; past it the one unused longest ends. Empty uses `1000`. Passed as `--session-max`. |
 | `auth.session.cookieSecure` | `true` | Mark the session cookie Secure. Set `false` only for plain-HTTP testing. |
 | `auth.authz.cacheTTL` | `""` | How long an allowed permission check is reused, `30s` to `15m`. Empty uses `60s`. It is how long a revoked permission stays visible in Snellius; a longer TTL means fewer checks. A denied check is reused for 5 minutes. Passed as `--authz-cache-ttl`. |
 | `auth.authz.namedGetScan` | `false` | Also show in lists, counts and facets the objects a viewer may only `get` by name (`resourceNames` grants). Off by default: it costs one check per hidden object. Passed as `--authz-named-get-scan`, secure mode only. |

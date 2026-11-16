@@ -532,7 +532,7 @@ type sarHeapRun struct {
 }
 
 // TestBudgetSARIntegratedHeap reports D-057's retained heap with the permission
-// cache at its budget and 5,000 sessions on the worst gated case. Report-only.
+// cache at its budget and session.DefaultMax sessions on the worst gated case. Report-only.
 func TestBudgetSARIntegratedHeap(t *testing.T) {
 	if os.Getenv(sarHeapChildEnv) != "" {
 		sarHeapChild(t)
@@ -559,8 +559,8 @@ func TestBudgetSARIntegratedHeap(t *testing.T) {
 		if r.Settled == 0 {
 			t.Fatalf("heap child printed no result:\n%s", out)
 		}
-		t.Logf("run: settled %+.1f MiB, cache at budget %+.1f MiB (accounted %.2f MiB, %.0f evicted), 5,000 sessions %+.1f MiB, total %+.1f MiB",
-			float64(r.Settled)/mib, float64(r.Cache-r.Settled)/mib, r.Accounted/mib, r.Evicted, float64(r.Sessions-r.Cache)/mib, float64(r.Sessions)/mib)
+		t.Logf("run: settled %+.1f MiB, cache at budget %+.1f MiB (accounted %.2f MiB, %.0f evicted), %d sessions %+.1f MiB, total %+.1f MiB",
+			float64(r.Settled)/mib, float64(r.Cache-r.Settled)/mib, r.Accounted/mib, r.Evicted, session.DefaultMax, float64(r.Sessions-r.Cache)/mib, float64(r.Sessions)/mib)
 		runs = append(runs, r)
 	}
 	med := func(f func(sarHeapRun) int64) float64 {
@@ -573,8 +573,8 @@ func TestBudgetSARIntegratedHeap(t *testing.T) {
 	}
 	total := med(func(r sarHeapRun) int64 { return r.Sessions })
 	verdict := map[bool]string{true: "✅ ≤ 64 MiB", false: "❌ > 64 MiB"}[total <= 64]
-	t.Logf("large-contradicting-worst + permission cache at budget + 5,000 sessions: median %+.1f MiB over the 2.1 baseline (%s, report-only); settled %+.1f, cache %+.1f, sessions %+.1f",
-		total, verdict, med(func(r sarHeapRun) int64 { return r.Settled }), med(func(r sarHeapRun) int64 { return r.Cache - r.Settled }),
+	t.Logf("large-contradicting-worst + permission cache at budget + %d sessions: median %+.1f MiB over the 2.1 baseline (%s, report-only); settled %+.1f, cache %+.1f, sessions %+.1f",
+		session.DefaultMax, total, verdict, med(func(r sarHeapRun) int64 { return r.Settled }), med(func(r sarHeapRun) int64 { return r.Cache - r.Settled }),
 		med(func(r sarHeapRun) int64 { return r.Sessions - r.Cache }))
 }
 
@@ -621,7 +621,7 @@ func sarHeapChild(t *testing.T) {
 	r.Cache = inuse()
 	r.Accounted, r.Evicted = metric(reg, "snellius_authz_cache_bytes"), metric(reg, "snellius_authz_cache_evictions_total")
 
-	// 5,000 sessions with tokens of typical size and ten groups.
+	// session.DefaultMax sessions with tokens of typical size and ten groups.
 	store := session.New(session.Options{})
 	groups := make([]string, 10)
 	for i := range groups {

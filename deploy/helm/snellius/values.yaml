@@ -59,6 +59,7 @@ auth:
   session:
     idle: ""            # a session ends after this long without a request; empty uses 30m
     absolute: ""        # a session ends this long after sign-in; empty uses 8h
+    max: ""             # most sessions held at once; past it the one unused longest ends; empty uses 1000
     cookieSecure: true  # false only for plain-HTTP testing
   authz:
     # How long an allowed permission check is reused, 30s to 15m; empty uses 60s. It is how

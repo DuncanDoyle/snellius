@@ -18,7 +18,7 @@
 | 2 | Local mode by default (loopback only, banner); secure mode for production, required for any exposure | (user, D-086) | §3 |
 | 3 | OIDC login through the issuer the cluster trusts; identity from TokenReview | (user) | §4 |
 | 4 | The claim-mapping fallback needs a JWT library, a new dependency. Whether it ships in `v0.8.0` changes which clusters can use secure mode: **queued for the user** (Codex #11) | (user decision pending) | §4.3 |
-| 5 | SubjectAccessReview checks: lists by `list` permission, named `get` for details and named refs; allows cached 60 s, denials 5 min, never extended; an unavailable check fails closed | (Codex; user, D-099, D-100) | §6 |
+| 5 | SubjectAccessReview checks: lists by `list` permission, named `get` for details and named refs; allows cached 60 s, denials 4 to 5 min, never extended; an unavailable check fails closed | (Codex; user, D-099, D-100) | §6 |
 | 6 | Two signals per route: route configuration and traffic path | (user, D-087) | §8 |
 | 7 | The legacy `health` field keeps its meaning (D-082 lift); restricted viewers get at least unknown over an incomplete path | (our call; Codex #10) | §8.3 |
 | 8 | Every finding and check result carries a basis; a restricted viewer sees it only when its object and whole basis are readable | (our call; Codex #1, #2) | §7.3, §7.6 |
@@ -149,7 +149,7 @@ A `SARAuthorizer` implements `api.Authorizer`. It asks the API server a `Subject
 
 Per identity (hash of username, groups, extra, UID): results keyed by verb, group, resource, namespace and name. Every answer is anchored at the SAR's start and never extended; an expired entry is checked again, not served (Codex). TTLs differ by answer (D-100):
 - **Allowed:** 60 s by default (chart `auth.authz.cacheTTL`, `--authz-cache-ttl`, range 30 s to 15 min). This bounds how long a revoked permission stays visible.
-- **Denied:** 5 min. A stale denial only hides; a new grant shows within 5 min.
+- **Denied:** 4 to 5 min, picked at random per answer so refreshes spread. A stale denial only hides; a new grant shows within 5 min.
 - **Errors:** never cached.
 - **Full read:** a cached "false" keeps the expiry of a denying check; a cached "true" expires at its earliest allowing check.
 
@@ -183,7 +183,7 @@ Budgets and bounds (Codex #14, D-100):
 - **Full-read fast path, lazy.** Only a request whose handler needs a population asks whether the identity may `list` every served kind cluster-wide. The decision is cached with the expiries of §6.2 and rechecked only when the identity next needs it (D-099). If so, the request uses the precomputed allow-all projection, as `AllowAll` does (`authz.go:37`), and no per-object SARs run. Most platform operators take this path. With no served kinds the full read is false (fails closed). An uncached full read spends one check per served kind against the per-request cap.
 - **Parallel resolution:** a request resolves its checks into a request-local table with 8 workers, then renders single-threaded (`view` is never shared between goroutines). Globally at most 32 SARs in flight and 100 SARs/s (burst 500), configurable; waiting is bounded too.
 - **Targets** (Large fixture, a viewer allowed 10 of 100 namespaces): `/routes` at most 400 SARs cold and 150 per minute warm, every poll answered 200 without contention; every other list page at most 400 SARs cold, `/backends` at most 550 (D-100 item 7, amended).
-- **Hard limits:** per request, at most 1,000 distinct uncached SARs (D-100 item 6); beyond it `503 authz-unavailable`, never a partial view. Identical concurrent checks are merged. At most 5,000 sessions.
+- **Hard limits:** per request, at most 1,000 distinct uncached SARs (D-100 item 6); beyond it `503 authz-unavailable`, never a partial view. Identical concurrent checks are merged. At most 1,000 sessions by default (`auth.session.max`, D-101).
 - **Memory:** the permission cache (decisions, identity data, full-read entries) has an 8 MiB byte budget with least-recently-used eviction across identities, inside D-057's retained-heap budget, raised to 64 MiB over the 2.1 baseline. In-flight checks and queues are bounded separately.
 - **Bench:** the denied-list workload on the large fixture, rerun against these targets.
 
@@ -319,7 +319,7 @@ kgwctl reads with the user's kubeconfig. Phase 7 changes nothing in kgwctl; the 
 - `auth.oidc.issuerURL`, `clientID`, `clientSecret.existingSecret`/`key` (mounted as a file), `redirectURL`, `scopes`, `extraAudiences` (documentation only).
 - `auth.session.idle`, `absolute`, `cookieSecure`.
 - `auth.trustedProxyCIDRs` for `X-Forwarded-For` in audit only.
-- `auth.authz.cacheTTL` (allowed answers, default 60 s, 30 s to 15 min), `auth.authz.namedGetScan` (default off), and the global SAR limits `auth.authz.maxInFlight`, `rate`, `burst` (defaults 32, 100/s, 32) (D-100). The denied TTL (5 min) and the cache's byte budget are not settings.
+- `auth.authz.cacheTTL` (allowed answers, default 60 s, 30 s to 15 min), `auth.authz.namedGetScan` (default off), and the global SAR limits `auth.authz.maxInFlight`, `rate`, `burst` (defaults 32, 100/s, 32) (D-100). The denied TTL (4 to 5 min) and the cache's byte budget are not settings.
 - `audit.levels`, `audit.summaryWindow`.
 - In secure mode the ClusterRole gains `create` on `tokenreviews` and `subjectaccessreviews`. Local mode does not get them.
 - `templates/NOTES.txt` and `values.yaml` describe both modes; the D-013 text moves to local mode.

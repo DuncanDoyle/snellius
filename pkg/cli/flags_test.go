@@ -94,12 +94,15 @@ func TestParseSessionFlags(t *testing.T) {
 	if err != nil || o.SessionIdle != 30*time.Minute || o.SessionAbsolute != 8*time.Hour || o.TrustedProxyCIDRs != nil {
 		t.Fatalf("defaults: idle %v, absolute %v, cidrs %v, %v", o.SessionIdle, o.SessionAbsolute, o.TrustedProxyCIDRs, err)
 	}
-	_, o, err = Parse(flag.NewFlagSet("t", flag.ContinueOnError), []string{"--session-idle=5m", "--session-absolute=1h",
+	if o.SessionMax != 1000 {
+		t.Fatalf("default session max %d, want 1000", o.SessionMax)
+	}
+	_, o, err = Parse(flag.NewFlagSet("t", flag.ContinueOnError), []string{"--session-idle=5m", "--session-absolute=1h", "--session-max=50",
 		"--trusted-proxy-cidrs=10.0.0.0/8, 192.168.0.0/16"})
-	if err != nil || o.SessionIdle != 5*time.Minute || o.SessionAbsolute != time.Hour || len(o.TrustedProxyCIDRs) != 2 {
+	if err != nil || o.SessionIdle != 5*time.Minute || o.SessionAbsolute != time.Hour || len(o.TrustedProxyCIDRs) != 2 || o.SessionMax != 50 {
 		t.Fatalf("parsed: idle %v, absolute %v, cidrs %v, %v", o.SessionIdle, o.SessionAbsolute, o.TrustedProxyCIDRs, err)
 	}
-	for _, bad := range [][]string{{"--trusted-proxy-cidrs=10.0.0.0/33"}, {"--session-idle=0"}, {"--session-absolute=-1h"}} {
+	for _, bad := range [][]string{{"--trusted-proxy-cidrs=10.0.0.0/33"}, {"--session-idle=0"}, {"--session-absolute=-1h"}, {"--session-max=0"}} {
 		if _, _, err := Parse(flag.NewFlagSet("t", flag.ContinueOnError), bad); err == nil {
 			t.Errorf("%v accepted", bad)
 		}

@@ -170,7 +170,7 @@ The data gate from 7.1 stays closed. 7.2 adds identity: who is calling, proven b
 **Files:** new `pkg/auth/session/store.go`, `refresh.go`, `middleware.go`; `pkg/app/mode.go`; tests alongside.
 
 **Interfaces:**
-- `session.Store`: 256-bit IDs; cookie `snellius_session` (HttpOnly, SameSite=Lax, Secure per `--cookie-secure`, Path `/`); idle 30 min (`--session-idle`), absolute 8 h (`--session-absolute`); at most 5,000 sessions (oldest idle evicted, audited); a sweeper every minute; an opaque audit session ID per session, distinct from the cookie value.
+- `session.Store`: 256-bit IDs; cookie `snellius_session` (HttpOnly, SameSite=Lax, Secure per `--cookie-secure`, Path `/`); idle 30 min (`--session-idle`), absolute 8 h (`--session-absolute`); at most `--session-max` sessions, default 1,000 (D-101; oldest idle evicted, audited); a sweeper every minute; an opaque audit session ID per session, distinct from the cookie value.
 - Freshness per design §4.4: fresh until min(ID token `exp`, last TokenReview + 15 min); refresh ahead of staleness, single-flight per session; new ID token must keep `iss` and `sub`; then TokenReview replaces groups; failure ends the session; logout wins over an in-flight refresh. A request with a stale identity gets `401`.
 - Middleware in secure mode, in front of the 7.1 gate: `/api/` without a valid session → `401 {"error":"sign-in-required","login":"/auth/login?return=<path>"}`; a session that ended (idle, absolute, refresh failure) → `401 {"error":"session-ended","login":…}` once, then `sign-in-required`; with a session the request carries the identity in its context (for 7.3) and still hits the gate's 503.
 - `GET /auth/me` → `{username, groups}` of the session (not cluster data); `401` without a session.
@@ -242,7 +242,7 @@ Ruling R20 (7.2 review finding 1). Today `takeNotice` (`refresh.go:65`) deletes 
 **Interfaces:**
 - An end notice is no longer consumed: every `/api/` and `/auth/me` request carrying the ended session's cookie gets `401 {"error":"session-ended","login":…}` until a new sign-in replaces the cookie or the notice expires.
 - A `session-ended` response no longer clears the cookie; `sign-in-required` still does. The cookie maps to no session, so keeping it grants nothing.
-- Bound (the existing one, now stated): a notice lives for `--session-absolute` (8 h) after the end, at most 5,000 notices (the session bound); at the bound the oldest is forgotten, and that cookie then hears `sign-in-required`.
+- Bound (the existing one, now stated): a notice lives for `--session-absolute` (8 h) after the end, at most `--session-max` notices (the session bound, default 1,000, D-101); at the bound the oldest is forgotten, and that cookie then hears `sign-in-required`.
 - `Complete` and `Logout` delete the notice for the cookie they replace or clear.
 - Web: the existing coordination stays (`trackAuthRequest`, `requestsSettled`, the sticky `ended` state). A notice forgotten at the bound can still reorder answers, so the client adds a rule of its own:
   - A tab that had a session shows the signed-out page ("You've been signed out", with an explicit "Sign in again") on `sign-in-required` as well as on `session-ended`. It never redirects by itself.
@@ -406,7 +406,7 @@ Install surface: `--authz-cache-ttl` and `auth.authz.cacheTTL` keep their names 
 - D-057 (as amended by D-100): the retained-heap budget tests move from 48 to 64 MiB over the 2.1 baseline (`pkg/api/budget_test.go:1558-1565`, `pkg/engine/budget_test.go:567-587`), messages cite D-100.
 
 - [ ] Tests: `TestByteBudgetEvictsGlobalLRU` (identities A and B fill the budget; touching A's entries evicts B's oldest first); `TestMultiIdentityChurn` (500 identities × 200 checks in a loop: accounted bytes never exceed the budget, hits stay correct per identity, no identity sees another's decision; `-race`); `TestDenialsEvictedEarlyAreRechecked` (an evicted 5 min denial is asked again, never served from elsewhere); `TestFlightBound` (4,097th concurrent distinct flight → `ErrOverloaded`); `TestAccountedBytesMatchHeap` (fill 10,000 decisions: accounted within 25 % of the `HeapAlloc` delta); `TestRetainedHeapAfterChurn` (retained heap after two GCs stays within the 8 MiB budget plus 25 % after each of: identity churn (5,000 identities through the cache), full-read-only churn (5,000 identities that only ask `FullRead`), and eviction back down to a few identities, which must also show the maps compacted); `TestFullReadEntriesEvicted` (full-read entries take part in the global LRU).
-- [ ] The integrated D-057 measurement (Task 28) runs with the cache at its budget and 5,000 representative sessions, against 64 MiB.
+- [ ] The integrated D-057 measurement (Task 28) runs with the cache at its budget and 1,000 representative sessions (the default `--session-max`, D-101), against 64 MiB.
 - [ ] Commit.
 
 ### Task 26: Parallel resolution into a request-local table
@@ -450,7 +450,7 @@ Install surface: **new flags** (secure mode only) `--authz-max-in-flight` (defau
 - Also with `--authz-named-get-scan` on: SARs and whether `/routes` hits the cap (expected; reported).
 - Latency p50/p95 at fake SAR latency 0 and 2 ms, cold and warm.
 - Load: 50 viewers polling at once: peak SARs in flight (≤ 32) and per second (≤ 100 plus burst), and the share of polls answered 200.
-- Memory: accounted cache bytes at the 8 MiB budget against the measured heap after identity churn, full-read-only churn and eviction; and the retained-heap D-057 figure (≤ 64 MiB over the 2.1 baseline) with the cache full and 5,000 representative sessions.
+- Memory: accounted cache bytes at the 8 MiB budget against the measured heap after identity churn, full-read-only churn and eviction; and the retained-heap D-057 figure (≤ 64 MiB over the 2.1 baseline) with the cache full and 1,000 representative sessions (the default `--session-max`, D-101).
 - [ ] Run; paste the numbers into the 7.3 complete record; a missed target goes to the user before 7.3 closes.
 
 ## Sub-phase 7.4 — Visibility everywhere (data still gated)

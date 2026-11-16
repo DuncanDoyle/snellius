@@ -27,7 +27,7 @@ const CookieName = "snellius_session"
 const (
 	DefaultIdle     = 30 * time.Minute
 	DefaultAbsolute = 8 * time.Hour
-	DefaultMax      = 5000
+	DefaultMax      = 1000
 )
 
 const (
@@ -88,11 +88,10 @@ type Store struct {
 	ended map[string]time.Time
 }
 
-// session is one signed-in browser. Its tokens never leave the server.
+// session is one signed-in browser. Its refresh token never leaves the server.
 type session struct {
 	key, auditID     string
 	info             Info
-	idToken, access  string
 	refreshToken     string
 	expiry, reviewed time.Time
 	created, seen    time.Time
@@ -131,7 +130,7 @@ func New(o Options) *Store {
 func (s *Store) Complete(w http.ResponseWriter, r *http.Request, res oidc.Result) {
 	value := newCookieValue()
 	now := s.clk.Now()
-	sess := &session{key: hashKey(value), auditID: newAuditID(), idToken: res.IDToken, access: res.AccessToken, refreshToken: res.RefreshToken,
+	sess := &session{key: hashKey(value), auditID: newAuditID(), refreshToken: res.RefreshToken,
 		expiry: res.Expiry, reviewed: now, created: now, seen: now,
 		info: Info{Identity: res.Identity, Issuer: res.Issuer, Subject: res.Subject}}
 	sess.info.AuditID = sess.auditID

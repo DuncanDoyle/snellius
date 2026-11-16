@@ -660,14 +660,14 @@ func TestSecureModeRendersEveryFlag(t *testing.T) {
 		"--set", "auth.oidc.scopes={openid,email}",
 		"--set", "auth.oidc.clientSecret.existingSecret=idp",
 		"--set", "auth.oidc.ca.existingConfigMap=idp-ca",
-		"--set", "auth.session.idle=15m", "--set", "auth.session.absolute=4h",
+		"--set", "auth.session.idle=15m", "--set", "auth.session.absolute=4h", "--set", "auth.session.max=50",
 		"--set", "auth.session.cookieSecure=false",
 		"--set", "auth.trustedProxyCIDRs={10.0.0.0/8,192.168.0.0/16}")...)
 	for _, want := range []string{
 		"--oidc-issuer-url=https://idp.example.com", "--oidc-client-id=snellius",
 		"--oidc-redirect-url=https://ui.example.com/auth/callback", "--oidc-scopes=openid,email",
 		"--oidc-client-secret-file=/etc/snellius/oidc/secret/client-secret", "--oidc-ca-file=/etc/snellius/oidc/ca/ca.pem",
-		"--session-idle=15m", "--session-absolute=4h", "--cookie-secure=false",
+		"--session-idle=15m", "--session-absolute=4h", "--session-max=50", "--cookie-secure=false",
 		"--trusted-proxy-cidrs=10.0.0.0/8,192.168.0.0/16"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("args lack %q: %v", want, got)

@@ -61,6 +61,8 @@ type Options struct {
 	CookieInsecure bool
 	// SessionIdle and SessionAbsolute bound a secure-mode session; zero means 30 min and 8 h.
 	SessionIdle, SessionAbsolute time.Duration
+	// SessionMax is the most sessions held at once; zero means 1,000.
+	SessionMax int
 	// AuthzCacheTTL bounds every cached allowed permission check in secure mode; zero means 60 s.
 	AuthzCacheTTL time.Duration
 	// AuthzNamedGetScan adds a named get to secure-mode list checks the list denies (D-100).
@@ -656,7 +658,7 @@ func buildSignIn(kube kubernetes.Interface, o Options, auditLog *audit.Logger, m
 	// The store and the flow refer to each other: the flow completes into the store, the store refreshes through the flow.
 	var prov *oidc.Provider
 	var flow *oidc.Flow
-	store := session.New(session.Options{Idle: o.SessionIdle, Absolute: o.SessionAbsolute, Clock: clk, Audit: auditLog, Metrics: metrics,
+	store := session.New(session.Options{Idle: o.SessionIdle, Absolute: o.SessionAbsolute, Max: o.SessionMax, Clock: clk, Audit: auditLog, Metrics: metrics,
 		CookieSecure: !o.CookieInsecure, ClientID: o.OIDC.ClientID, RedirectURL: o.OIDC.RedirectURL,
 		Refresher: refresherFunc(func(ctx context.Context, rt string) (oidc.Result, error) {
 			if flow == nil {

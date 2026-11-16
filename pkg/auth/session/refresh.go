@@ -110,7 +110,7 @@ func (s *Store) refresh(sess *session, refreshToken string, done chan struct{}) 
 		return
 	}
 	sess.info.Identity = res.Identity
-	sess.idToken, sess.access, sess.expiry, sess.reviewed = res.IDToken, res.AccessToken, res.Expiry, now
+	sess.expiry, sess.reviewed = res.Expiry, now
 	if res.RefreshToken != "" {
 		sess.refreshToken = res.RefreshToken
 	}
