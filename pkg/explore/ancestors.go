@@ -145,7 +145,8 @@ func (w *walker) visit(route objects.Ref, start bool) {
 	}
 	w.visits++
 	cands := w.parents(route)
-	if len(w.stack) == MaxDepth && len(cands) > 0 {
+	// With omit, only a visible parent would extend a path past the limit.
+	if len(w.stack) == MaxDepth && slices.ContainsFunc(cands, func(c candidate) bool { return !w.omit || w.visible(c.ref) }) {
 		w.truncated = true
 		return
 	}

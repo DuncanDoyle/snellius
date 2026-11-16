@@ -295,7 +295,7 @@ func (ix *Index) queryRoutes(in Query, vw Viewer) (Page, int, error) {
 	var cands []RowID
 	switch {
 	case q.Listener != "" && q.Listener != ListenerUnknown:
-		cands = ix.listenerRows(ListenerKey{*q.Parent, q.Listener}, visible)
+		cands = ix.listenerRows(ListenerKey{*q.Parent, q.Listener}, visible, vw.Shown != nil)
 	case q.Parent != nil:
 		cands = ix.ByParent[*q.Parent]
 		if isHTTPRoute(q.Parent.Group, q.Parent.Kind) {
@@ -357,9 +357,13 @@ func (ix *Index) queryRoutes(in Query, vw Viewer) (Page, int, error) {
 }
 
 // listenerRows are the distinct rows with a member on k whose dependencies
-// visible admits (design §7.4 rule 4a).
-func (ix *Index) listenerRows(k ListenerKey, visible func(objects.Ref) bool) []RowID {
+// visible admits (design §7.4 rule 4a); with all, a listener whose count is
+// unknown presents its members too.
+func (ix *Index) listenerRows(k ListenerKey, visible func(objects.Ref) bool, all bool) []RowID {
 	ms := ix.ByListener[k]
+	if all && !ix.Listeners[k].Known {
+		ms = ix.unknownMembers[k]
+	}
 	out := make([]RowID, 0, len(ms))
 	for _, m := range ms {
 		if (len(out) == 0 || out[len(out)-1] != m.Row) && ix.Visible(m.Deps, visible) {

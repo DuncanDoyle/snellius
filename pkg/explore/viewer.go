@@ -93,17 +93,28 @@ func (ix *Index) ProblemBackend(id RowID, vw Viewer) *objects.Ref {
 	return nil
 }
 
+// linkFlags are the row flags its parent links set.
+const linkFlags = FlagAccepted | FlagNotAccepted | FlagRefsUnresolved | FlagNotProgrammed | FlagPending | FlagDeclared
+
 // RouteStateOf is route row id's state, flags and reason for vw: the worst
 // shown finding on the row; gateway-rejecting only from a shown KGWUI-001 on a
 // parent Gateway; backend-problem only from a shown finding on a non-mirror
-// backend; disagrees only from a shown KGWUI-012. Flags pass RowFlags first.
+// backend; disagrees only from a shown KGWUI-012; status flags only from
+// links to parents vw.Visible admits. Flags pass RowFlags first.
 func (ix *Index) RouteStateOf(id RowID, vw Viewer) (health.State, Flag, *health.RowReason) {
 	r := &ix.Routes[id]
 	f := ix.RowFlags(id, vw.Visible)
 	if vw.Shown == nil {
 		return r.State, f, ix.RouteReason(id)
 	}
-	f &^= FlagGatewayRejecting | FlagBackendProblem | FlagDisagrees
+	// Status flags come from the links to parents the viewer may read only:
+	// a hidden parent's existence or status never shows on the row.
+	f &^= linkFlags | FlagGatewayRejecting | FlagBackendProblem | FlagDisagrees
+	for k := range r.Parents {
+		if l := &r.Parents[k]; vw.Visible == nil || vw.Visible(l.Target) {
+			f |= l.flags &^ FlagGatewayRejecting
+		}
+	}
 	for _, g := range r.rejectedBy {
 		if ix.shownProblem(g, health.CodeXDSRejected, vw) {
 			f |= FlagGatewayRejecting
@@ -138,15 +149,30 @@ func (ix *Index) routeReason(w Worst, st health.State, f Flag, b *objects.Ref, v
 
 // GatewayMemberCountAs is GatewayMemberCount over the members visible
 // admits: a visible route with visible dependencies; nil counts them all.
+// With visible set, a listener's unknown count does not make it unknown:
+// only routes the caller cannot read can do that, and they are not counted.
 func (ix *Index) GatewayMemberCountAs(id RowID, visible func(objects.Ref) bool) (int, bool) {
 	g := &ix.Gateways[id]
 	if visible == nil || g.View == nil {
 		return ix.GatewayMemberCount(id)
 	}
-	if _, ok := ix.memberCount(g.Ref, g.View.Listeners, g.Members); !ok {
+	if !ix.computed(g.Ref, g.View.Listeners) {
 		return 0, false
 	}
 	return ix.visibleMembers(g.Ref, g.View.Listeners, visible), true
+}
+
+// computed reports whether every listener of ref has a computed count, known or not.
+func (ix *Index) computed(ref objects.Ref, ls []objects.Listener) bool {
+	if ix.Listeners == nil {
+		return false
+	}
+	for _, l := range ls {
+		if _, ok := ix.Listeners[ListenerKey{ref, l.Name}]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // ListenerSetMemberCountAs is GatewayMemberCountAs for ListenerSet row id.
@@ -155,20 +181,20 @@ func (ix *Index) ListenerSetMemberCountAs(id RowID, visible func(objects.Ref) bo
 	if visible == nil || l.View == nil {
 		return ix.ListenerSetMemberCount(id)
 	}
-	if _, ok := ix.memberCount(l.Ref, l.View.Listeners, l.Members); !ok {
+	if !ix.computed(l.Ref, l.View.Listeners) {
 		return 0, false
 	}
 	return ix.visibleMembers(l.Ref, l.View.Listeners, visible), true
 }
 
-// ListenerCountAs is listener k's count over the members visible admits; nil
-// gives the computed count.
+// ListenerCountAs is listener k's count over the members visible admits,
+// whether or not its whole count is known; nil gives the computed count.
 func (ix *Index) ListenerCountAs(k ListenerKey, visible func(objects.Ref) bool) int {
 	if visible == nil {
 		return ix.Listeners[k].Count
 	}
 	n := 0
-	for _, id := range ix.listenerRows(k, visible) {
+	for _, id := range ix.listenerRows(k, visible, true) {
 		if visible(ix.Routes[id].Ref) {
 			n++
 		}
@@ -180,7 +206,7 @@ func (ix *Index) ListenerCountAs(k ListenerKey, visible func(objects.Ref) bool) 
 func (ix *Index) visibleMembers(ref objects.Ref, ls []objects.Listener, visible func(objects.Ref) bool) int {
 	seen := map[RowID]bool{}
 	for _, l := range ls {
-		for _, id := range ix.listenerRows(ListenerKey{ref, l.Name}, visible) {
+		for _, id := range ix.listenerRows(ListenerKey{ref, l.Name}, visible, true) {
 			if !seen[id] && visible(ix.Routes[id].Ref) {
 				seen[id] = true
 			}

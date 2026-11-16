@@ -137,6 +137,8 @@ type ParentLink struct {
 	// Dups are the later spec indexes that resolve to Ref; one written
 	// differently has its own report key and check (rules §8.2). Usually nil.
 	Dups []int
+	// flags are the row flags this link sets.
+	flags Flag
 }
 
 // RouteRow is one route the install lists (design §3.5): an owned route,
@@ -262,6 +264,9 @@ type Index struct {
 	ByListener map[ListenerKey][]Member
 	// Listeners holds every computed listener count.
 	Listeners map[ListenerKey]ListenerFacts
+	// unknownMembers lists view A's members per listener whose count is
+	// unknown: a viewer's visible count never depends on routes it cannot read.
+	unknownMembers map[ListenerKey][]Member
 	// RuleSet, RuleLabel and RuleNote are view A's rule set, its display name and its selection label.
 	RuleSet, RuleLabel, RuleNote string
 	// DelegRows are view B's rows, sorted by (parent, rule, ref, child), each

@@ -1202,7 +1202,8 @@ func TestSelectedAdmission(t *testing.T) {
 		want Admission
 	}{
 		{"selected no-parent row", k1, Admission{Reason: ReasonSelected, By: &dA, Referrers: []objects.Ref{dA, dB}, NoParent: true}},
-		{"a finding wins over selected", k2, Admission{Reason: ReasonFinding}},
+		// It keeps its selecting parent for a caller its finding is not shown to.
+		{"a finding wins over selected", k2, Admission{Reason: ReasonFinding, Referrers: []objects.Ref{dA}, Else: ReasonSelected}},
 		{"selected only by a parent the install does not own", k3, Admission{NoParent: true}},
 		{"owned parent", dA, Admission{Owned: true}},
 	} {

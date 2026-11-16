@@ -275,3 +275,23 @@ func TestVisibleAncestorsOmitHidden(t *testing.T) {
 		t.Fatalf("paths %v, want none", renders(got))
 	}
 }
+
+// At the depth limit, only a visible parent truncates VisibleAncestors: a
+// hidden one above the deepest visible route leaves it complete.
+func TestVisibleAncestorsDepthCountsVisibleOnly(t *testing.T) {
+	parents := map[string][]string{}
+	name := func(i int) string { return fmt.Sprintf("c%02d", i) }
+	for i := range MaxDepth {
+		parents[name(i)] = []string{name(i + 1)}
+	}
+	parents[name(MaxDepth)] = []string{"h"}
+	ix := upIx(parents, name(0), "h")
+	visible := func(r objects.Ref) bool { return r.Name != "h" }
+	if _, trunc := ix.Ancestors(routeRef("shop", name(0)), visible); !trunc {
+		t.Fatal("Ancestors: want truncated at the depth limit")
+	}
+	got, trunc := ix.VisibleAncestors(routeRef("shop", name(0)), visible)
+	if want := []string{"edge>" + name(0)}; !reflect.DeepEqual(renders(got), want) || trunc {
+		t.Errorf("paths %v truncated %v, want %v untruncated", renders(got), trunc, want)
+	}
+}
