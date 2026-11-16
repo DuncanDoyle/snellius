@@ -202,6 +202,51 @@ func (ix *Index) ListenerCountAs(k ListenerKey, visible func(objects.Ref) bool) 
 	return n
 }
 
+// GatewayMemberCountIn is GatewayMemberCountAs over the member routes in
+// scope only (D-100 item 8): a member outside it is skipped before any check.
+func (ix *Index) GatewayMemberCountIn(id RowID, visible func(objects.Ref) bool, scope []string) (int, bool) {
+	g := &ix.Gateways[id]
+	if g.View == nil {
+		return 0, false
+	}
+	return ix.membersIn(g.Ref, g.View.Listeners, visible, scope)
+}
+
+// ListenerSetMemberCountIn is GatewayMemberCountIn for ListenerSet row id.
+func (ix *Index) ListenerSetMemberCountIn(id RowID, visible func(objects.Ref) bool, scope []string) (int, bool) {
+	l := &ix.ListenerSets[id]
+	if l.View == nil {
+		return 0, false
+	}
+	return ix.membersIn(l.Ref, l.View.Listeners, visible, scope)
+}
+
+// membersIn counts the distinct member routes of ref's listeners in scope
+// whose dependencies and own ref visible admits; nil admits all.
+func (ix *Index) membersIn(ref objects.Ref, ls []objects.Listener, visible func(objects.Ref) bool, scope []string) (int, bool) {
+	if !ix.computed(ref, ls) {
+		return 0, false
+	}
+	seen := map[RowID]bool{}
+	for _, l := range ls {
+		k := ListenerKey{ref, l.Name}
+		ms := ix.ByListener[k]
+		if !ix.Listeners[k].Known {
+			ms = ix.unknownMembers[k]
+		}
+		for _, m := range ms {
+			r := ix.Routes[m.Row].Ref
+			if seen[m.Row] || !InScope(scope, r.Namespace) {
+				continue
+			}
+			if ix.Visible(m.Deps, visible) && (visible == nil || visible(r)) {
+				seen[m.Row] = true
+			}
+		}
+	}
+	return len(seen), true
+}
+
 // visibleMembers counts the distinct visible member routes of ref's listeners.
 func (ix *Index) visibleMembers(ref objects.Ref, ls []objects.Listener, visible func(objects.Ref) bool) int {
 	seen := map[RowID]bool{}

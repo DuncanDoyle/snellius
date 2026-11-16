@@ -217,7 +217,7 @@ func (h *handler) findings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := h.view(r)
-	fs, d := v.findingsIn(i, q.scope)
+	fs, d := v.findingsIn(i, q.scope, q.groups)
 	ix := d.Index
 	match := func(k int) bool { return q.match(v, &fs[k], nil) }
 	if q.q != "" {

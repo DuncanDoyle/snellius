@@ -30,6 +30,8 @@ type scopeList struct {
 	name, path   string
 	items, total []string
 	ns           func(row map[string]any) string
+	// counts are the member counts a scope limits; TestScopeMemberCountsInScope checks them.
+	counts []string
 }
 
 // refNS is the namespace of the ref at key of row; "" when absent.
@@ -52,9 +54,10 @@ func rootNS(row map[string]any) string {
 }
 
 var scopeLists = []scopeList{
-	{name: "routes", path: "/routes?limit=200", items: []string{"items"}, total: []string{"total"}, ns: refNS("ref")},
-	{name: "gateways", path: "/gateways?limit=200", items: []string{"items"}, total: []string{"total"}, ns: refNS("ref")},
-	{name: "listenersets", path: "/listenersets?limit=200", items: []string{"items"}, total: []string{"total"}, ns: refNS("ref")},
+	{name: "routes", path: "/routes?limit=200", items: []string{"items"}, total: []string{"total"}, ns: refNS("ref"), counts: []string{"children"}},
+	{name: "gateways", path: "/gateways?limit=200", items: []string{"items"}, total: []string{"total"}, ns: refNS("ref"),
+		counts: []string{"routes", "notAccepted", "listenerSets"}},
+	{name: "listenersets", path: "/listenersets?limit=200", items: []string{"items"}, total: []string{"total"}, ns: refNS("ref"), counts: []string{"routes"}},
 	{name: "paths", path: "/paths?limit=200", items: []string{"rows"}, total: []string{"summary", "paths"}, ns: rootNS},
 	{name: "backends", path: "/backends?limit=200", items: []string{"rows"}, ns: refNS("ref")},
 	{name: "findings", path: "/findings?limit=200", items: []string{"items"}, total: []string{"total"}, ns: refNS("resource")},
@@ -133,18 +136,18 @@ var scopeNS = []string{ns0, testutil.ScaleNamespace(4)}
 // TestScopeLimitsRowsCountsFacets: a scoped list holds exactly the unscoped
 // rows in scope, unchanged, with counts and facets of those rows only.
 func TestScopeLimitsRowsCountsFacets(t *testing.T) {
-	srv := ruleServe(t, ruleWorld(t, ruleChange{name: "base"}))
+	srv := ruleServe(t, worldPlus(t, straddle, ruleChange{name: "base"}))
 	q := "&namespaces=" + strings.Join(scopeNS, ",")
 	for _, l := range scopeLists {
 		all, _ := pages(t, srv, l, l.path)
 		in, scoped := pages(t, srv, l, l.path+q)
 		var want, got []string
 		for _, r := range in {
-			got = append(got, mustMarshal(t, r))
+			got = append(got, mustMarshal(t, withoutCounts(r, l.counts)))
 		}
 		for _, r := range all {
 			if slices.Contains(scopeNS, l.ns(r)) {
-				want = append(want, mustMarshal(t, r))
+				want = append(want, mustMarshal(t, withoutCounts(r, l.counts)))
 			}
 		}
 		if len(want) == 0 || len(want) == len(all) {
@@ -176,26 +179,84 @@ func TestScopeLimitsRowsCountsFacets(t *testing.T) {
 			t.Errorf("/backends namespace facet %s is outside the scope", n)
 		}
 	}
-	// The groups view lists the groups with a member in scope, each row unchanged.
-	inScope := map[string]bool{}
-	for _, f := range findingsOf(t, srv, fullUser) {
-		if f.Resource != nil && slices.Contains(scopeNS, f.Resource.Namespace) {
-			inScope[f.Group] = true
+	// The groups view counts in-scope members only, for every viewer: rebuilt from the scoped findings list.
+	for _, user := range []string{fullUser, restrictedUser} {
+		members, titles := map[string]int{}, map[string][]string{}
+		for _, f := range decode[api.Page[api.FindingRow]](t, srv, user, ruleBase+"/findings?limit=200"+q).Items {
+			members[f.Group]++
+			titles[f.Group] = append(titles[f.Group], f.Message)
+		}
+		gs := decode[api.Page[api.GroupRow]](t, srv, user, ruleBase+"/findings?view=groups&limit=200"+q)
+		if gs.Total != len(members) || len(gs.Items) != len(members) {
+			t.Errorf("%s groups view: %d groups, want %d", user, gs.Total, len(members))
+		}
+		for _, g := range gs.Items {
+			if g.Members != members[g.ID] || !g.Restricted && !slices.Contains(titles[g.ID], g.Title) {
+				t.Errorf("%s group %s: %d members titled %q, want %d with a title from %q", user, g.ID, g.Members, g.Title, members[g.ID], titles[g.ID])
+			}
 		}
 	}
-	var want, got []string
-	for _, g := range decode[api.Page[api.GroupRow]](t, srv, fullUser, ruleBase+"/findings?view=groups&limit=200").Items {
-		if inScope[g.ID] {
-			want = append(want, mustMarshal(t, g))
+}
+
+// TestScopeMemberCountsInScope: a scoped list counts in-scope members only,
+// rebuilt from scoped list queries: Gateway and ListenerSet routes, not-accepted
+// routes and ListenerSets of a Gateway, and child routes.
+func TestScopeMemberCountsInScope(t *testing.T) {
+	srv := ruleServe(t, ruleWorld(t, ruleChange{name: "base"}))
+	q := "&namespaces=" + strings.Join(scopeNS, ",")
+	total := func(path string) int { return int(decodeAny(t, srv, fullUser, ruleBase+path+q)["total"].(float64)) }
+	// members is the distinct routes on any listener of parent, in scope.
+	members := func(parent, detail string) int {
+		seen := map[string]bool{}
+		for _, ln := range decodeAny(t, srv, fullUser, ruleBase+detail)["listeners"].([]any) {
+			name := ln.(map[string]any)["name"].(string)
+			for _, r := range decode[api.Page[api.RouteRow]](t, srv, fullUser, ruleBase+"/routes?limit=200&parent="+parent+"&listener="+name+q).Items {
+				seen[r.Ref.String()] = true
+			}
+		}
+		return len(seen)
+	}
+	checked := 0
+	for _, g := range decode[api.Page[api.GatewayListRow]](t, srv, fullUser, ruleBase+"/gateways?limit=200"+q).Items {
+		parent := "gateway.networking.k8s.io/Gateway/" + g.Ref.Namespace + "/" + g.Ref.Name
+		if g.Routes != nil && *g.Routes != members(parent, "/gateways/"+g.Ref.Namespace+"/"+g.Ref.Name) {
+			t.Errorf("Gateway %s: %d routes, want %d", g.Ref.Name, *g.Routes, members(parent, "/gateways/"+g.Ref.Namespace+"/"+g.Ref.Name))
+		}
+		if n := total("/routes?limit=200&attachment=not-accepted&parent=" + parent); g.NotAccepted != n {
+			t.Errorf("Gateway %s: %d not accepted, want %d", g.Ref.Name, g.NotAccepted, n)
+		}
+		if n := total("/listenersets?limit=200&parent=" + parent); g.ListenerSets != n {
+			t.Errorf("Gateway %s: %d ListenerSets, want %d", g.Ref.Name, g.ListenerSets, n)
+		}
+		checked++
+	}
+	for _, s := range decode[api.Page[api.ListenerSetRow]](t, srv, fullUser, ruleBase+"/listenersets?limit=200"+q).Items {
+		parent := s.Ref.Group + "/" + s.Ref.Kind + "/" + s.Ref.Namespace + "/" + s.Ref.Name
+		if n := members(parent, "/listenersets/"+parent); s.Routes != nil && *s.Routes != n {
+			t.Errorf("ListenerSet %s: %d routes, want %d", s.Ref.Name, *s.Routes, n)
 		}
 	}
-	gs := decode[api.Page[api.GroupRow]](t, srv, fullUser, ruleBase+"/findings?view=groups&limit=200"+q)
-	for _, g := range gs.Items {
-		got = append(got, mustMarshal(t, g))
+	for _, r := range decode[api.Page[api.RouteRow]](t, srv, fullUser, ruleBase+"/routes?limit=200"+q).Items {
+		if r.Children == 0 {
+			continue
+		}
+		parent := r.Ref.Group + "/" + r.Ref.Kind + "/" + r.Ref.Namespace + "/" + r.Ref.Name
+		if n := total("/routes?limit=200&parent=" + parent); r.Children != n {
+			t.Errorf("route %s: %d children, want %d", r.Ref.Name, r.Children, n)
+		}
 	}
-	if len(want) == 0 || !slices.Equal(got, want) || gs.Total != len(want) {
-		t.Errorf("groups view: got %d %v, want %v", gs.Total, got, want)
+	if checked == 0 {
+		t.Fatal("no Gateway in scope")
 	}
+}
+
+// withoutCounts is row without the keys in counts.
+func withoutCounts(row map[string]any, counts []string) map[string]any {
+	out := maps.Clone(row)
+	for _, k := range counts {
+		delete(out, k)
+	}
+	return out
 }
 
 // pages is every row of l at path for the full viewer, following next, and the first page.
@@ -443,5 +504,13 @@ func TestNamespacesVisibleOnly(t *testing.T) {
 	}
 	if got := decode[api.NamespacesResponse](t, srv, restrictedUser, ruleBase+"/namespaces"); slices.Contains(got.Namespaces, hiddenNS) {
 		t.Errorf("the restricted viewer sees %s", hiddenNS)
+	}
+}
+
+// straddle adds routes in ns0 and ns-010 naming one missing Service, so one
+// KGWUI-013 group has members in and out of scopeNS.
+func straddle(s ruleSnap) {
+	for _, ns := range []string{ns0, testutil.ScaleNamespace(10)} {
+		s.add(failRefs(routeTo(ns, "straddle", gw0(), ns0, "missing-svc", true)))
 	}
 }

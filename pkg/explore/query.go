@@ -630,7 +630,10 @@ func (ix *Index) QueryGatewaysAs(in Query, vw Viewer) (Page, error) {
 		v := sortVal{group: g.Ref.Group, kind: g.Ref.Kind, n: healthRank(st)}
 		if q.Sort.Key == sortRoutes {
 			count := ix.GatewayMemberCount
-			if vw.Shown != nil {
+			switch {
+			case q.Scope != nil:
+				count = func(id RowID) (int, bool) { return ix.GatewayMemberCountIn(id, visible, q.Scope) }
+			case vw.Shown != nil:
 				count = func(id RowID) (int, bool) { return ix.GatewayMemberCountAs(id, visible) }
 			}
 			if n, ok := count(RowID(i)); ok { // #nosec G115 -- a row count fits in int32

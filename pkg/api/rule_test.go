@@ -70,6 +70,8 @@ const (
 var (
 	// hiddenNS is where every rule change happens; the controller's kgw is hidden too.
 	hiddenNS = testutil.ScaleNamespace(11)
+	// newNS holds nothing until the newNamespace change; the restricted viewer cannot read it.
+	newNS = "ns-new"
 	// ns0 is a namespace the restricted viewer reads.
 	ns0 = testutil.ScaleNamespace(0)
 	// ruleCommit is the commit clock.
@@ -356,6 +358,11 @@ func setCondition(u *unstructured.Unstructured, typ string, status metav1.Condit
 
 // ruleChanges are the hidden changes no restricted response may show (design §13).
 var ruleChanges = []ruleChange{
+	// A faulty hidden route in a namespace that held nothing before (Task 37: /namespaces).
+	{name: "newNamespace", apply: func(s ruleSnap) {
+		s.Namespaces = append(s.Namespaces, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: newNS}})
+		s.add(failRefs(routeTo(newNS, "new-ns-route", hiddenGW("hidden-gw"), newNS, "new-ns-missing", true)))
+	}},
 	{name: "created", apply: func(s ruleSnap) {
 		s.add(testutil.Gateway(hiddenNS, "hidden-new-gw", scale.Class, nil), testutil.Backend(hiddenNS, "hidden-new-be", nil),
 			routeTo(hiddenNS, "hidden-new-route", hiddenGW("hidden-new-gw"), hiddenNS, "hidden-new-be", true),
@@ -934,8 +941,7 @@ var ruleSurfaces = []ruleSurface{
 	{name: "/routes?namespaces=visible", path: fixed("/routes?limit=200&namespaces=" + ns0), changes: []string{"rejecting", "hiddenChild"}},
 	// An empty page before and after for the restricted viewer; without the projection the D-013 count moves.
 	{name: "/routes?namespaces=hidden", path: fixed("/routes?limit=200&namespaces=" + hiddenNS), changes: []string{"created", "deleted"}},
-	// No change adds or empties a namespace, so none reaches it; the restricted and recompute tests still ask it.
-	{name: "/namespaces", path: fixed("/namespaces"), changes: []string{}},
+	{name: "/namespaces", path: fixed("/namespaces"), changes: []string{"newNamespace"}},
 }
 
 // abs is the fixed path p outside the install's base.
@@ -990,6 +996,7 @@ var ruleHeldBefore = map[[2]string]string{
 	{"finding detail", "selectorTarget"}: rowDropsDetail,
 	{"YAML (hidden)", "faulty"}:          "a hidden object's YAML answers 404 since 7.3",
 	{"delegation", "hiddenChild"}:        "rows of a hidden child are left out since 7.3, and the name ref's row stands for it either way",
+	{"/namespaces", "newNamespace"}:      "list permission decides the namespaces, as it decides list rows since 7.3; the projection adds nothing",
 }
 
 // rowDropsDetail: the change alters only a hidden finding's detail or

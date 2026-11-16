@@ -54,6 +54,20 @@ func (ls *list) addInScope(add func(objects.Ref), ref objects.Ref) {
 	}
 }
 
+// recount is view.recount over the ids in the query's scope only.
+func (ls *list) recount(ids []explore.RowID, ref func(explore.RowID) objects.Ref) int {
+	if ls.q.Scope == nil {
+		return ls.v.recount(ids, ref)
+	}
+	in := make([]explore.RowID, 0, len(ids))
+	for _, id := range ids {
+		if explore.InScope(ls.q.Scope, ref(id).Namespace) {
+			in = append(in, id)
+		}
+	}
+	return ls.v.recount(in, ref)
+}
+
 // deniedInScope is deniedInInstall over the n rows in the query's scope only.
 func (ls *list) deniedInScope(n int, ref func(explore.RowID) objects.Ref) int {
 	if ls.q.Scope == nil {
@@ -170,8 +184,8 @@ func (ls *list) routeRow(id explore.RowID) RouteRow {
 	for _, p := range r.ParentRoutes {
 		out.ParentRoutes = append(out.ParentRoutes, ls.l.linked(p))
 	}
-	if !ls.v.readsAll() {
-		out.Children = ls.v.recount(ls.ix.ByParentRoute[r.Ref], ls.routeRef)
+	if !ls.v.readsAll() || ls.q.Scope != nil {
+		out.Children = ls.recount(ls.ix.ByParentRoute[r.Ref], ls.routeRef)
 	}
 	if len(ls.q.Backends) > 0 {
 		out.Mirror = ls.mirrorOnly(id)
@@ -271,13 +285,13 @@ func (h *handler) gateways(w http.ResponseWriter, r *http.Request) {
 		g := &ls.ix.Gateways[id]
 		st := ls.ix.StateOf(g.Ref, ls.vw)
 		row := GatewayListRow{Ref: ls.l.linked(g.Ref), Health: st, Reason: ls.ix.WorstOf(g.Ref, ls.vw).Reason(st), AttachedRoutes: g.AttachedRoutes,
-			NotAccepted: ls.notAccepted(g), ListenerSets: ls.v.recount(g.ListenerSets, ls.lsRef), Disagreements: ls.ix.Disagreements(g.Ref, g.Disagreements, ls.vw),
+			NotAccepted: ls.notAccepted(g), ListenerSets: ls.recount(g.ListenerSets, ls.lsRef), Disagreements: ls.ix.Disagreements(g.Ref, g.Disagreements, ls.vw),
 			Addresses: []string{}}
 		if v := g.View; v != nil {
 			row.Class, row.Listeners = v.Class, len(v.Listeners)
 			row.Addresses = append(row.Addresses, v.StatusAddresses...)
 		}
-		if n, ok := ls.memberCount(id, ls.ix.GatewayMemberCount, ls.ix.GatewayMemberCountAs); ok {
+		if n, ok := ls.memberCount(id, ls.ix.GatewayMemberCount, ls.ix.GatewayMemberCountAs, ls.ix.GatewayMemberCountIn); ok {
 			row.Routes = &n
 		}
 		items = append(items, row)
@@ -286,8 +300,12 @@ func (h *handler) gateways(w http.ResponseWriter, r *http.Request) {
 }
 
 // memberCount is a routes column: rule 5's count, or in secure mode the
-// visible members only (D-085).
-func (ls *list) memberCount(id explore.RowID, all func(explore.RowID) (int, bool), as func(explore.RowID, func(objects.Ref) bool) (int, bool)) (int, bool) {
+// visible members only (D-085); under a scope the members in it only.
+func (ls *list) memberCount(id explore.RowID, all func(explore.RowID) (int, bool), as func(explore.RowID, func(objects.Ref) bool) (int, bool),
+	in func(explore.RowID, func(objects.Ref) bool, []string) (int, bool)) (int, bool) {
+	if ls.q.Scope != nil {
+		return in(id, ls.v.visible(), ls.q.Scope)
+	}
 	if ls.v.secure {
 		return as(id, ls.v.visible())
 	}
@@ -303,10 +321,10 @@ func (ls *list) prefetchGatewayRows(ids []explore.RowID) {
 		for _, id := range ids {
 			g := &ix.Gateways[id]
 			for _, id := range g.ListenerSets {
-				add(ix.ListenerSets[id].Ref)
+				ls.addInScope(add, ix.ListenerSets[id].Ref)
 			}
 			for _, id := range g.NotAccepted {
-				add(ix.Routes[id].Ref)
+				ls.addInScope(add, ix.Routes[id].Ref)
 			}
 		}
 	})
@@ -315,7 +333,7 @@ func (ls *list) prefetchGatewayRows(ids []explore.RowID) {
 			g := &ix.Gateways[id]
 			for _, id := range g.NotAccepted {
 				r := &ix.Routes[id]
-				if ls.v.denied(r.Ref) {
+				if !explore.InScope(ls.q.Scope, r.Ref.Namespace) || ls.v.denied(r.Ref) {
 					continue
 				}
 				for _, p := range r.Parents {
@@ -331,12 +349,12 @@ func (ls *list) prefetchGatewayRows(ids []explore.RowID) {
 // notAccepted counts g's not-accepted routes the caller may view, through
 // visible ListenerSets only (rule 3, rule 5).
 func (ls *list) notAccepted(g *explore.GatewayRow) int {
-	if ls.v.readsAll() {
+	if ls.v.readsAll() && ls.q.Scope == nil {
 		return len(g.NotAccepted)
 	}
 	n := 0
 	for _, id := range g.NotAccepted {
-		if ls.v.can(ls.ix.Routes[id].Ref) && ls.ix.Under(id, g.Ref, explore.AttachmentNotAccepted, ls.v.can) {
+		if ref := ls.ix.Routes[id].Ref; explore.InScope(ls.q.Scope, ref.Namespace) && ls.v.can(ref) && ls.ix.Under(id, g.Ref, explore.AttachmentNotAccepted, ls.v.can) {
 			n++
 		}
 	}
@@ -372,7 +390,7 @@ func (h *handler) listenerSets(w http.ResponseWriter, r *http.Request) {
 		if s.View != nil {
 			row.Listeners = len(s.View.Listeners)
 		}
-		if n, ok := ls.memberCount(id, ls.ix.ListenerSetMemberCount, ls.ix.ListenerSetMemberCountAs); ok {
+		if n, ok := ls.memberCount(id, ls.ix.ListenerSetMemberCount, ls.ix.ListenerSetMemberCountAs, ls.ix.ListenerSetMemberCountIn); ok {
 			row.Routes = &n
 		}
 		items = append(items, row)

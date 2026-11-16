@@ -563,25 +563,35 @@ func (v *view) projection(i *engine.InstallModel) *projection {
 func (v *view) project(i *engine.InstallModel, rep health.Report) *projection {
 	v.prefetchFindings(rep.Findings, nil)
 	rep = health.Project(rep, v)
-	var dec objects.Decoder = objects.Direct{}
-	if i.Index != nil {
-		dec = indexViews{ix: i.Index}
-	}
-	d := diagnose.Build(&rep, diagnose.Input{Install: i.Resolved, Owned: i.Owned, Views: dec, Readable: v.can}, diagnose.Families())
+	d := diagnose.Build(&rep, diagnose.Input{Install: i.Resolved, Owned: i.Owned, Views: decoderOf(i), Readable: v.can}, diagnose.Families())
 	return &projection{rep: rep, diag: d}
 }
 
 // findingsIn is install i's findings and diagnosis as the caller of v sees
-// them, under scope: for a projecting caller only the findings on resources
-// in scope are projected, so nothing is asked about the others (D-100 item 8).
-func (v *view) findingsIn(i *engine.InstallModel, scope []string) ([]health.Finding, *diagnose.Diagnosis) {
-	if scope == nil || !v.projects() {
+// them, under scope. A projecting caller projects only the findings on
+// resources in scope, so nothing is asked about the others (D-100 item 8).
+// With groups every caller gets a diagnosis of the in-scope findings, so group
+// counts come from rows in scope only; a full list keeps the install's order.
+func (v *view) findingsIn(i *engine.InstallModel, scope []string, groups bool) ([]health.Finding, *diagnose.Diagnosis) {
+	if scope == nil || !v.projects() && !groups {
 		return v.report(i).Findings, v.diagnosis(i)
 	}
 	rep := i.Health
 	rep.Findings = slices.DeleteFunc(slices.Clone(rep.Findings), func(f health.Finding) bool { return !findingInScope(&f, scope) })
-	p := v.project(i, rep)
-	return p.rep.Findings, p.diag
+	if v.projects() {
+		p := v.project(i, rep)
+		return p.rep.Findings, p.diag
+	}
+	d := diagnose.Build(&rep, diagnose.Input{Install: i.Resolved, Owned: i.Owned, Views: decoderOf(i)}, diagnose.Families())
+	return rep.Findings, d
+}
+
+// decoderOf decodes through install i's index views when it has an index.
+func decoderOf(i *engine.InstallModel) objects.Decoder {
+	if i.Index != nil {
+		return indexViews{ix: i.Index}
+	}
+	return objects.Direct{}
 }
 
 // findingInScope reports whether f's resource is a namespaced object in
