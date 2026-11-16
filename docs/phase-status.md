@@ -13,7 +13,7 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 - [x] 7.1 Modes and groundwork — closed 2026-11-14, phases/phase-7/phase-7.1-complete.md (local branch, not pushed)
 - [x] 7.2 Identity and sessions — closed 2026-11-15, phases/phase-7/phase-7.2-complete.md (kind-secure green on PR #50 after D-097)
 - [x] 7.3 Authoriser — closed 2026-11-16, phases/phase-7/phase-7.3-complete.md (D-099, D-100, D-101)
-- [ ] 7.4 Visibility everywhere ← NEXT (brief not written yet; carries in phase-7.3-complete.md)
+- [ ] 7.4 Visibility everywhere ← CURRENT (phases/phase-7/phase-7.4-brief.md)
 - [ ] 7.5 Two signals (gate opens)
 - [ ] 7.6 Audit, docs, release
 - [-] 7.7 Claim-mapping fallback — dropped (D-098); see #51
@@ -28,7 +28,11 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 - [ ] phase-7-complete.md written, roadmap updated, tracked items closed
 
 ## Sub-phase
-Sub-phase: none (7.3 closed 2026-11-16; 7.4 next)
+Sub-phase: 7.4 — Visibility everywhere (planned)
+Base: 99510dd2174d29a68dfa9441620ae55ad779dba5
+Brief: phases/phase-7/phase-7.4-brief.md
+Status: brief written 2026-11-16; next: write the 7.4 tasks into implementation-plan.md, Codex plan review, then implement
+Queue: plan items 1–10 (implementation-plan.md, Sub-phase 7.4)
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md
