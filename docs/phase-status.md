@@ -12,8 +12,8 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 - [x] Codex review of design + plan, triage; approval delegated (see Status). Claim-mapping fallback: not in v0.8.0 (D-098, user 2026-11-15); managed clusters through #51
 - [x] 7.1 Modes and groundwork — closed 2026-11-14, phases/phase-7/phase-7.1-complete.md (local branch, not pushed)
 - [x] 7.2 Identity and sessions — closed 2026-11-15, phases/phase-7/phase-7.2-complete.md (kind-secure green on PR #50 after D-097)
-- [ ] 7.3 Authoriser ← CURRENT (phases/phase-7/phase-7.3-brief.md; first item: session-ended for every request with the ended cookie, 7.2 review #1)
-- [ ] 7.4 Visibility everywhere
+- [x] 7.3 Authoriser — closed 2026-11-16, phases/phase-7/phase-7.3-complete.md (D-099, D-100, D-101)
+- [ ] 7.4 Visibility everywhere ← NEXT (brief not written yet; carries in phase-7.3-complete.md)
 - [ ] 7.5 Two signals (gate opens)
 - [ ] 7.6 Audit, docs, release
 - [-] 7.7 Claim-mapping fallback — dropped (D-098); see #51
@@ -28,10 +28,7 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 - [ ] phase-7-complete.md written, roadmap updated, tracked items closed
 
 ## Sub-phase
-Sub-phase: 7.3 Authoriser (planned)
-Base: 1263e1a9
-Brief: phases/phase-7/phase-7.3-brief.md
-Status: plan detail (Tasks 16+) and Codex plan review, then implementation
+Sub-phase: none (7.3 closed 2026-11-16; 7.4 next)
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md
