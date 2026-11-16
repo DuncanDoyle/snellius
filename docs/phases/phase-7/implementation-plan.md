@@ -497,6 +497,7 @@ type InstallContext struct {
 	Conditions      ConditionTypes              // the rule set's condition types
 	Delegation      bool                        // false when the install has delegation off
 	Catalog         kinds.Catalog               // served kinds (API discovery, visible to every viewer)
+	PolicyKinds     []objects.GroupKind         // served policy kinds, ListOnly excluded (from in.Served, rules.go:122)
 	Views           objects.Decoder             // decodes the object it is given, nothing else
 	Now             time.Time
 }
@@ -509,25 +510,51 @@ type Named interface {
 	FirstSeen(u *unstructured.Unstructured) time.Time
 }
 
-// Finding is an own-object finding; pkg/health converts it.
-type Finding struct {
-	Code, Slug, Message, Detail string
-	Severity                    string
-	Since                       *time.Time
-	Key                         []string
-	Evidence                    []objects.Ref
-	Facts                       any // a type from own/evidence.go
-}
+// Finding is an own-object finding. Its fields are unexported, so only own
+// builds one; pkg/health reads it through accessors.
+type Finding struct{ /* code, slug, severity, message, detail, since, key, evidence, facts, sealed */ }
 
-// Analyzer produces the own-object findings of one resource.
-type Analyzer func(ic InstallContext, resource *unstructured.Unstructured, named Named) []Finding
+func (f Finding) Code() string
+func (f Finding) Slug() string
+func (f Finding) Severity() string
+func (f Finding) Message() string
+func (f Finding) Detail() string
+func (f Finding) Since() *time.Time
+func (f Finding) Key() []string
+func (f Finding) Evidence() []objects.Ref
+func (f Finding) Facts() any // a type from own/evidence.go
+func (f Finding) Sealed() bool // true only for a Finding built inside own
+
+// Result is what one evaluation returns.
+type Result struct{ /* findings []Finding; wakeAt time.Time */ }
+
+func (r Result) Findings() []Finding
+func (r Result) WakeAt() time.Time // the earliest time the findings may change; zero for none
+
+// Kind selects an analyzer. The set is closed: only these constants exist.
+type Kind uint8
+
+const (
+	Status  Kind = iota + 1 // 002 from own status
+	Parents                 // 003 on a route
+	Refs                    // 013, 014 on a route
+	Rules                   // 015 on a route
+)
+
+// Evaluate is the only entry point: it dispatches k to an unexported analyzer.
+func Evaluate(k Kind, ic InstallContext, resource *unstructured.Unstructured, named Named) Result
 ```
 
+- No analyzer function type is exported and none is accepted from outside `own`: the analyzers are unexported functions behind `Evaluate`, which returns an empty `Result` for an unknown `Kind`.
+
 - `ConditionTypes` and the typed evidence the own analyzers emit (`RefsEvidence` and the rules evidence) move to `own`; `pkg/health` keeps type aliases (`type ConditionTypes = own.ConditionTypes`), so the Go API and the JSON stay the same.
-- Import allowlist, enforced by `TestOwnImportsAllowlisted` in `pkg/health/own/boundary_test.go`: it walks the package's transitive imports with the standard library's `go/build` (no new dependency) and fails on any module package outside `pkg/objects`, `pkg/kinds` and `pkg/trigger` (the latter two are what `objects` and `kinds` import). Third-party imports must be under `k8s.io/apimachinery`, `k8s.io/klog`, `k8s.io/utils` or `sigs.k8s.io`; `k8s.io/client-go` is refused. So `cache`, `engine`, `install`, `computed`, `process` and `health` are unreachable by import.
+- Import allowlist, enforced by `TestOwnImportsAllowlisted` in `pkg/health/own/boundary_test.go`. It walks the package's full transitive import graph with the standard library's `go/build` (no new dependency, no stop at any prefix) and checks every package against two explicit lists:
+  1. **Direct imports** `own` may name: the standard library, `pkg/objects`, `pkg/kinds`, `k8s.io/apimachinery/pkg/apis/meta/v1`, `k8s.io/apimachinery/pkg/apis/meta/v1/unstructured`, `k8s.io/apimachinery/pkg/runtime/schema`. Any other direct import fails.
+  2. **Audited transitive closure** of those libraries, as `go list -deps ./pkg/objects ./pkg/kinds` shows for the current module versions: module `pkg/trigger`; `k8s.io/apimachinery` packages `pkg/api/errors`, `pkg/api/operation`, `pkg/api/resource`, `pkg/api/validate/constraints`, `pkg/api/validate/content`, `pkg/conversion`, `pkg/conversion/queryparams`, `pkg/fields`, `pkg/labels`, `pkg/runtime`, `pkg/runtime/serializer/cbor/direct`, `pkg/runtime/serializer/cbor/internal/modes`, `pkg/selection`, `pkg/types`, `pkg/util/errors`, `pkg/util/intstr`, `pkg/util/json`, `pkg/util/naming`, `pkg/util/net`, `pkg/util/runtime`, `pkg/util/sets`, `pkg/util/validation`, `pkg/util/validation/field`, `pkg/watch`, `third_party/forked/golang/reflect`; `k8s.io/klog/v2` with its `internal/buffer`, `internal/clock`, `internal/dbg`, `internal/serialize`, `internal/severity`, `internal/sloghandler`, `internal/verbosity` and `textlogger`; `k8s.io/kube-openapi/pkg/util`; `k8s.io/utils/net`, `k8s.io/utils/ptr`, `k8s.io/utils/internal/third_party/forked/golang/net`; `sigs.k8s.io/json` and its `internal/golang/encoding/json`, `sigs.k8s.io/randfill`, `sigs.k8s.io/randfill/bytesource`, `sigs.k8s.io/structured-merge-diff/v6/value`; `github.com/go-logr/logr`, `github.com/fxamacker/cbor/v2`, `github.com/x448/float16`, `github.com/json-iterator/go`, `github.com/modern-go/concurrent`, `github.com/modern-go/reflect2`, `go.yaml.in/yaml/v2`, `gopkg.in/inf.v0`; `golang.org/x/net/http/httpguts`, `golang.org/x/net/http2`, `golang.org/x/net/http2/hpack`, `golang.org/x/net/idna`, `golang.org/x/net/internal/httpcommon`, `golang.org/x/net/internal/httpsfv`, `golang.org/x/text/secure/bidirule`, `golang.org/x/text/transform`, `golang.org/x/text/unicode/bidi`, `golang.org/x/text/unicode/norm`.
+  Any package outside the union of the standard library (`go/build`'s `Goroot`, vendored standard-library packages included) and these two lists fails, and so does any module package other than `pkg/objects`, `pkg/kinds` and `pkg/trigger`, always. A dependency bump that adds a package fails the test until the list is audited and extended in the same change. So `cache`, `engine`, `install`, `computed`, `process`, `health` and `client-go` are unreachable by import.
 - `TestOwnHasNoPackageState` (same file, `go/ast`): the package declares no package-level `var` (constants only), so an analyzer cannot reach state through a global.
-- The trusted implementations live in one named constructor in `pkg/health/ownrun.go`: `func newOwnInput(in Input, rec *namedRecorder) (own.InstallContext, own.Named)`. `Owns` is the install's membership (`in.Owned`, decided by `install.Assign`); `InScope` is `in.Install.Scope`; `Views` is `in.views()`; `Catalog` is `in.Catalog`; `ControllerNames` is `in.Install.ControllerNames`. `Named.Object` reads `in.Snapshot` by ref and records it; `Named.FirstSeen` calls `in.firstSeen(u)` and, under `testing.Testing()`, panics for an object that is neither the resource nor one `Object` returned.
-- `func runOwn(in Input, a own.Analyzer, resources []*unstructured.Unstructured) []Finding` (unexported, `ownrun.go`) builds one recorder per resource, calls `a`, converts each `own.Finding` to a `Finding` with `Class = ClassOwn` and `Basis.Refs` = the recorded refs, and panics under `testing.Testing()` when its `Evidence` names an unrecorded ref.
+- The trusted implementations live in one named constructor in `pkg/health/ownrun.go`: `func newOwnInput(in Input, rec *namedRecorder) (own.InstallContext, own.Named)`. `Owns` is the install's membership (`in.Owned`, decided by `install.Assign`); `InScope` is `in.Install.Scope`; `Views` is `in.views()`; `Catalog` is `in.Catalog`; `PolicyKinds` is `kinds.ByCategory(in.Served, kinds.CategoryPolicy)` without `ListOnly` kinds; `ControllerNames` is `in.Install.ControllerNames`. It is the only place in `pkg/health` that builds an `own.InstallContext` or an `own.Named`. `Named.Object` reads `in.Snapshot` by ref and records it; `Named.FirstSeen` calls `in.firstSeen(u)` and, under `testing.Testing()`, panics for an object that is neither the resource nor one `Object` returned.
+- `func runOwn(ctx RunContext, k own.Kind, resources []*unstructured.Unstructured) []Finding` (unexported, `ownrun.go`) builds one recorder per resource with `newOwnInput`, calls only `own.Evaluate`, and passes each result's `WakeAt` to `ctx.WakeAt`, so the 015 hint deadline (`rules.go:89`) reaches the report scheduler (`Report.Next`) as today. `fromOwn(f own.Finding, basis []objects.Ref) Finding` converts a finding: it refuses one whose `Sealed()` is false, sets `Class = ClassOwn` and `Basis.Refs` to the recorded refs, and panics under `testing.Testing()` when its `Evidence` names an unrecorded ref. `fromOwn` is the only code in `pkg/health` that sets `ClassOwn`.
 - Resources are the install's owned Gateways, ListenerSets, routes and policies (membership is install context, D-107).
 - `conditionsCheck` calls the own-object analyzers for their triggers and keeps every other trigger (derived) as today.
 
@@ -557,7 +584,7 @@ Derived, with the reason (D-106 item 3; full read only):
 - 001, 004–010, 012, 018–026, and 008 from the controller scope.
 - `Collection`: 008 from cluster access and served kinds.
 
-- [ ] Boundary: `TestOwnImportsAllowlisted` and `TestOwnHasNoPackageState` (above; each fails on a deliberately bad test file in `testdata`); `TestOwnInputCallbacksLocal` (`newOwnInput`: `Views` decodes the same view for an object whatever other objects change; `Named.FirstSeen` for the resource equals `in.firstSeen` of it alone and panics for an unrecorded object; `Owns` and `InScope` equal the install's `Assign` membership and scope, and change only with a GatewayClass, parent or Namespace-label change); `TestOwnBasisIsWhatWasNamed` (each own-object analyzer over the scale fixture with faults injected: every finding's `Basis.Refs` equals the refs its `Named` recorded, and its `Evidence` is within them); `TestOwnFindingsMatchToday` (for a full reader, the 002, 003, 013, 014 and 015 findings that `conditionsCheck` produces through the boundary equal today's on the fixtures, so the move changes nothing they show); `TestOwnBoundaryIgnoresOthers` (perturbing every object other than the resource, what it named and the membership inputs leaves its own-object findings byte-equal; supplementary to the import boundary).
+- [ ] Boundary: `TestOwnImportsAllowlisted` and `TestOwnHasNoPackageState` (above; each fails on a deliberately bad test file in `testdata`); `TestOwnSingleEntryPoint` (`go/ast` over `pkg/health/own`: no exported function type and no exported function other than `Evaluate` and the accessors take or return an analyzer); `TestOwnFindingsOnlyFromOwn` (`go/ast` over `pkg/health`: `ClassOwn` appears only in `fromOwn`, and `own.Evaluate`, `own.InstallContext` and `own.Named` implementations appear only in `ownrun.go`; at runtime `fromOwn` refuses a zero `own.Finding{}`); `TestOwnRulesWakeAt` (a 015 inside the hint window: `Report.Next` is its deadline, as today); `TestOwnInputCallbacksLocal` (`newOwnInput`: `Views` decodes the same view for an object whatever other objects change; `Named.FirstSeen` for the resource equals `in.firstSeen` of it alone and panics for an unrecorded object; `Owns` and `InScope` equal the install's `Assign` membership and scope, and change only with a GatewayClass, parent or Namespace-label change); `TestOwnBasisIsWhatWasNamed` (each own-object analyzer over the scale fixture with faults injected: every finding's `Basis.Refs` equals the refs its `Named` recorded, and its `Evidence` is within them); `TestOwnFindingsMatchToday` (for a full reader, the 002, 003, 013, 014 and 015 findings that `conditionsCheck` produces through the boundary equal today's on the fixtures, so the move changes nothing they show); `TestOwnBoundaryIgnoresOthers` (perturbing every object other than the resource, what it named and the membership inputs leaves its own-object findings byte-equal; supplementary to the import boundary).
 - [ ] Findings: `TestEveryCodeClassified` (every code `Upstream()` emits in the fixtures is `ClassOwn` only through `runOwn`, and every other finding is `ClassDerived` or `Collection`); `TestExtensionFindingsDerived` (a test check outside `runOwn`: its findings are `ClassDerived`, hidden for a restricted viewer, shown for a full reader); `TestShownToTable` (own-object: resource and each named ref unreadable in turn → false; all readable → true; derived → false; `Collection` with no resource → true); `TestProjectCountsAndState` (a hidden error finding: state and counts as if absent).
 - [ ] Check results: `TestResultsNotCheckedForRestricted` (every non-collection result is "Not checked" for a viewer without the full read, whatever their other grants; a full reader gets it unchanged); `TestNotCheckedNeverUnknown`; `TestCollectionFailureStays` (a denied watch: shown to every viewer with fixed text, unknown); `TestCollectionTextObjectFree` (every `Collection` result's `Error` in the fixture names no object or namespace); `TestProjectNilIsIdentity`.
 - [ ] `go test ./pkg/health/... ./pkg/engine/...`; commit.
