@@ -1569,3 +1569,16 @@ Measured on the reference machine, 5 runs per world:
 3. Declarations are checked by the tests, not by review: every check and analyzer runs over a recording snapshot, and a test fails when one reads a kind it does not declare, or when an own-object analyzer reads anything other than its resource and the objects it names.
 
 **Consequences:** A restricted application-team viewer sees the findings about their own objects (not accepted, ref not found, conflicts on their routes) and not the platform-wide derived ones (listener-count disagreement, version skew, proxy stats). Full-read viewers and local mode are unchanged. A missing declaration fails a test instead of leaking.
+
+## D-106 — Controller settings are install context; restricted viewers see own-object findings only (2026-11-16, Phase 7, amends D-104 and D-105)
+**Status:** accepted by the user (2026-11-16), after the sixth Codex pass over the 7.4 plan.
+
+**Context:** Six review passes kept finding inputs that hidden objects decide. Two sources remain however the declarations are refined. (1) The controller's settings, read from its Deployment and Pods, decide which objects belong to an install, its version and its rule set; nearly every finding depends on them. (2) Findings that look like they concern one object scan others: policies chosen by selectors, a Backend's consumer routes, computed triggers merged into status triggers. A test that perturbs inputs cannot prove a declaration complete.
+
+**Decision:**
+1. **Install context.** The controller's settings (scope, which objects belong to the install, version, rule set) are install context, like the install ID (D-102) and the install list (D-103). A change to them may change what every viewer sees: a stated exception to D-085.
+2. **Own-object findings** are produced by analyzers that receive only the finding's resource and a reader that resolves the objects it names, given the install context. The type of that reader is the boundary: nothing else is reachable. A viewer sees such a finding when they can read its resource and every object it named.
+3. **Everything else** (every other finding and every check result other than collection failures) is shown only to a viewer with the full read (design §6.4). Others see "Not checked" for results and do not see those findings.
+4. D-104's per-check kind lists and D-105's kind probe are not built.
+
+**Consequences:** D-085 holds by construction, apart from items 1 and D-102/D-103. Application teams see findings about their own objects; platform-wide findings and "What was checked" need the full read. Full-read viewers and local mode are unchanged.
