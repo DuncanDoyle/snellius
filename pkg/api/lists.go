@@ -139,6 +139,10 @@ func (ls *list) routeRow(id explore.RowID) RouteRow {
 		out.Hostnames = []string{}
 	}
 	for _, p := range r.Parents {
+		// A projecting viewer gets no entry for a parent it may not read: its existence and status stay hidden.
+		if ls.v.projects() && !ls.v.can(p.Target) {
+			continue
+		}
 		out.Parents = append(out.Parents, ls.parentSummary(id, p))
 	}
 	// Reported edges are the row's own status (rule 8); link() decides each.

@@ -152,7 +152,7 @@ func (d *detail) open(w http.ResponseWriter, ref objects.Ref) (*unstructured.Uns
 	c := &Candidate{Reason: a.Reason}
 	if a.Reason == explore.ReasonFinding && !d.l.findingShown(ref, true) {
 		// Admitted through a referrer, as its findings are not shown.
-		c.Reason = explore.ReasonReferenced
+		c.Reason = a.Else
 	}
 	if c.Reason == explore.ReasonReferenced || c.Reason == explore.ReasonSelected {
 		// The first visible referrer; link() admitted ref only because one exists.

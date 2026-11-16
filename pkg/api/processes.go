@@ -151,14 +151,20 @@ func (ps *procSummary) set(s *process.Set, podNS string, sf *subjectFacts, visib
 	}
 	for _, p := range s.Processes {
 		if ps.v.can(process.PodRef(podNS, p)) {
-			out.Processes = append(out.Processes, processDTO(p, sf))
+			out.Processes = append(out.Processes, processDTO(p, sf, ps.probes()))
 		}
 	}
 	return out
 }
 
-// processDTO is p on the wire, times in UTC; never a termination message.
-func processDTO(p process.Process, sf *subjectFacts) ProcessDTO {
+// probes reports whether the caller sees probe facts: they come from Events
+// under a cap over every namespace, so a projecting caller needs Events listed cluster-wide.
+func (ps *procSummary) probes() bool {
+	return !ps.v.projects() || ps.v.canList(objects.GroupKind{Kind: "Event"}, "")
+}
+
+// processDTO is p on the wire, times in UTC; never a termination message. Probe facts only with probes.
+func processDTO(p process.Process, sf *subjectFacts, probes bool) ProcessDTO {
 	out := ProcessDTO{Name: p.Name, Ready: p.Ready, Restarts: p.Restarts, LastStart: wirePtr(p.LastStart), Waiting: p.Waiting, Version: p.Version}
 	if sf != nil {
 		if n, ok := sf.restarts[p.Name]; ok {
@@ -168,7 +174,7 @@ func processDTO(p process.Process, sf *subjectFacts) ProcessDTO {
 	if t := p.Termination; t != nil {
 		out.Termination = &health.TerminationFacts{Reason: t.Reason, ExitCode: t.ExitCode, At: wireTime(t.At)}
 	}
-	if pr := p.Probe; pr != nil {
+	if pr := p.Probe; pr != nil && probes {
 		out.Probe = &health.ProbeFacts{Type: pr.Type, Failures: pr.Count, Last: wireTime(pr.Last), HistoryUnknown: pr.HistoryUnknown}
 	}
 	return out
@@ -263,7 +269,11 @@ func (ps *procSummary) gatewayHealth(g *gatewayProc) health.State {
 func (g *gatewayProc) restarting() bool { return g.facts != nil && g.facts.restarting }
 
 // skew reports a visible proxy on a version no visible controller replica has, or a 022.
+// Skew is derived (D-106), so a projecting caller gets none.
 func (ps *procSummary) skew(g *gatewayProc) bool {
+	if ps.v.projects() {
+		return false
+	}
 	if g.facts != nil && g.facts.skew {
 		return true
 	}

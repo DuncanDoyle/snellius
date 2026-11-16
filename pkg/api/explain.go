@@ -221,7 +221,8 @@ func (f facts) membership(res LinkedRef, rf *explore.RefFacts, h *explore.Listen
 	case !f.v.allowDeps(f.ix, h.Deps):
 		out.Computed = f.restricted()
 		return out
-	case ok && !lf.Known:
+	case ok && !lf.Known && f.population(rf.Out.Resource, h.Listener):
+		// Without the whole population an unknown count may come from routes the caller cannot read.
 		out.Computed = f.unknown(rule, lf.Unknown)
 		return out
 	}
@@ -260,7 +261,8 @@ func (f facts) listener(resource objects.Ref, dto *ListenerDTO) {
 		return
 	}
 	whole := f.population(resource, dto.Name)
-	if lf.Known {
+	// A projecting caller's count is over visible members, so it is always known.
+	if lf.Known || f.v.projects() {
 		n := lf.Count
 		if f.v.omits() {
 			n = f.ix.ListenerCountAs(k, f.v.visible())
@@ -286,7 +288,8 @@ func (f facts) listener(resource objects.Ref, dto *ListenerDTO) {
 // count check, which compares its whole computed population with
 // attachedRoutes: true under the full read and outside secure mode, else
 // when the caller may list every route kind in every namespace the listener
-// admits (its own for Same, cluster-wide otherwise). Permissions alone decide it.
+// admits (its own for Same, cluster-wide otherwise) and, for Selector, the
+// Namespaces cluster-wide. Permissions alone decide it.
 func (f facts) population(resource objects.Ref, listener string) bool {
 	if !f.v.projects() {
 		return true
@@ -301,9 +304,13 @@ func (f facts) population(resource objects.Ref, listener string) bool {
 	if j < 0 {
 		return false
 	}
-	ns := ""
-	if from := ls[j].AllowedRoutes.Namespaces.From; from == "" || from == "Same" {
+	ns, from := "", ls[j].AllowedRoutes.Namespaces.From
+	if from == "" || from == "Same" {
 		ns = resource.Namespace
+	}
+	// A Selector listener's population is decided by Namespace labels too.
+	if from == "Selector" && !f.v.canList(objects.GroupKind{Kind: "Namespace"}, "") {
+		return false
 	}
 	for _, k := range kinds.ByCategory(f.l.m.Served, kinds.CategoryRoute) {
 		if !f.v.canList(objects.GroupKind{Group: k.Group, Kind: k.Kind}, ns) {

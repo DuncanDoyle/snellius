@@ -8,9 +8,15 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/pkg/api"
+	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/ctrlmetrics"
 	"github.com/DuncanDoyle/snellius/pkg/engine"
 	"github.com/DuncanDoyle/snellius/pkg/health"
@@ -43,21 +49,15 @@ func localServe(t *testing.T, src api.ModelSource) *httptest.Server {
 	return srv
 }
 
+// toHidden is a visible route sending to the hidden Backend; lsAll is the base world's ls-all.
 const (
-	lsAll    = "ls-all"
+	lsAll    = lsAllName
 	toHidden = "to-hidden-be"
 )
 
-// lsAllRef is the parentRef to lsAll.
-var lsAllRef = objects.ParentRef{Group: objects.GatewayAPIGroup, Kind: "ListenerSet", Namespace: ns0, Name: lsAll}
-
-// neighbours adds a visible ListenerSet on gw0 whose listener admits every
-// namespace, and a visible route sending to the hidden Backend.
+// neighbours adds toHidden.
 func neighbours(s ruleSnap) {
-	ls := testutil.ListenerSet(ns0, lsAll, gw0()[0], nil)
-	l := ls.Object["spec"].(map[string]any)["listeners"].([]any)[0].(map[string]any)
-	l["allowedRoutes"] = map[string]any{"namespaces": map[string]any{"from": "All"}}
-	s.add(ls, routeTo(ns0, toHidden, gw0(), hiddenNS, "hidden-be", true))
+	s.add(routeTo(ns0, toHidden, gw0(), hiddenNS, "hidden-be", true))
 }
 
 // hiddenMembers attaches a hidden route to gw0 and one to lsAll.
@@ -340,16 +340,28 @@ func TestListenerCheckNeedsPopulation(t *testing.T) {
 			t.Errorf("restricted listener %s: computed %+v, isolation note %v", l.Name, l.Computed, l.IsolationNote)
 		}
 	}
-	// Its count is its visible members': a selector listener's members depend on hidden Namespaces.
-	checks := func(user string) string {
-		ls := decode[api.GatewayDetail](t, after, user, gw).Listeners
-		for i := range ls {
-			ls[i].ComputedRoutes = nil
+	// The route reader may list routes everywhere: All listeners show the check as for the full viewer.
+	// A Selector listener also needs the Namespaces, which it may not list. Counts are visible members'.
+	checks := func(user string) (all, selector []api.ListenerDTO) {
+		for _, l := range decode[api.GatewayDetail](t, after, user, gw).Listeners {
+			l.ComputedRoutes = nil
+			if l.AllowedRoutes.Namespaces.From == "Selector" {
+				selector = append(selector, l)
+			} else {
+				all = append(all, l)
+			}
 		}
-		return mustJSON(t, ls)
+		return all, selector
 	}
-	if full, reader := checks(fullUser), checks(routeReader); !strings.Contains(full, `"computed"`) || full != reader {
-		t.Errorf("route reader's listeners\n%s\n  want the full viewer's %s", reader, full)
+	fullAll, fullSel := checks(fullUser)
+	readerAll, readerSel := checks(routeReader)
+	if len(fullAll) == 0 || len(fullSel) == 0 || mustJSON(t, fullAll) != mustJSON(t, readerAll) {
+		t.Errorf("route reader's All listeners\n%s\n  want the full viewer's %s", mustJSON(t, readerAll), mustJSON(t, fullAll))
+	}
+	for _, l := range readerSel {
+		if l.Computed != nil || l.IsolationNote {
+			t.Errorf("route reader's Selector listener %s has its check: %+v", l.Name, l.Computed)
+		}
 	}
 }
 
@@ -392,5 +404,77 @@ func TestAdmissionIgnoresHiddenFindings(t *testing.T) {
 				t.Errorf("%s: full link none", w.name)
 			}
 		}
+	}
+}
+
+// selGW is a visible Gateway whose only listener selects namespaces by label.
+const selGW = "sel-gw"
+
+// selectorGateway adds selGW to ns0, selecting namespaces labelled sel=on, and
+// denies Snellius the Namespace watch, so a route that would pass makes its count unknown.
+func selectorGateway(s ruleSnap) {
+	g := testutil.Gateway(ns0, selGW, "kgateway", nil)
+	g.Object["spec"].(map[string]any)["listeners"].([]any)[0].(map[string]any)["allowedRoutes"] = map[string]any{
+		"namespaces": map[string]any{"from": "Selector", "selector": map[string]any{"matchLabels": map[string]any{"sel": "on"}}}}
+	s.add(g)
+	s.Access[cache.NamespacesGVR] = cache.Access{Err: "namespaces is forbidden", Denied: true}
+}
+
+// A hidden route that would make a visible listener's count unknown leaves the
+// restricted viewer's routes column, sort and computed count as they were.
+func TestListenerUnknownFromVisibleOnly(t *testing.T) {
+	hidden := ruleChange{name: "hiddenOnSelector", apply: func(s ruleSnap) {
+		s.add(routeTo(hiddenNS, "hidden-on-sel", []objects.ParentRef{testutil.GwRef(ns0, selGW)}, hiddenNS, "hidden-be", true))
+	}}
+	before := ruleServe(t, worldPlus(t, selectorGateway, ruleChange{name: "base"}))
+	after := ruleServe(t, worldPlus(t, selectorGateway, hidden))
+	row := func(srv *httptest.Server, user string) api.GatewayListRow {
+		return rowOf(t, decode[api.Page[api.GatewayListRow]](t, srv, user, ruleBase+"/gateways?limit=200&sort=routes").Items, gwRef, ns0, selGW)
+	}
+	if r := row(after, fullUser); r.Routes != nil {
+		t.Fatalf("full routes column %d, want unknown: the fixture does not reach the unknown count", *r.Routes)
+	}
+	same(t, before, after, restrictedUser, "/gateways?limit=200&sort=routes", "/gateways/"+ns0+"/"+selGW)
+	if r := row(after, restrictedUser); r.Routes == nil || *r.Routes != 0 {
+		t.Errorf("restricted routes column %v, want 0", r.Routes)
+	}
+}
+
+// probing gives gw0 a proxy Pod on another version with readiness probe
+// failures and an Event whose earlier count was not observed.
+func probing(s ruleSnap) {
+	p := testutil.ProxyPod(ns0, testutil.ScaleGateway(0), 0, "abc", 0)
+	p.Spec.Containers[0].Image += "-skewed"
+	p.Spec.Containers[0].ReadinessProbe = &corev1.Probe{}
+	s.ProxyPods = append(s.ProxyPods, p)
+	s.deployment(ns0, testutil.ScaleGateway(0)).Spec.Selector = &metav1.LabelSelector{MatchLabels: p.Labels}
+	s.Access[cache.ProxyPodsGVR], s.Access[cache.EventsGVR] = cache.Access{OK: true}, cache.Access{OK: true}
+	s.EventDeltas = map[types.UID][]cache.Observation{p.UID: {{At: testutil.Now.Add(-time.Minute), Reason: "Unhealthy", Delta: 3}}}
+	s.EventHistoryUnknown = map[types.UID]bool{p.UID: true}
+}
+
+// Probe facts come from Events under a global cap: without cluster-wide Events
+// list a projecting viewer gets none. Version skew is derived, so a "Not
+// checked" row has none either.
+func TestProbeFactsNeedEventsList(t *testing.T) {
+	srv := ruleServe(t, worldPlus(t, probing, ruleChange{name: "base"}))
+	proc := func(user string) api.GatewayProcesses {
+		return rowOf(t, decode[api.ProcessesResponse](t, srv, user, ruleBase+"/processes?limit=200").Proxies.Items, procRef, ns0, testutil.ScaleGateway(0))
+	}
+	probed := func(g api.GatewayProcesses) bool {
+		return slices.ContainsFunc(g.Set.Processes, func(p api.ProcessDTO) bool { return p.Probe != nil })
+	}
+	if full := proc(fullUser); !probed(full) {
+		t.Fatalf("full viewer: no probe facts on %+v; the fixture does not reach them", full.Set.Processes)
+	}
+	r := proc(restrictedUser)
+	if probed(r) || len(r.Set.Processes) == 0 {
+		t.Errorf("restricted viewer: probe facts %+v", r.Set.Processes)
+	}
+	if r.Skew {
+		t.Error("restricted viewer: skew on a Not checked row")
+	}
+	if d := decode[api.Diagnostics](t, srv, restrictedUser, ruleBase+"/diagnostics").Processes.Proxies; d.Skew != 0 {
+		t.Errorf("restricted proxy line skew %d", d.Skew)
 	}
 }
