@@ -2153,8 +2153,8 @@ func TestSARKindsKeyFollowsCatalog(t *testing.T) {
 		return slices.ContainsFunc(all, func(x sar.Kind) bool { return x.Resource == res })
 	}
 	all, key := k.All()
-	if !has(all, "httproutes") || !has(all, "services") || !has(all, "pods") || has(all, "events") ||
-		has(all, "customresourcedefinitions") || has(all, "endpointslices") {
+	if !has(all, "httproutes") || !has(all, "services") || !has(all, "pods") || !has(all, "endpointslices") || has(all, "events") ||
+		has(all, "customresourcedefinitions") {
 		t.Fatalf("full-read kinds: %v", all)
 	}
 	for _, gk := range []schema.GroupKind{{Kind: "Event"}, {Group: "apiextensions.k8s.io", Kind: "CustomResourceDefinition"}} {
@@ -2187,16 +2187,31 @@ func (c listChecker) Check(_ context.Context, _ oidc.Identity, a sar.Attributes)
 	return a.Verb != "list" || !slices.Contains(c.denied, a.Resource), nil
 }
 
-// A viewer who may list every viewer kind, but not Events, CRDs or EndpointSlices, takes the full-read path.
+// A viewer who may list every viewer kind, but not Events or CRDs, takes the
+// full-read path; without EndpointSlices or Pods it takes the per-object path.
 func TestFullReadWithoutInputKinds(t *testing.T) {
 	cat := upstreamCatalog("")
 	k := newSARKinds(testutil.ServedUpstream(), func() kinds.Catalog { return cat })
 	id := func(context.Context) (oidc.Identity, bool) { return oidc.Identity{Username: "oidc:op"}, true }
-	for denied, want := range map[string]bool{"events": true, "customresourcedefinitions": true, "endpointslices": true, "pods": false} {
+	for denied, want := range map[string]bool{"events": true, "customresourcedefinitions": true, "endpointslices": false, "pods": false} {
 		a := sar.New(sar.Options{Checker: listChecker{denied: []string{denied}}, Kinds: k, IdentityFrom: id})
 		got, err := a.FullRead(httptest.NewRequest("GET", "/api/v1/installs", nil))
 		if err != nil || got != want {
 			t.Errorf("list denied on %s: FullRead = %v, %v; want %v", denied, got, err, want)
 		}
+	}
+}
+
+// EndpointSlices are an authorised population (design §7.6): the full read
+// lists them cluster-wide, and Lookup maps them for the per-object path.
+func TestSARKindsFullReadIncludesEndpointSlices(t *testing.T) {
+	k := newSARKinds(testutil.ServedUpstream(), func() kinds.Catalog { return upstreamCatalog("") })
+	all, _ := k.All()
+	want := sar.Kind{Group: "discovery.k8s.io", Resource: "endpointslices", Namespaced: true}
+	if !slices.Contains(all, want) {
+		t.Fatalf("the full read does not list EndpointSlices: %v", all)
+	}
+	if got, ok := k.Lookup("discovery.k8s.io", "EndpointSlice"); !ok || got != want {
+		t.Fatalf("Lookup EndpointSlice = %v, %v", got, ok)
 	}
 }

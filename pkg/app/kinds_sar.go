@@ -18,14 +18,15 @@ type coreKind struct {
 	fullRead bool
 }
 
-// coreKinds are the non-CRD kinds the cache watches (pkg/cache). EndpointSlices,
+// coreKinds are the non-CRD kinds the cache watches (pkg/cache). EndpointSlices
+// are an authorised population: endpoint counts need list on them (design §7.6).
 // Events and CRDs are inputs read after another ref is authorised, never refs themselves.
 var coreKinds = []coreKind{
 	{schema.GroupKind{Kind: "Namespace"}, sar.Kind{Resource: "namespaces"}, true},
 	{schema.GroupKind{Kind: "Pod"}, sar.Kind{Resource: "pods", Namespaced: true}, true},
 	{schema.GroupKind{Group: "apps", Kind: "Deployment"}, sar.Kind{Group: "apps", Resource: "deployments", Namespaced: true}, true},
 	{schema.GroupKind{Kind: "Service"}, sar.Kind{Resource: "services", Namespaced: true}, true},
-	{schema.GroupKind{Group: "discovery.k8s.io", Kind: "EndpointSlice"}, sar.Kind{Group: "discovery.k8s.io", Resource: "endpointslices", Namespaced: true}, false},
+	{schema.GroupKind{Group: "discovery.k8s.io", Kind: "EndpointSlice"}, sar.Kind{Group: "discovery.k8s.io", Resource: "endpointslices", Namespaced: true}, true},
 	{schema.GroupKind{Kind: "Event"}, sar.Kind{Resource: "events", Namespaced: true}, false},
 	{schema.GroupKind{Group: "apiextensions.k8s.io", Kind: "CustomResourceDefinition"}, sar.Kind{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions"}, false},
 }

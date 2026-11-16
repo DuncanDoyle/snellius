@@ -15,8 +15,10 @@ import (
 	"time"
 
 	authzv1 "k8s.io/api/authorization/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -941,4 +943,98 @@ func TestViewSingleGoroutine(t *testing.T) {
 		}
 	}
 	wg.Wait()
+}
+
+// sliceKinds is servedKinds plus Services and EndpointSlices, which the
+// production full read lists too (design §7.6).
+type sliceKinds struct{ servedKinds }
+
+func (k sliceKinds) Lookup(group, kind string) (sar.Kind, bool) {
+	switch {
+	case group == "" && kind == "Service":
+		return sar.Kind{Resource: "services", Namespaced: true}, true
+	case group == "discovery.k8s.io" && kind == "EndpointSlice":
+		return sar.Kind{Group: "discovery.k8s.io", Resource: "endpointslices", Namespaced: true}, true
+	}
+	return k.servedKinds.Lookup(group, kind)
+}
+
+func (k sliceKinds) All() ([]sar.Kind, string) {
+	all, _ := k.servedKinds.All()
+	return append(all, sar.Kind{Resource: "services", Namespaced: true},
+		sar.Kind{Group: "discovery.k8s.io", Resource: "endpointslices", Namespaced: true}), "slices"
+}
+
+// sliceWorld is the small tier plus a Gateway in ns-000 and a route on it to
+// Service ns-000/empty, whose one slice has no ready endpoint; computed past
+// KGWUI-023's hold so a full reader sees the 023.
+func sliceWorld(t *testing.T) (api.ModelSource, string) {
+	t.Helper()
+	snap := scale.Snapshot(small, 1)
+	ok := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionTrue, "Accepted"), testutil.Cond("Programmed", metav1.ConditionTrue, "Programmed")}
+	route := testutil.HTTPRoute("ns-000", "to-empty", []objects.ParentRef{testutil.GwRef("ns-000", "edge")},
+		testutil.AcceptedBy(testutil.GwRef("ns-000", "edge"), testutil.Controller))
+	route.Object["spec"].(map[string]any)["rules"] = []any{map[string]any{"backendRefs": []any{map[string]any{"name": "empty", "port": int64(80)}}}}
+	for _, u := range []*unstructured.Unstructured{testutil.Gateway("ns-000", "edge", scale.Class, nil, testutil.Listener{Name: "http", Attached: 1, Conds: ok}), route} {
+		gk := u.GroupVersionKind().GroupKind()
+		k := testutil.ServedUpstream()[slices.IndexFunc(testutil.ServedUpstream(), func(k kinds.Served) bool { return k.Group == gk.Group && k.Kind == gk.Kind })]
+		snap.Objects[k.GVR()] = append(snap.Objects[k.GVR()], u)
+		slices.SortFunc(snap.Objects[k.GVR()], func(x, y *unstructured.Unstructured) int {
+			return strings.Compare(x.GetNamespace()+"/"+x.GetName(), y.GetNamespace()+"/"+y.GetName())
+		})
+	}
+	snap.Deployments = append(snap.Deployments, testutil.ProxyDeployment("ns-000", "edge", 1, 1))
+	snap.Services = append(snap.Services, cache.ServiceFact{Namespace: "ns-000", Name: "empty", Type: "ClusterIP", Ports: []cache.ServicePort{{Port: 80, Target: 8080, Protocol: "TCP"}}})
+	snap.EndpointSlices = append(snap.EndpointSlices, cache.SliceFact{Namespace: "ns-000", Service: "empty", Ports: []cache.SlicePort{{Port: 8080}}, Ready: []int{0}, Total: 2, AddressType: "IPv4"})
+	for _, g := range []schema.GroupVersionResource{cache.ServicesGVR, cache.EndpointSlicesGVR} {
+		snap.Access[g] = cache.Access{OK: true}
+	}
+	now := testutil.Now
+	e := engine.New(engine.Config{Snapshots: fixedSnap{snap}, Served: testutil.ServedUpstream(), Detectors: []install.Detector{install.UpstreamDetector{}},
+		Scope: install.NamespaceSelectorScope{}, Verifier: scopeverify.NewManagedCountVerifier(time.Hour), Checks: health.Upstream(),
+		Now: func() time.Time { return now }})
+	for _, d := range []time.Duration{-time.Minute, 0} {
+		now = testutil.Now.Add(d)
+		e.Compute()
+	}
+	return e, "/api/v1/installs/" + e.Current().Model.Installs[0].Resolved.ID()
+}
+
+// A viewer allowed every kind cluster-wide except EndpointSlices has no full
+// read: it takes the per-object path, so its endpoints are not-permitted, with
+// no counts and no 023, as a viewer granted the same per namespace sees them,
+// and unlike AllowAll.
+func TestFullReaderDeniedEndpointSlices(t *testing.T) {
+	src, base := sliceWorld(t)
+	c := &checker{decide: func(user string, a sar.Attributes, _ int) (bool, error) {
+		if a.Resource == "endpointslices" {
+			return false, nil
+		}
+		return user == "ops" || a.Namespace != "" || a.Verb == "get", nil
+	}}
+	az := sar.New(sar.Options{Checker: c, Kinds: sliceKinds{}, Clock: clocktesting.NewFakeClock(t0), IdentityFrom: identityFrom,
+		MaxInFlight: noLimit, Rate: noLimit, Burst: noLimit})
+	req := httptest.NewRequest("GET", base, nil)
+	if full, err := az.FullRead(req.WithContext(context.WithValue(req.Context(), userKey{}, "ops"))); err != nil || full {
+		t.Fatalf("FullRead = %v, %v; want false", full, err)
+	}
+	srv, all := serve(t, src, az), serve(t, src, api.AllowAll{})
+	detail := base + "/backends/-/Service/ns-000/empty"
+	for _, p := range []string{base + "/paths?limit=200&q=empty", base + "/backends?limit=200&q=empty", detail} {
+		_, got := call(t, srv, "ops", p)
+		if _, want := call(t, all, "ops", p); string(got) == string(want) {
+			t.Errorf("GET %s: equal to AllowAll", p)
+		}
+		if _, ns := call(t, srv, "ns-reader", p); string(got) != string(ns) {
+			t.Errorf("GET %s: differs from the per-namespace viewer:\n%s\n  vs %s", p, got, ns)
+		}
+		body := string(got)
+		if !strings.Contains(body, `"complete":"not-permitted"`) || strings.Contains(body, `"ready":`) || strings.Contains(body, `"total":`) ||
+			strings.Contains(body, health.CodeBackendNoReadyEndpoints) || !strings.Contains(body, `"state":"unknown"`) {
+			t.Errorf("GET %s: want not-permitted endpoints, no counts, no 023, unknown: %.600s", p, body)
+		}
+	}
+	if _, b := call(t, all, "ops", base+"/paths?limit=200&q=empty"); !strings.Contains(string(b), health.CodeBackendNoReadyEndpoints) {
+		t.Error("AllowAll sees no 023; the fixture tests nothing")
+	}
 }
