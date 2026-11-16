@@ -47,6 +47,58 @@ func RollUp(fs []Finding, cs []CheckResult) State {
 	return StateHealthy
 }
 
+// ShownTo reports whether a viewer without the full read sees f (D-106): an
+// own-object finding when its resource and every object it named are
+// readable, a collection finding when its resource, if any, is. A derived
+// finding needs the full read, under which Project is not called.
+func (f *Finding) ShownTo(rd Readable) bool {
+	switch {
+	case f.Class == ClassOwn:
+		if f.Resource == nil || !rd.Ref(*f.Resource) {
+			return false
+		}
+		for _, r := range f.Basis.Refs {
+			if !rd.Ref(r) {
+				return false
+			}
+		}
+		return true
+	case f.Basis.Collection:
+		return f.Resource == nil || rd.Ref(*f.Resource)
+	}
+	return false
+}
+
+// Project is rep as a viewer without the full read sees it: the findings
+// ShownTo them, in order and without Group, counted again; each check result
+// whole when it is a collection failure, else "Not checked"; and the state
+// rolled up from those. So install-wide unknown comes only from collection
+// failures. A nil rd is the full read and returns rep unchanged.
+func Project(rep Report, rd Readable) Report {
+	if rd == nil {
+		return rep
+	}
+	out := rep
+	out.Findings = make([]Finding, 0, len(rep.Findings))
+	out.Counts = map[Severity]int{}
+	for i := range rep.Findings {
+		if f := rep.Findings[i]; f.ShownTo(rd) {
+			f.Group = "" // the viewer's grouping is set per viewer
+			out.Findings = append(out.Findings, f)
+			out.Counts[f.Severity]++
+		}
+	}
+	out.Checks = make([]CheckResult, len(rep.Checks))
+	for i, c := range rep.Checks {
+		if !c.Collection {
+			c = CheckResult{Name: c.Name, Required: c.Required, CollectedAt: c.CollectedAt, OK: true, NotAssessed: true}
+		}
+		out.Checks[i] = c
+	}
+	out.State = RollUp(out.Findings, out.Checks)
+	return out
+}
+
 // Evaluate runs checks and assembles a Report. Findings are in a fixed
 // order (severity, code, resource, parentRef, message, detail), so a list
 // does not reorder between polls. A finding with a severity outside error,

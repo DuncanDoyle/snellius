@@ -270,6 +270,7 @@ type runSink struct {
 	retained map[string]bool
 	hold     *Hold
 	reasons  []string // hold's distinct reasons, in declaration order
+	own      *ownBase // what runOwn indexes once per run
 }
 
 // WakeAt says the check's output may change at at; the engine recomputes by

@@ -13,6 +13,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/DuncanDoyle/snellius/pkg/health/own"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
 
@@ -158,50 +159,23 @@ func (x *IDs) Sweep() {
 
 // Discriminator owners of KGWUI-002, KGWUI-003 and KGWUI-011 (design §5.1).
 const (
-	ownerSelf     = "self"
-	ownerParent   = "parent"
-	ownerListener = "listener"
-	ownerAncestor = "ancestor"
+	ownerSelf     = own.OwnerSelf
+	ownerParent   = own.OwnerParent
+	ownerListener = own.OwnerListener
+	ownerAncestor = own.OwnerAncestor
 	// ownerStatusParent tags a parent found only in status; rankOwners replaces it.
-	ownerStatusParent = "status-parent"
+	ownerStatusParent = own.OwnerStatusParent
 	// computedOwner leads a computed KGWUI-011's key, apart from declared and orphan ones.
 	computedOwner = "computed"
 )
 
 // refKey is r's group, kind, namespace and name.
-func refKey(r objects.Ref) []string { return []string{r.Group, r.Kind, r.Namespace, r.Name} }
-
-// appendWrittenKey appends a parentRef as written to k, keyed as computed-rules §7 keys
-// a report, plus the written port, so refs differing only by port stay apart.
-func appendWrittenKey(k []string, w objects.WrittenRef) []string {
-	port := ""
-	if w.PortSet {
-		port = strconv.Itoa(int(w.Port))
-	}
-	return append(k, w.Group, w.Kind, w.Namespace, w.Name, w.SectionName, port)
-}
+func refKey(r objects.Ref) []string { return own.RefKey(r) }
 
 // parentKey is the discriminator owner of route u's parentRef p: p as written
 // in u's spec, else a status-only owner from u's status entry for p, else p itself.
 func (in Input) parentKey(u *unstructured.Unstructured, p objects.ParentRef) []string {
-	var spec []objects.ParentRef
-	var written []objects.WrittenRef
-	var status []objects.RouteParentStatus
-	if gvk := u.GroupVersionKind(); gvk.Group == objects.GatewayAPIGroup && gvk.Kind == "HTTPRoute" {
-		v := in.views().HTTPRoute(u)
-		spec, written, status = v.ParentRefs, v.WrittenRefs, v.Parents
-	} else {
-		v := in.views().Route(u)
-		spec, written, status = v.ParentRefs, v.WrittenRefs, v.Parents
-	}
-	if i := slices.Index(spec, p); i >= 0 && i < len(written) {
-		return appendWrittenKey([]string{ownerParent}, written[i])
-	}
-	w := objects.WrittenRef{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name, SectionName: p.SectionName, Port: p.Port, PortSet: p.Port != 0}
-	if j := slices.IndexFunc(status, func(s objects.RouteParentStatus) bool { return s.ParentRef == p }); j >= 0 {
-		w = status[j].Written
-	}
-	return appendWrittenKey([]string{ownerStatusParent}, w)
+	return own.ParentKey(in.views(), u, p)
 }
 
 // ownerLen is the length of an ancestor or status-only parent owner: its tag and six ref fields.

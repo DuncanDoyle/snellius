@@ -65,7 +65,9 @@ func (c endpointsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 	scoped := len(in.Snapshot.RequestedNamespaces) > 0
 	if why != "" && (!scoped || !slices.ContainsFunc(in.Snapshot.RequestedNamespaces, func(ns string) bool { return endpointsReadable(in.Snapshot, ns) })) {
 		ctx.State.Set(endpointsStartsKey, nil)
-		return nil, NotAvailable(c.Name(), why, detail, at)
+		r := NotAvailable(c.Name(), why, detail, at)
+		r.Collection = true // decided by the watches alone; a partial read below depends on routes
+		return nil, r
 	}
 	// unread are the namespaces a scoped snapshot cannot judge: requested ones not OK, and referenced ones not read.
 	unread := map[string]bool{}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/computed"
+	"github.com/DuncanDoyle/snellius/pkg/health/own"
 	"github.com/DuncanDoyle/snellius/pkg/install"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
@@ -66,7 +67,31 @@ const (
 
 // Grace is how long a resource may lack current status before it is reported
 // as not yet processed.
-const Grace = 60 * time.Second
+const Grace = own.Grace
+
+// Class says who may see a finding (D-106).
+type Class uint8
+
+// Classes. The zero value is derived, so every finding is derived unless runOwn marks it.
+const (
+	// ClassDerived findings are shown only to a viewer with the full read.
+	ClassDerived Class = iota
+	// ClassOwn findings come from package own and are shown per finding.
+	ClassOwn
+)
+
+// Basis is what decided a finding, for who may see it (D-106).
+type Basis struct {
+	// Collection marks a finding decided only by Snellius's own collection and access state.
+	Collection bool
+	// Refs are the objects an own-object analyzer named, present or absent.
+	Refs []objects.Ref
+}
+
+// Readable says which objects a viewer may read.
+type Readable interface {
+	Ref(objects.Ref) bool
+}
 
 // Finding is one problem or notable fact about an install.
 type Finding struct {
@@ -102,6 +127,10 @@ type Finding struct {
 	// generation. It replaces Since for a caller who may not view all of
 	// Evidence, so Since tells that caller nothing about it. Never serialised.
 	ResourceSince *time.Time `json:"-"`
+	// Class is ClassOwn for a finding from package own, else ClassDerived. Never serialised.
+	Class Class `json:"-"`
+	// Basis is what decided the finding; runOwn sets its Refs. Never serialised.
+	Basis Basis `json:"-"`
 	// parent is the route parentRef a KGWUI-003 or KGWUI-011 finding is about;
 	// it orders findings. A pointer keeps the other findings small.
 	parent *objects.ParentRef
@@ -134,6 +163,12 @@ type CheckResult struct {
 	// Hold says the check is still deciding on some items; nil when it waits on none.
 	// Evaluate sets it from the run's RunContext.Hold calls (D-068).
 	Hold *Hold `json:"hold,omitempty"`
+	// NotAssessed marks a result shown as "Not checked" to a viewer without the full read.
+	NotAssessed bool `json:"notAssessed,omitempty"`
+	// Collection marks a collection or access failure (a watch denied, the
+	// cache not synced): its Error is fixed text that names no object, so
+	// every viewer sees it. Never serialised.
+	Collection bool `json:"-"`
 }
 
 // Hold is what a check waits on before it decides: counts and a time, never
@@ -200,12 +235,7 @@ type Input struct {
 
 // ConditionTypes are an implementation's route condition types beyond
 // Gateway API's (Phase 5 design §9).
-type ConditionTypes struct {
-	// RouteOptional are judged on a route parent when present.
-	RouteOptional []string
-	// RouteRejected carry a replaced or dropped rule, KGWUI-015, when False.
-	RouteRejected []string
-}
+type ConditionTypes = own.ConditionTypes
 
 // KgatewayConditions are kgateway's: kgateway.dev/Programmed, and the
 // replaced rule on Accepted (2.3) or kgateway.dev/Programmed (2.4 on).
@@ -214,7 +244,7 @@ func KgatewayConditions() ConditionTypes {
 }
 
 // kgatewayProgrammed is kgateway's route condition type.
-const kgatewayProgrammed = "kgateway.dev/Programmed"
+const kgatewayProgrammed = own.KgatewayProgrammed
 
 // conditions returns in.Conditions, or KgatewayConditions when it is unset.
 func (in Input) conditions() ConditionTypes {

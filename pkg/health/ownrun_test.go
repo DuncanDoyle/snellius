@@ -5,18 +5,25 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"flag"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/internal/testutil/scale"
+	"github.com/DuncanDoyle/snellius/pkg/health/own"
 	"github.com/DuncanDoyle/snellius/pkg/install"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
@@ -224,4 +231,280 @@ func firstDiff(got, want todayReport) string {
 	g, _ := json.Marshal(got)
 	w, _ := json.Marshal(want)
 	return " got " + string(g) + "\nwant " + string(w)
+}
+
+// ownKindOf is the analyzer that reports f, false for a derived code or resource (D-106 item 2).
+func ownKindOf(in Input, f Finding) (own.Kind, bool) {
+	if f.Resource == nil {
+		return 0, false
+	}
+	i := slices.IndexFunc(in.Served, func(s kinds.Served) bool { return s.Group == f.Resource.Group && s.Kind == f.Resource.Kind })
+	if i < 0 {
+		return 0, false
+	}
+	switch c := in.Served[i].Category; {
+	case f.Code == CodeConditionFalse && slices.Contains([]kinds.Category{kinds.CategoryGateway, kinds.CategoryListenerSet, kinds.CategoryRoute, kinds.CategoryPolicy}, c):
+		return own.Status, true
+	case c != kinds.CategoryRoute:
+		return 0, false
+	case f.Code == CodeRouteUnattached:
+		return own.Parents, true
+	case f.Code == CodeRefUnresolved || f.Code == CodeRefNotPermitted:
+		return own.Refs, true
+	case f.Code == CodeRuleReplaced:
+		return own.Rules, true
+	}
+	return 0, false
+}
+
+// Every finding the fixtures raise is own-object exactly when its code and
+// resource are in the own-object set, and every other one is derived.
+func TestEveryCodeClassified(t *testing.T) {
+	owned := 0
+	for name, w := range ownWorlds(t) {
+		for _, f := range Evaluate(w.in, Upstream(), w.rt).Findings {
+			_, ownable := ownKindOf(w.in, f)
+			switch {
+			case f.Class == ClassOwn && (!ownable || f.Basis.Collection):
+				t.Errorf("%s: %s on %v is own-object but not in the own-object set", name, f.Code, f.Resource)
+			case f.Class == ClassOwn:
+				owned++
+			case f.Class != ClassDerived || ownable || len(f.Basis.Refs) > 0:
+				t.Errorf("%s: %s on %v is class %d, want derived", name, f.Code, f.Resource, f.Class)
+			case f.Basis.Collection && f.Code != CodeSignalUnavailable:
+				t.Errorf("%s: %s marked collection", name, f.Code)
+			}
+		}
+	}
+	if owned == 0 {
+		t.Fatal("the fixtures raise no own-object finding")
+	}
+}
+
+// ClassOwn is set only in fromOwn, and own.Evaluate, own.InstallContext and
+// own.Named are used or implemented only in ownrun.go. fromOwn refuses a
+// Finding that own did not build.
+func TestOwnFindingsOnlyFromOwn(t *testing.T) {
+	names, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			fd, isFunc := d.(*ast.FuncDecl)
+			inFromOwn := isFunc && fd.Name.Name == "fromOwn"
+			if isFunc && fd.Recv != nil && name != "ownrun.go" && (fd.Name.Name == "Object" || fd.Name.Name == "FirstSeen") {
+				t.Errorf("%s: method %s may implement own.Named outside ownrun.go", name, fd.Name.Name)
+			}
+			var stack []ast.Node
+			ast.Inspect(d, func(n ast.Node) bool {
+				if n == nil {
+					stack = stack[:len(stack)-1]
+					return true
+				}
+				parent := ast.Node(nil)
+				if len(stack) > 0 {
+					parent = stack[len(stack)-1]
+				}
+				stack = append(stack, n)
+				if sel, ok := n.(*ast.SelectorExpr); ok && name != "ownrun.go" {
+					if x, ok := sel.X.(*ast.Ident); ok && x.Name == "own" && slices.Contains([]string{"Evaluate", "InstallContext", "Named"}, sel.Sel.Name) {
+						t.Errorf("%s: own.%s outside ownrun.go", name, sel.Sel.Name)
+					}
+				}
+				id, ok := n.(*ast.Ident)
+				if !ok || id.Name != "ClassOwn" || inFromOwn {
+					return true
+				}
+				switch p := parent.(type) {
+				case *ast.ValueSpec: // the declaration
+					return true
+				case *ast.BinaryExpr: // a comparison reads the class
+					if p.Op == token.EQL || p.Op == token.NEQ {
+						return true
+					}
+				case *ast.CaseClause:
+					return true
+				}
+				t.Errorf("%s: ClassOwn set outside fromOwn", name)
+				return true
+			})
+		}
+	}
+	if _, ok := fromOwn(own.Finding{}, nil); ok {
+		t.Fatal("fromOwn must refuse a Finding own did not build")
+	}
+}
+
+// A 015 inside its hint window wakes the report at the hint's deadline, as before the boundary.
+func TestOwnRulesWakeAt(t *testing.T) {
+	since := testutil.Now.Add(-2 * time.Minute)
+	r := ruleReport(t, ruleRoute(ruleCond(kgatewayProgrammed, "RouteRuleReplaced", "Replaced Rule (0): bad", since)), policyCatalog())
+	f, _ := onlyRule(t, r)
+	if f.Class != ClassOwn || strings.Contains(f.Detail, RuleReplacedHint) {
+		t.Fatalf("015 %+v, want own-object without the hint yet", f)
+	}
+	if want := since.Add(RuleReplacedHintAge + time.Nanosecond); !r.Next.Equal(want) {
+		t.Fatalf("Report.Next = %v, want the hint deadline %v", r.Next, want)
+	}
+}
+
+// newOwnInput's callbacks are local: Views decodes the object it is given,
+// FirstSeen answers for the resource and objects Object returned only, and
+// Owns and InScope are the install's Assign membership and scope.
+func TestOwnInputCallbacksLocal(t *testing.T) {
+	w := healthyWorld()
+	w.scope = `[{"matchLabels":{"team":"a"}}]`
+	w.nss = []*corev1.Namespace{testutil.Namespace("infra", map[string]string{"team": "a"}), testutil.Namespace("shop", map[string]string{"team": "a"})}
+	in := w.input(t)
+	route, gw := in.Owned.Routes[0].Obj, in.Owned.Gateways[0]
+	rec := &namedRecorder{base: &ownBase{}, resource: route}
+	ic, named := newOwnInput(in, rec)
+	before, _ := json.Marshal(ic.Views.HTTPRoute(route))
+	gw.Object["status"] = map[string]any{}
+	if after, _ := json.Marshal(ic.Views.HTTPRoute(route)); !bytes.Equal(before, after) {
+		t.Fatal("Views must decode the route alone")
+	}
+	if !named.FirstSeen(route).Equal(in.firstSeen(route)) {
+		t.Fatal("FirstSeen of the resource must be the engine's first sight of it")
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("FirstSeen of an object the analyzer did not name must panic under test")
+			}
+		}()
+		named.FirstSeen(gw)
+	}()
+	if _, ok := named.Object(objects.RefOf(gw)); !ok || !named.FirstSeen(gw).Equal(in.firstSeen(gw)) {
+		t.Fatal("FirstSeen of an object Object returned must be the engine's")
+	}
+	for _, objs := range in.Snapshot.Objects {
+		for _, u := range objs {
+			r := objects.RefOf(u)
+			member := slices.Contains(slices.Concat(in.Owned.Gateways, in.Owned.ListenerSets, objectsOf(in.Owned.Routes), objectsOf(in.Owned.Policies)), u)
+			if ic.Owns(r) != member {
+				t.Errorf("Owns(%s) = %v, want Assign's %v", r, ic.Owns(r), member)
+			}
+		}
+	}
+	if !ic.InScope("shop") || ic.InScope("elsewhere") {
+		t.Fatal("InScope must follow the selector scope")
+	}
+	// A Namespace label and a GatewayClass's controllerName move membership; nothing else does.
+	w.nss[1] = testutil.Namespace("shop", nil)
+	w.objs[0] = testutil.GatewayClass("kgateway", "example.com/other", true)
+	moved, _ := newOwnInput(w.input(t), &namedRecorder{base: &ownBase{}, resource: route})
+	if moved.InScope("shop") || moved.Owns(objects.RefOf(gw)) {
+		t.Fatal("InScope and Owns must follow Namespace labels and the GatewayClass")
+	}
+}
+
+// ownFindings evaluates analyzer k on u as runOwn does, and returns its
+// findings and the refs it named.
+func ownFindings(in Input, k own.Kind, u *unstructured.Unstructured) ([]todayFinding, []objects.Ref) {
+	rec := &namedRecorder{base: &ownBase{}, resource: u}
+	ic, named := newOwnInput(in, rec)
+	var out []todayFinding
+	for _, of := range own.Evaluate(k, ic, u, named).Findings() {
+		f, _ := fromOwn(of, rec.refs)
+		out = append(out, todayFinding{f, f.Evidence, nil})
+	}
+	return out, rec.refs
+}
+
+// objectByRef returns the snapshot object r names.
+func objectByRef(in Input, r objects.Ref) *unstructured.Unstructured {
+	for _, objs := range in.Snapshot.Objects {
+		for _, u := range objs {
+			if objects.RefOf(u) == r {
+				return u
+			}
+		}
+	}
+	return nil
+}
+
+// Each own-object finding's basis is exactly what its analyzer named, and its evidence is within it.
+func TestOwnBasisIsWhatWasNamed(t *testing.T) {
+	in := ownWorlds(t)["scale/typical-worst-faults"].in
+	named := 0
+	for _, f := range Evaluate(in, []Check{conditionsCheck{}}, Runtime{}).Findings {
+		k, ok := ownKindOf(in, f)
+		if !ok {
+			continue
+		}
+		_, refs := ownFindings(in, k, objectByRef(in, *f.Resource))
+		if !slices.Equal(f.Basis.Refs, refs) {
+			t.Errorf("%s on %s: basis %v, named %v", f.Code, f.Resource, f.Basis.Refs, refs)
+		}
+		for _, e := range f.Evidence {
+			if !slices.Contains(refs, e) {
+				t.Errorf("%s on %s: evidence %s was not named", f.Code, f.Resource, e)
+			}
+		}
+		if len(refs) > 0 {
+			named++
+		}
+	}
+	if named == 0 {
+		t.Fatal("no own-object finding named an object")
+	}
+}
+
+// Removing every object other than the resource and what it named, and
+// adding unrelated ones, leaves its own-object findings byte-equal; membership
+// is install context and stays. This supplements the import boundary.
+func TestOwnBoundaryIgnoresOthers(t *testing.T) {
+	in := ownWorlds(t)["scale/typical-worst-faults"].in
+	checked := 0
+	for _, f := range Evaluate(in, []Check{conditionsCheck{}}, Runtime{}).Findings {
+		k, ok := ownKindOf(in, f)
+		if !ok {
+			continue
+		}
+		u := objectByRef(in, *f.Resource)
+		want, refs := ownFindings(in, k, u)
+		keep := append([]objects.Ref{*f.Resource}, refs...)
+		snap := *in.Snapshot
+		snap.Objects = map[schema.GroupVersionResource][]*unstructured.Unstructured{}
+		for gvr, objs := range in.Snapshot.Objects {
+			for _, o := range objs {
+				if slices.Contains(keep, objects.RefOf(o)) {
+					snap.Objects[gvr] = append(snap.Objects[gvr], o)
+				}
+			}
+		}
+		other := testutil.HTTPRoute(u.GetNamespace(), "unrelated", []objects.ParentRef{testutil.GwRef(u.GetNamespace(), "elsewhere")})
+		for _, s := range in.Served {
+			if s.Group == objects.GatewayAPIGroup && s.Kind == "HTTPRoute" {
+				snap.Objects[s.GVR()] = append(snap.Objects[s.GVR()], other)
+			}
+		}
+		snap.Services = nil
+		for _, s := range in.Snapshot.Services {
+			if slices.Contains(keep, objects.Ref{Kind: "Service", Namespace: s.Namespace, Name: s.Name}) {
+				snap.Services = append(snap.Services, s)
+			}
+		}
+		perturbed := in
+		perturbed.Snapshot = &snap
+		got, _ := ownFindings(perturbed, k, u)
+		g, _ := json.Marshal(got)
+		w, _ := json.Marshal(want)
+		if !bytes.Equal(g, w) {
+			t.Errorf("%s on %s changed when other objects changed:\n got %s\nwant %s", f.Code, f.Resource, g, w)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("no own-object finding to check")
+	}
 }
