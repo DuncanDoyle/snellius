@@ -1613,3 +1613,15 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** The response's `collectedAt` (and its header) stays the real snapshot time for every viewer: a stated exception to D-085, like collection failures (D-108 item 2). Serving restricted viewers an older tick time would show their own changes as older than they are and could read as stale.
 
 **Consequences:** Restricted viewers keep an accurate time. Rounding it to a confirm-tick grid stays possible later without a design change.
+
+## D-110 — A listener check shows below the full read when its population is readable (2026-11-16, Phase 7, refines D-106 item 3)
+**Status:** our call, from the Task 33 review.
+
+**Context:** The listener-count check compares a listener's whole computed route population with its `attachedRoutes`. D-106 item 3 shows such results only to the full read. A viewer who can read every route the listener admits can assess it without seeing anything hidden.
+
+**Decision:**
+1. A viewer without the full read sees the listener check when they may `list` every route kind in every namespace the listener admits: its own namespace for `Same`, cluster-wide for `All` and `Selector`. A `Selector` listener also needs cluster-wide `list` on Namespaces, since membership depends on their labels.
+2. Otherwise the listener shows its visible count with no check, and counts, sort and member state use visible members only.
+3. Process sets show counts only with `list` on Deployments and Pods in their namespace, and probe facts only with cluster-wide `list` on Events, since Events are capped across the cluster.
+
+**Consequences:** Route owners with wide read access keep the listener check. No hidden object can change it, because the check runs only when its whole input is readable.
