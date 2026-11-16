@@ -20,7 +20,7 @@ Issues: none | Plan steps: implementation-plan.md, Sub-phase 7.4, items 1–10; 
 | Own-object finding (from an analyzer behind the typed boundary, D-106) whose resource and every object it named the viewer can read | Shown |
 | Own-object finding with an unreadable resource or named object; any other finding (derived, extensions included) | Not shown to a viewer without the full read, and raises no state; a full-read viewer sees it |
 | Own-object analyzer that reaches anything beyond its resource, the objects it names and the install context | A test fails (the boundary test) |
-| Controller settings change (scope, ownership, version, rule set) | May change what every viewer sees: install context, a stated exception (D-106 item 1); the rule test names exactly what may change |
+| Controller settings change (scope, version, rule set), or an install-membership change (a GatewayClass `controllerName`, a parent Gateway or ListenerSet, Namespace labels for scope) | May change what every viewer sees: install context, a stated exception (D-106 item 1, D-107); the rule test names exactly what may change, and no other hidden change does |
 | Health verdict, header tint, finding counts, groups, search | Computed over the findings the viewer is shown |
 | Check failed for collection or access (watch denied, cache not synced) | Shown to every viewer, as code and state |
 | Any other check result (grace hold, pending count, deadline, text) | The original for a full-read viewer; "Not checked" for everyone else (D-106). Install-wide unknown is raised for a restricted viewer only by collection or access failures and shown error findings |

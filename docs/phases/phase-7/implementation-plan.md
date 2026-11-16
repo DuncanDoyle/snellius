@@ -457,7 +457,7 @@ Install surface: **new flags** (secure mode only) `--authz-max-in-flight` (defau
 
 The gate stays closed: `app.Build` keeps `WithSecureMode(false)`. Every test reaches the projection below it with `WithSecureMode(true)`, as in 7.3. Brief: `phase-7.4-brief.md`. Item map (the former item list): 1 → Task 31; 2 → Tasks 32–34; 3, 10 → Task 35; 4 → Task 34; 5 → Task 36; 6 → the rule cases in Tasks 32–35 and 37; 7 → Task 37; 8 → Task 33; 9 → Task 32.
 
-**Codex plan review:** `reviews/plan-7.4-codex.md` (7 P1, 3 P2, 2 P3), all accepted; the tasks below include the changes. #1 (the install ID) is settled by D-102: the ID keeps the controller's namespace and name. The re-review (5 new findings) is folded in too; D-103 replaces install reachability: every signed-in viewer sees every install. After the third and fourth passes, D-104 replaces per-result projection: a check result is shown whole or "Not checked", by permission only. After the sixth pass, D-106 (accepted by the user) replaces D-104's kind lists and D-105's probe: controller settings are install context, own-object findings come from analyzers behind a typed boundary, and everything else needs the full read.
+**Codex plan review:** `reviews/plan-7.4-codex.md` (7 P1, 3 P2, 2 P3), all accepted; the tasks below include the changes. #1 (the install ID) is settled by D-102: the ID keeps the controller's namespace and name. The re-review (5 new findings) is folded in too; D-103 replaces install reachability: every signed-in viewer sees every install. After the third and fourth passes, D-104 replaces per-result projection: a check result is shown whole or "Not checked", by permission only. After the sixth pass, D-106 (accepted by the user) replaces D-104's kind lists and D-105's probe: controller settings are install context, own-object findings come from analyzers behind a typed boundary, and everything else needs the full read. After the seventh pass, D-107 makes install membership install context, and the boundary becomes its own package with an import allowlist.
 
 **Secure-mode switch.** "Secure mode" below means a handler built with `WithSecureMode` (`handler.secure`); `view` gains `secure bool` from it. A local handler with a registry authoriser keeps D-013's placeholders. A full-read viewer and local mode under `AllowAll` see every existing field unchanged: `TestGoldenChangesAreAdditive` (`additive_test.go:58`) and `TestFullReaderMatchesAllowAll` (`pkg/auth/sar/handler_test.go:381`) stay green in every task.
 
@@ -465,7 +465,7 @@ The gate stays closed: `app.Build` keeps `WithSecureMode(false)`. Every test rea
 - Two viewers over one model, through a real `sar.Authorizer` with a fake checker: `full` (every `list` allowed) and `restricted` (`inNamespaces(10)`). The hidden namespace is `testutil.ScaleNamespace(11)`; the controller Deployment's namespace is hidden too.
 - Each world is computed once by a fresh engine at `testutil.Now` with a fixed publication sequence; the commit clock is `t0`. Masks are named per surface (`ruleCase.masks`, JSON paths); the default is none. A masked field must not depend on hidden objects.
 - Changes (design §13), all in hidden namespaces: `created` (a Gateway, an HTTPRoute, a Service with its EndpointSlice, a kgateway Backend, a route naming a visible Service); `deleted` (one of each); `faulty` (a route condition False, a Backend not accepted, a Service with no ready endpoints); `pending` (a route without status inside the grace period); `threshold` (enough stuck routes to raise KGWUI-018, and enough unready proxies to change the proxy summary); `rejecting` (a hidden Gateway with a KGWUI-001 through the controller metrics fixture); `controller` (the controller's log state changes); `consumerFirst` (a hidden route consumes a Service before a readable route does); `stuckThreshold` (hidden stuck routes push the count over the KGWUI-018 threshold); `gatewayAdded` (a hidden Gateway added); `controllerRestart` (a hidden controller Pod restarts); `eventsCapped` (hidden Events push the count past the Events cap); `parentGeneration` (a hidden parent route's generation changes); `listenerCount` (a hidden route changes a visible Gateway listener's count); `ancestorWindow` (a hidden ancestor route resets a visible child's computed 011 window); `crdBundle` (a hidden CRD changes the bundle representative); `proxyReadyDeployment` (a hidden proxy Deployment changes `proxyReady` for a visible Gateway). The sixth pass adds one change per trigger it found: `backendConsumer` (the only, hidden, consumer route of a readable rejected Backend appears and disappears), `listenerPolicy` (a hidden ListenerPolicy starts selecting a visible Gateway's listener), `selectorTarget` (an object matching a visible policy's `targetSelectors` appears in a hidden namespace), `computedTrigger` (a hidden ancestor matures a computed 011 trigger for a visible route). Each asserts the restricted viewer's `/findings` and `/health` byte-equal.
-- Install context (D-106 item 1), `TestRuleInstallContextMayChange`: changing the controller's settings (its discovery selector, version label and rule set) is the one change allowed to change a restricted viewer's output. The case lists exactly the fields it may change (ownership-driven rows and findings, install version and rule set) as its named mask, and asserts every other field byte-equal, so the exception stays explicit.
+- Install context (D-106 item 1, D-107), `TestRuleInstallContextMayChange`: these hidden changes are the only ones allowed to change a restricted viewer's output, each with its named mask: `controllerSettings` (the controller's discovery selector, version label and rule set), `classController` (a hidden GatewayClass's `controllerName` moves a readable Gateway and its routes in or out of the install), `parentListenerSet` (a hidden ListenerSet's parent Gateway changes, moving readable routes), `namespaceLabels` (a hidden Namespace's labels move it in or out of a selector scope). Each mask lists exactly the fields it may change (membership-driven rows, counts and findings, install version and rule set) and asserts every other field byte-equal. Every other change in the list above stays in `TestRuleUnchangedForRestricted` with no mask, so nothing else hidden changes output.
 - Check results, `TestRuleCheckedListUnchanged`: the restricted viewer's "What was checked" (the `checks` of `/health` and `/diagnostics`) is byte-equal across every change above; every non-collection result reads "Not checked".
 - `TestRuleUnchangedForRestricted` (table: surface × change): the restricted viewer's response is byte-equal before and after, after masks.
 - Fixture reach, `TestRuleChangesReachFullReader`: the same table for `full` must differ. A pair a change cannot reach is listed in `ruleNotApplicable` with a one-line reason; the test fails on an unlisted pair that does not differ.
@@ -474,45 +474,61 @@ The gate stays closed: `app.Build` keeps `WithSecureMode(false)`. Every test rea
 
 ### Task 31: Own-object boundary, findings and check results (`pkg/health`)
 
-**Files:** new `pkg/health/own.go` (the boundary), new `own_status.go`, `own_parents.go`, `own_refs.go`, `own_rules.go` (the own-object analyzers); `finding.go`, `rollup.go` (`Evaluate` at `:62`, `RollUp` at `:31`), `checks.go` (`conditionsCheck`, `unavailable` `:59`), `refs.go`, `rules.go`, `endpoints.go` (`:34`); tests new `pkg/health/own_test.go`, `rollup_test.go`.
+**Files:** new package `pkg/health/own` (`own.go` the boundary types, `status.go`, `parents.go`, `refs.go`, `rules.go` the analyzers, `evidence.go` the typed evidence they emit); new `pkg/health/ownrun.go` (the constructor and runner); `finding.go`, `rollup.go` (`Evaluate` at `:62`, `RollUp` at `:31`), `checks.go` (`conditionsCheck`, `unavailable` `:59`), `refs.go`, `rules.go`, `endpoints.go` (`:34`); tests new `pkg/health/own/boundary_test.go`, `pkg/health/ownrun_test.go`, `rollup_test.go`.
 
 **Interfaces (D-106):**
 
-The controller's settings (scope, which objects belong to the install, version, rule set) are install context: a change to them may change what every viewer sees (D-106 item 1). Own-object findings are produced behind a typed boundary and shown per finding. Everything else, every other finding and every check result other than a collection failure, is shown only to a viewer with the full read.
+The controller's settings (scope, version, rule set; D-106 item 1) and install membership (which Gateways, ListenerSets, routes and policies belong to the install, decided by GatewayClass `controllerName`, the parent Gateway or ListenerSet, and Namespace labels for scope; D-107) are install context: a change to them may change what every viewer sees. Backend membership through consumer routes is not install context (D-107), so Backend findings stay derived. Own-object findings are produced behind a typed boundary and shown per finding. Everything else, every other finding and every check result other than a collection failure, is shown only to a viewer with the full read.
 
 **Check results:**
 - `CheckResult.Collection bool` (`json:"-"`) marks a collection or access failure (a watch denied, the cache not synced). Its `Error` is fixed, object-free text (`endpointsNSDetail`, `endpoints.go:34`, loses its namespace list). `unavailable()` (`checks.go:59`) takes a `collection bool`; `scopeCheck`'s unknown scope (`checks.go:157`) is install context, not collection.
 - In `Project`, a `Collection` result is shown whole. Every other result is "Not checked" for a viewer without the full read: `Name`, `Required`, `CollectedAt`, `OK: true` and new `NotAssessed: true` (`json:"notAssessed,omitempty"`), nothing else. A "Not checked" result never raises unknown. A full reader sees every result unchanged.
 
-**The own-object boundary** (`pkg/health/own.go`, package `health`):
+**The own-object boundary** (package `own`, `pkg/health/own`; `pkg/health` imports it, never the reverse):
 
 ```go
-// InstallContext is the install context an own-object analyzer may read (D-106 item 1).
+// InstallContext is the install context an own-object analyzer may read (D-106, D-107).
 type InstallContext struct {
-	Install    string                    // the install ID
-	Owns       func(objects.Ref) bool    // whether the install owns a ref
-	InScope    func(namespace string) bool
-	Version    string                    // the version rule selection uses
-	Conditions ConditionTypes            // the rule set's condition types
-	Delegation bool                      // false when the install has delegation off
-	Views      objects.Decoder           // decoding only; reads no other object
-	Now        time.Time
+	Install         string                      // the install ID
+	ControllerNames []string                    // status entries written by this install's controller
+	Owns            func(objects.Ref) bool      // install membership (D-107)
+	InScope         func(namespace string) bool // the scope, Namespace labels included (D-107)
+	Version         string                      // the version rule selection uses
+	Conditions      ConditionTypes              // the rule set's condition types
+	Delegation      bool                        // false when the install has delegation off
+	Catalog         kinds.Catalog               // served kinds (API discovery, visible to every viewer)
+	Views           objects.Decoder             // decodes the object it is given, nothing else
+	Now             time.Time
 }
 
 // Named resolves the objects a resource names. Every ref asked is recorded
 // as the finding's basis, whether the object exists or not.
 type Named interface {
 	Object(ref objects.Ref) (*unstructured.Unstructured, bool)
-	FirstSeen(u *unstructured.Unstructured) time.Time // grace by first sight; u is the resource or a named object
+	// FirstSeen is grace by first sight of the resource or an object Object returned.
+	FirstSeen(u *unstructured.Unstructured) time.Time
 }
 
-// OwnAnalyzer produces the own-object findings of one resource.
-type OwnAnalyzer func(ic InstallContext, resource *unstructured.Unstructured, named Named) []Finding
+// Finding is an own-object finding; pkg/health converts it.
+type Finding struct {
+	Code, Slug, Message, Detail string
+	Severity                    string
+	Since                       *time.Time
+	Key                         []string
+	Evidence                    []objects.Ref
+	Facts                       any // a type from own/evidence.go
+}
+
+// Analyzer produces the own-object findings of one resource.
+type Analyzer func(ic InstallContext, resource *unstructured.Unstructured, named Named) []Finding
 ```
 
-- An own-object analyzer is a function of type `OwnAnalyzer` in an `own_*.go` file. It receives nothing else: no `Input`, `RunContext`, `Snapshot`, `Owned`, store or computed view. `TestOwnAnalyzersStayBehindBoundary` parses the `own_*.go` files (`go/ast`) and fails on any reference to `Input`, `RunContext`, `Store`, `cache.`, `Snapshot`, `Owned`, `Computed`, `Process` or a package-level variable.
-- `func runOwn(in Input, a OwnAnalyzer, resources []*unstructured.Unstructured) []Finding` (unexported, in `own.go`) builds `InstallContext` from `in` and a recording `Named` per resource, calls `a`, and on each finding sets `Class = ClassOwn` and `Basis.Refs` to the recorded refs. It fails a test build (panics under `testing.Testing()`) when a finding's `Evidence` names a ref the reader did not record.
-- Resources come from the install's owned objects, which is install context: Gateways, ListenerSets, routes and policies.
+- `ConditionTypes` and the typed evidence the own analyzers emit (`RefsEvidence` and the rules evidence) move to `own`; `pkg/health` keeps type aliases (`type ConditionTypes = own.ConditionTypes`), so the Go API and the JSON stay the same.
+- Import allowlist, enforced by `TestOwnImportsAllowlisted` in `pkg/health/own/boundary_test.go`: it walks the package's transitive imports with the standard library's `go/build` (no new dependency) and fails on any module package outside `pkg/objects`, `pkg/kinds` and `pkg/trigger` (the latter two are what `objects` and `kinds` import). Third-party imports must be under `k8s.io/apimachinery`, `k8s.io/klog`, `k8s.io/utils` or `sigs.k8s.io`; `k8s.io/client-go` is refused. So `cache`, `engine`, `install`, `computed`, `process` and `health` are unreachable by import.
+- `TestOwnHasNoPackageState` (same file, `go/ast`): the package declares no package-level `var` (constants only), so an analyzer cannot reach state through a global.
+- The trusted implementations live in one named constructor in `pkg/health/ownrun.go`: `func newOwnInput(in Input, rec *namedRecorder) (own.InstallContext, own.Named)`. `Owns` is the install's membership (`in.Owned`, decided by `install.Assign`); `InScope` is `in.Install.Scope`; `Views` is `in.views()`; `Catalog` is `in.Catalog`; `ControllerNames` is `in.Install.ControllerNames`. `Named.Object` reads `in.Snapshot` by ref and records it; `Named.FirstSeen` calls `in.firstSeen(u)` and, under `testing.Testing()`, panics for an object that is neither the resource nor one `Object` returned.
+- `func runOwn(in Input, a own.Analyzer, resources []*unstructured.Unstructured) []Finding` (unexported, `ownrun.go`) builds one recorder per resource, calls `a`, converts each `own.Finding` to a `Finding` with `Class = ClassOwn` and `Basis.Refs` = the recorded refs, and panics under `testing.Testing()` when its `Evidence` names an unrecorded ref.
+- Resources are the install's owned Gateways, ListenerSets, routes and policies (membership is install context, D-107).
 - `conditionsCheck` calls the own-object analyzers for their triggers and keeps every other trigger (derived) as today.
 
 **Findings:**
@@ -526,10 +542,10 @@ Own-object set (D-106 item 2), each against the boundary above; everything else 
 
 | Analyzer | Codes and trigger | Named objects |
 |---|---|---|
-| `ownStatus` | 002 on a Gateway, ListenerSet, route or policy, from its own status conditions | the parents and ancestors written in its status, for their grace by first sight |
-| `ownParents` | 003 on a route (its status parents and parentRefs) | the parents named in its `parentRefs` |
-| `ownRefs` | 013 and 014 on a route, from its `ResolvedRefs` condition and the refs written in its rules | each backendRef target, present or absent; delegation targets by name |
-| `ownRules` | 015 on a route, from its own status | none |
+| `own.Status` | 002 on a Gateway, ListenerSet, route or policy, from its own status conditions written by `ControllerNames` | the parents and ancestors written in its status, for their grace by first sight |
+| `own.Parents` | 003 on a route (its status parents and parentRefs) | the parents named in its `parentRefs` |
+| `own.Refs` | 013 and 014 on a route, from its `ResolvedRefs` condition and the refs written in its rules; served kinds and suggested groups from `Catalog` (`refs.go:314`, `:337`) | each backendRef target, present or absent; delegation targets by name |
+| `own.Rules` | 015 on a route, from its own status | the policy named in its status message (`rules.go:80`, `:86`), present or absent |
 
 Derived, with the reason (D-106 item 3; full read only):
 - 002 on a kgateway Backend (backend status): the install owns a Backend only through its consumer routes' backendRefs (`install/delegation.go:250`, `:269`). Consumer occupancy is not a controller setting, so it is not install context; a hidden route could otherwise add or remove a visible Backend's 002.
@@ -541,7 +557,7 @@ Derived, with the reason (D-106 item 3; full read only):
 - 001, 004–010, 012, 018–026, and 008 from the controller scope.
 - `Collection`: 008 from cluster access and served kinds.
 
-- [ ] Boundary: `TestOwnAnalyzersStayBehindBoundary` (above); `TestOwnBasisIsWhatWasNamed` (each own-object analyzer over the scale fixture with faults injected: every finding's `Basis.Refs` equals the refs its `Named` recorded, and its `Evidence` is within them); `TestOwnFindingsMatchToday` (for a full reader, the 002, 003, 013, 014 and 015 findings that `conditionsCheck` produces through the boundary equal today's on the fixtures, so the move changes nothing they show); `TestOwnBoundaryIgnoresOthers` (perturbing every object other than the resource and what it named, with the install context fixed, leaves its own-object findings byte-equal; supplementary to the type boundary).
+- [ ] Boundary: `TestOwnImportsAllowlisted` and `TestOwnHasNoPackageState` (above; each fails on a deliberately bad test file in `testdata`); `TestOwnInputCallbacksLocal` (`newOwnInput`: `Views` decodes the same view for an object whatever other objects change; `Named.FirstSeen` for the resource equals `in.firstSeen` of it alone and panics for an unrecorded object; `Owns` and `InScope` equal the install's `Assign` membership and scope, and change only with a GatewayClass, parent or Namespace-label change); `TestOwnBasisIsWhatWasNamed` (each own-object analyzer over the scale fixture with faults injected: every finding's `Basis.Refs` equals the refs its `Named` recorded, and its `Evidence` is within them); `TestOwnFindingsMatchToday` (for a full reader, the 002, 003, 013, 014 and 015 findings that `conditionsCheck` produces through the boundary equal today's on the fixtures, so the move changes nothing they show); `TestOwnBoundaryIgnoresOthers` (perturbing every object other than the resource, what it named and the membership inputs leaves its own-object findings byte-equal; supplementary to the import boundary).
 - [ ] Findings: `TestEveryCodeClassified` (every code `Upstream()` emits in the fixtures is `ClassOwn` only through `runOwn`, and every other finding is `ClassDerived` or `Collection`); `TestExtensionFindingsDerived` (a test check outside `runOwn`: its findings are `ClassDerived`, hidden for a restricted viewer, shown for a full reader); `TestShownToTable` (own-object: resource and each named ref unreadable in turn → false; all readable → true; derived → false; `Collection` with no resource → true); `TestProjectCountsAndState` (a hidden error finding: state and counts as if absent).
 - [ ] Check results: `TestResultsNotCheckedForRestricted` (every non-collection result is "Not checked" for a viewer without the full read, whatever their other grants; a full reader gets it unchanged); `TestNotCheckedNeverUnknown`; `TestCollectionFailureStays` (a denied watch: shown to every viewer with fixed text, unknown); `TestCollectionTextObjectFree` (every `Collection` result's `Error` in the fixture names no object or namespace); `TestProjectNilIsIdentity`.
 - [ ] `go test ./pkg/health/... ./pkg/engine/...`; commit.
