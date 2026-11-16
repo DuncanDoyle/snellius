@@ -31,7 +31,7 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 Sub-phase: 7.4 — Visibility everywhere (planned)
 Base: 99510dd2174d29a68dfa9441620ae55ad779dba5
 Brief: phases/phase-7/phase-7.4-brief.md
-Status: brief written 2026-11-16; next: write the 7.4 tasks into implementation-plan.md, Codex plan review, then implement
+Status: tasks 31–38 written and reviewed (reviews/plan-7.4-codex.md, 8 passes; D-102 to D-107); implementing
 Queue: plan items 1–10 (implementation-plan.md, Sub-phase 7.4)
 
 ## Program
