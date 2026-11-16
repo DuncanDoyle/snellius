@@ -1625,3 +1625,16 @@ Measured on the reference machine, 5 runs per world:
 3. Process sets show counts only with `list` on Deployments and Pods in their namespace, and probe facts only with cluster-wide `list` on Events, since Events are capped across the cluster.
 
 **Consequences:** Route owners with wide read access keep the listener check. No hidden object can change it, because the check runs only when its whole input is readable.
+
+## D-111 — Path incompleteness reads only the readable objects themselves (2026-11-16, Phase 7, refines design §8.1)
+**Status:** our call, from the Task 36 review.
+
+**Context:** The plan computed a route's parent chain from the index's parent-route edges. Those edges exist only when a parent route exists and is reachable from an owned route, so a hidden parent's deletion could flip a readable child between complete and incomplete. The plan also left the Gateway behind a ListenerSet unchecked.
+
+**Decision:**
+1. Parent routes come from the readable route's own `spec.parentRefs` and `status.parents` entries of kind HTTPRoute (status entries only for the install's controller names). A parent is walked only when `get` admits it, and is read from its own object whether or not it has a row or belongs to the install.
+2. A readable ListenerSet parent, of any served ListenerSet kind, also needs `get` on the Gateway its own `spec.parentRef` names and `list` on Gateways in that namespace.
+3. Every route kind is decided, not only HTTPRoutes. RequestMirror targets are not path rows (D-082) and are not checked.
+4. With delegation off, an HTTPRoute backendRef is an ordinary target.
+
+**Consequences:** Incompleteness depends only on readable objects, install context and the viewer's permissions. `ix.ParentRoutes` must not feed it.
