@@ -223,6 +223,8 @@ A restricted viewer sees a finding only when they can read its resource and its 
 
 No permission beyond the viewer's object RBAC is required. An install is reachable when the viewer can read any object Snellius attributes to it. Install metadata shows only what the viewer can read: its GatewayClasses' names when they can read them, controller readiness and version when they can read the controller Deployment, scope details when they can read Namespaces. Otherwise the install shows a neutral name and "Details not visible to you".
 
+Amended by D-102 and D-103: the install ID keeps the controller's namespace and name, and every signed-in viewer sees every install (no reachability check). An install with nothing the viewer can read shows empty pages, never a 404.
+
 ### 7.5 The permissions note
 
 Per viewer, not per hidden object: in secure mode, a viewer who cannot `list` every served kind in every namespace sees one note in the header area: "You see what your Kubernetes permissions allow." It is decided by SARs about the viewer's own rights, never by the presence of hidden objects. The per-page "some paths are hidden" summaries (D-077, `PathSummary.tsx:98`, `BackendsPage.tsx:151`, `ExposureSection.tsx:86`, `ObjectTable.tsx:274`) and the `hidden`/`deniedInInstall` fields go away in secure mode.
