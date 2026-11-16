@@ -6,7 +6,7 @@ import { useNow } from "../../api/clock";
 import { useFindingGroups, useFindings } from "../../api/diagHooks";
 import { isStale, useListFilter } from "../../api/hooks";
 import type { FindingItem, GrantShape, GroupRow, LinkedRef, Severity } from "../../api/types";
-import { columnCopy, diagnosticsCopy, findingsCopy, groupsCopy, listCopy } from "../../copy/explorer";
+import { columnCopy, diagnosticsCopy, findingsCopy, groupsCopy } from "../../copy/explorer";
 import { ListFrame } from "../../explore/ListFrame";
 import { listValues, useListPage } from "../../explore/listQuery";
 import { type ObjectColumn, ObjectTable } from "../../explore/ObjectTable";
@@ -359,8 +359,9 @@ function GroupedFindings({ stylesOverride }: FindingsPageProps) {
           page={l.data}
           loading={!l.data}
           busy={l.busy}
-          emptyTitle={l.filtered ? listCopy.emptyFiltered(noun[1]) : listCopy.empty(noun[1])}
-          onClearFilters={l.filtered ? l.clearFilters : undefined}
+          emptyTitle={l.emptyTitle(noun[1])}
+          clearLabel={l.emptyActionLabel}
+          onClearFilters={l.onEmptyAction}
           sort={NO_SORT}
           onSort={() => {}}
           onPage={l.setCursor}
@@ -427,8 +428,9 @@ function FlatFindings({ stylesOverride }: FindingsPageProps) {
           page={l.data}
           loading={!l.data}
           busy={l.busy}
-          emptyTitle={l.filtered ? listCopy.emptyFiltered(NOUN[1]) : listCopy.empty(NOUN[1])}
-          onClearFilters={l.filtered ? l.clearFilters : undefined}
+          emptyTitle={l.emptyTitle(NOUN[1])}
+          clearLabel={l.emptyActionLabel}
+          onClearFilters={l.onEmptyAction}
           sort={l.sort}
           // Rank, the default, sorts one way only: choosing it clears the sort.
           onSort={(k) => (k === "rank" ? l.setFilter({ sort: null }) : l.setSort(k))}

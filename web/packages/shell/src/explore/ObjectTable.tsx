@@ -34,6 +34,7 @@ const SKELETON_ROWS = 8;
 const NARROW = "(max-width: 899px)";
 
 const Frame = styled.div<{ stylesOverride?: SerializedStyles }>`
+  position: relative;
   border: 1px solid ${(p) => p.theme.color.border};
   border-radius: ${(p) => p.theme.radius.md};
   background: ${(p) => p.theme.color.surface};
@@ -105,7 +106,12 @@ const Table = styled.table`
   tbody {
     transition: opacity 120ms ease-out;
   }
-  tbody[data-busy] {
+  /* Busy rows keep their text at full contrast: text turns muted (tested 4.5:1), icons dim, the bar marks the load. */
+  tbody[data-busy] td {
+    color: ${(p) => p.theme.color.textMuted};
+  }
+  tbody[data-busy] svg,
+  tbody[data-busy] img {
     opacity: 0.55;
   }
   tbody tr[data-link] {
@@ -162,6 +168,26 @@ const Table = styled.table`
   }
   .none {
     color: ${(p) => p.theme.color.textMuted};
+  }
+`;
+/** A thin bar along the table's top edge while the rows are the previous query's. */
+const BusyBar = styled.div`
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  height: 2px;
+  border-radius: ${(p) => p.theme.radius.md} ${(p) => p.theme.radius.md} 0 0;
+  background: linear-gradient(90deg, transparent, ${(p) => p.theme.color.accent}, transparent) 0 0 / 40% 100% no-repeat;
+  animation: busy-slide 1s linear infinite;
+  @keyframes busy-slide {
+    from { background-position: -40% 0; }
+    to { background-position: 140% 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    background: ${(p) => p.theme.color.accent};
   }
 `;
 const Empty = styled.div`
@@ -228,11 +254,13 @@ interface ObjectTableProps<T> {
   rowPath?: (row: T) => string | undefined;
   page?: Page<T>;
   loading: boolean;
-  /** The rows shown belong to the previous query while a new one loads: busy and dimmed, never moved. */
+  /** The rows shown belong to the previous query while a new one loads: busy and muted, never moved. */
   busy?: boolean;
   emptyTitle: string;
   /** Set when filters apply; the empty state then offers Clear filters. */
   onClearFilters?: () => void;
+  /** The empty state's action label, when it is not Clear filters (the namespace scope's Show all namespaces). */
+  clearLabel?: string;
   sort: SortState;
   onSort: (key: string) => void;
   onPage: (cursor: string) => void;
@@ -262,6 +290,7 @@ export function ObjectTable<T>({
   busy = false,
   emptyTitle,
   onClearFilters,
+  clearLabel = listCopy.clearFilters,
   sort,
   onSort,
   onPage,
@@ -367,6 +396,7 @@ export function ObjectTable<T>({
   const focusable = Math.min(active, Math.max(0, rows.length - 1));
   return (
     <Frame stylesOverride={stylesOverride}>
+      {busy ? <BusyBar data-testid="table-busy" aria-hidden="true" /> : null}
       <Table aria-label={label} aria-busy={loading || busy}>
         <colgroup>
           {shown.map((c) => (
@@ -417,7 +447,7 @@ export function ObjectTable<T>({
                   {emptyTitle}
                   {onClearFilters ? (
                     <QuietButton type="button" onClick={onClearFilters}>
-                      {listCopy.clearFilters}
+                      {clearLabel}
                     </QuietButton>
                   ) : null}
                 </Empty>

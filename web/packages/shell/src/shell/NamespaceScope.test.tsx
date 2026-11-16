@@ -1,9 +1,12 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { Route, Routes } from "react-router-dom";
 import { SWRConfig } from "swr";
 import installs from "../../../../../pkg/api/testdata/golden/installs.json";
 import { resetAuthForTests } from "../auth/authState";
+import { listCopy } from "../copy/explorer";
 import { shellCopy } from "../copy/shell";
+import { RoutesPage } from "../pages/explore/RoutesPage";
 import { meta } from "../test/fixtures";
 import { pseudoRules, renderWithTheme, stubApi, testSWR } from "../test/render";
 import { NamespaceScope } from "./NamespaceScope";
@@ -151,4 +154,45 @@ describe("in the header", () => {
     );
     expect(within(screen.getByRole("banner")).queryByTestId("namespace-scope")).toBeNull();
   });
+});
+
+it("marks an active scope on the button with its count, not colour alone", async () => {
+  stubApi({ [`/api/v1/installs/${ID}/namespaces`]: choices });
+  mount();
+  expect(screen.queryByTestId("scope-count")).toBeNull();
+  act(() => setNamespaceScope(["infra", "shop"]));
+  expect(screen.getByTestId("scope-count")).toHaveAttribute("data-count", "2");
+  expect(trigger()).toHaveAttribute("data-scoped", "true");
+  await userEvent.hover(trigger());
+  expect(await screen.findByRole("tooltip")).toHaveTextContent(`${copy.label}: infra, shop`);
+});
+
+it("a scoped list page that comes back empty says so and offers all namespaces", async () => {
+  const lists = ["routes", "gateways", "listenersets", "paths", "backends", "findings", "processes"];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const u = new URL(url, "http://ui");
+      if (u.pathname === "/api/v1/meta")
+        return new Response(
+          JSON.stringify({ ...meta, filters: Object.fromEntries(lists.map((l) => [l, ["namespaces"]])) }),
+        );
+      if (u.pathname.endsWith("/routes"))
+        return new Response(
+          JSON.stringify({ install: ID, items: [], total: 0, collectedAt: new Date().toISOString() }),
+        );
+      return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
+    }),
+  );
+  setNamespaceScope(["shop"]);
+  renderWithTheme(
+    <Routes>
+      <Route path="/i/:id/routes" element={<RoutesPage />} />
+    </Routes>,
+    { path: `/i/${ID}/routes` },
+  );
+  expect(await screen.findByText(copy.emptyList("routes"))).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: copy.showAll }));
+  expect(getNamespaceScope()).toEqual([]);
+  expect(await screen.findByText(listCopy.empty("routes"))).toBeInTheDocument();
 });

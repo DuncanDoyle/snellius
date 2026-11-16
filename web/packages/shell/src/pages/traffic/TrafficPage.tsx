@@ -2,7 +2,6 @@ import type { SerializedStyles } from "@emotion/react";
 import { useMemo } from "react";
 import { usePaths } from "../../api/exploreHooks";
 import type { Page, PathRow, PathsResponse } from "../../api/types";
-import { listCopy } from "../../copy/explorer";
 import { summaryCopy, trafficCopy } from "../../copy/traffic";
 import { ListFrame } from "../../explore/ListFrame";
 import { listValues, useListPage } from "../../explore/listQuery";
@@ -167,11 +166,12 @@ export function TrafficPage({ stylesOverride }: TrafficPageProps = {}) {
             installId={l.id}
             page={page}
             busy={l.busy}
-            onClearFilters={l.filtered ? l.clearFilters : undefined}
+            onClearFilters={l.onEmptyAction}
             sort={l.sort}
             onSort={l.setSort}
             onPage={l.setCursor}
-            emptyTitle={l.filtered ? listCopy.emptyFiltered(trafficCopy.noun[1]) : listCopy.empty(trafficCopy.noun[1])}
+            emptyTitle={l.emptyTitle(trafficCopy.noun[1])}
+            clearLabel={l.emptyActionLabel}
           />
         </StaleGate>
       )}

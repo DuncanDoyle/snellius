@@ -5,7 +5,7 @@ import { useNow } from "../../api/clock";
 import { useProcesses } from "../../api/diagHooks";
 import { isStale, useInstallFeature } from "../../api/hooks";
 import type { GatewayProcesses, Page, ProcessSet } from "../../api/types";
-import { columnCopy, diagnosticsCopy, listCopy, processesCopy } from "../../copy/explorer";
+import { columnCopy, diagnosticsCopy, processesCopy } from "../../copy/explorer";
 import { DIAG_ROW_H, ProcessTable } from "../../diagnostics/ProcessTable";
 import { ListFrame } from "../../explore/ListFrame";
 import { useListPage } from "../../explore/listQuery";
@@ -254,8 +254,9 @@ export function ProcessesPage({ stylesOverride }: ProcessesPageProps = {}) {
           page={page}
           loading={!l.data}
           busy={l.busy}
-          emptyTitle={l.filtered ? listCopy.emptyFiltered(NOUN[1]) : listCopy.empty(NOUN[1])}
-          onClearFilters={l.filtered ? l.clearFilters : undefined}
+          emptyTitle={l.emptyTitle(NOUN[1])}
+          clearLabel={l.emptyActionLabel}
+          onClearFilters={l.onEmptyAction}
           sort={NO_SORT}
           onSort={noop}
           onPage={l.setCursor}

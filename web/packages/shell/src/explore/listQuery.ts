@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiError } from "../api/client";
-import { useListFilter } from "../api/hooks";
+import { supportsFilter, useMeta } from "../api/hooks";
 import type { Page } from "../api/types";
+import { listCopy } from "../copy/explorer";
+import { shellCopy } from "../copy/shell";
 import { useInstallId } from "../shell/extension";
 import { useNamespaceScope } from "../shell/namespaceScopeStore";
 import { type ParamChanges, useUrlParams } from "../shell/urlParams";
@@ -133,16 +135,22 @@ export function useListPage<T, P extends { install: string } = Page<T>>(
   const q = useDebounced(text, Q_DEBOUNCE_MS);
   // The debounced value starts at the URL's q, so a reload does not wait.
   const skipKey = skip.join(",");
-  const [scope] = useNamespaceScope();
-  const scopeKey = useListFilter(list, "namespaces") ? scope.join(",") : "";
-  // The scope the URL's cursor was minted under; until the cursor is dropped, a changed scope sends none.
-  const cursorScope = useRef(scopeKey);
-  const stale = cursorScope.current !== scopeKey;
+  const [scope, setScope] = useNamespaceScope();
+  const saved = scope.join(",");
+  // Whether the server takes the scope; undefined until /meta answers, false when it fails.
+  const { data: meta, error: metaError } = useMeta();
+  const supported = meta ? supportsFilter(meta, list, "namespaces") : metaError ? false : undefined;
+  // With a saved scope the list waits for /meta, so its first request is already scoped.
+  const held = saved !== "" && supported === undefined;
+  const scopeKey = supported ? saved : "";
+  // The URL's cursor belongs to the saved scope; after a change it is never sent, and is dropped.
+  const cursorScope = useRef(saved);
+  const stale = cursorScope.current !== saved;
   useEffect(() => {
-    if (cursorScope.current === scopeKey) return;
-    cursorScope.current = scopeKey;
+    if (cursorScope.current === saved) return;
+    cursorScope.current = saved;
     update({ cursor: null });
-  }, [scopeKey, update]);
+  }, [saved, update]);
   const query = useMemo(
     () =>
       apiQuery(
@@ -154,7 +162,8 @@ export function useListPage<T, P extends { install: string } = Page<T>>(
       ),
     [list, params, q, skipKey, stale, scopeKey],
   );
-  const { data, error, cursorRejected, isLaggy } = useList(id, query);
+  // An empty install ID holds the request: list hooks then ask for nothing.
+  const { data, error, cursorRejected, isLaggy } = useList(held ? "" : id, query);
   // A rejected cursor is dropped (replace) and page one shows (design §8.6).
   useEffect(() => {
     if (cursorRejected) update({ cursor: null });
@@ -179,6 +188,16 @@ export function useListPage<T, P extends { install: string } = Page<T>>(
     setCursor: (c: string) => update({ cursor: c }),
     filtered,
     clearFilters,
+    /** The empty table's text: filters first, then the namespace scope, else the whole install. */
+    emptyTitle: (many: string) =>
+      filtered
+        ? listCopy.emptyFiltered(many)
+        : scopeKey
+          ? shellCopy.namespaceScope.emptyList(many)
+          : listCopy.empty(many),
+    /** The empty table's action and its label: clear the filters, or show all namespaces; none otherwise. */
+    onEmptyAction: filtered ? clearFilters : scopeKey ? () => setScope([]) : undefined,
+    emptyActionLabel: filtered ? listCopy.clearFilters : scopeKey ? shellCopy.namespaceScope.showAll : undefined,
     data,
     /** The rows are the previous query's while this one loads. */
     busy: isLaggy,

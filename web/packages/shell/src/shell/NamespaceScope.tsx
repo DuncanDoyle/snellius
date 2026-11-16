@@ -16,6 +16,7 @@ const Fixed = styled(Anchor)`
   flex: none;
 `;
 const Trigger = styled(MenuButton)`
+  position: relative;
   width: 184px;
   justify-content: flex-start;
   .label {
@@ -33,6 +34,10 @@ const Trigger = styled(MenuButton)`
     outline: 2px solid ${(p) => p.theme.color.focus};
     outline-offset: 2px;
   }
+  /* The count marks an active scope where the label is hidden; the label says it where it shows. */
+  .count {
+    display: none;
+  }
   @media ${NARROW} {
     width: 32px;
     padding: 0;
@@ -40,6 +45,30 @@ const Trigger = styled(MenuButton)`
     .label,
     .chevron {
       display: none;
+    }
+    .count {
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 3px;
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: ${(p) => p.theme.font.weight.semibold};
+      line-height: 1;
+      &::after {
+        content: attr(data-count);
+      }
+      /* The header's own pair inverted: readable in every theme. */
+      background: ${(p) => p.theme.color.headerText};
+      color: ${(p) => p.theme.color.headerBg};
+    }
+    &[data-scoped="true"] {
+      border-color: ${(p) => p.theme.color.headerText};
     }
   }
 `;
@@ -199,9 +228,19 @@ export function NamespaceScope({ installId }: { installId: string }) {
           aria-haspopup="dialog"
           aria-expanded={open}
           aria-controls={open ? panelId : undefined}
+          data-scoped={scope.length > 0 || undefined}
           onClick={() => (open ? close(false) : setOpen(true))}
         >
           <Layers size={14} aria-hidden="true" />
+          {/* The count is CSS content, so the button's visible text stays within its accessible name. */}
+          {scope.length > 0 ? (
+            <span
+              className="count"
+              data-testid="scope-count"
+              data-count={scope.length > 99 ? "99+" : scope.length}
+              aria-hidden="true"
+            />
+          ) : null}
           <span className="label" aria-hidden="true">
             {summary(scope)}
           </span>

@@ -104,6 +104,8 @@ interface PathTableProps {
   page?: Page<PathRow>;
   busy: boolean;
   onClearFilters?: () => void;
+  /** The empty state's action label; ObjectTable's clearLabel. */
+  clearLabel?: string;
   sort: SortState;
   onSort: (key: string) => void;
   onPage: (cursor: string) => void;
@@ -122,6 +124,7 @@ export function PathTable({
   page,
   busy,
   onClearFilters,
+  clearLabel,
   sort,
   onSort,
   onPage,
@@ -154,6 +157,7 @@ export function PathTable({
       busy={busy}
       emptyTitle={emptyTitle}
       onClearFilters={onClearFilters}
+      clearLabel={clearLabel}
       sort={sort}
       onSort={onSort}
       onPage={onPage}

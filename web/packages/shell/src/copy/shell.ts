@@ -16,10 +16,13 @@ export const shellCopy = {
     placeholder: "Add a namespace",
     inputLabel: "Namespace name",
     /** Under the typed entry when the name is not a namespace name. */
-    invalid: "Not a valid namespace name",
+    invalid: "Use lowercase letters, digits and dashes",
     /** Under the typed entry when the scope holds the most names the server takes. */
     full: "You can choose up to 100 namespaces",
     /** The choice list when the server lists no namespace and none is chosen. */
-    empty: "No namespaces to choose from",
+    empty: "No namespaces found",
+    /** A list's empty state under a scope, and its action that clears the scope. */
+    emptyList: (many: string) => `No ${many} in the chosen namespaces.`,
+    showAll: "Show all namespaces",
   },
 };

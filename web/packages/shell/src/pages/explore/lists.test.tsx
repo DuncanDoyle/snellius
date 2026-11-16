@@ -170,7 +170,7 @@ it("a filter change keeps the rows on screen until the new page arrives", async 
   await act(async () => release?.());
 });
 
-it("while a new query loads, the old rows are marked busy and dimmed", async () => {
+it("while a new query loads, the old rows are marked busy, and their text keeps its contrast", async () => {
   let release: (() => void) | undefined;
   const gate = new Promise<void>((r) => {
     release = r;
@@ -182,17 +182,24 @@ it("while a new query loads, the old rows are marked busy and dimmed", async () 
       return new Response(JSON.stringify(routes()), { status: 200 });
     }),
   );
-  mount(`/i/${ID}/routes`);
+  mount(`/i/${ID}/routes`, controlRoomDark.id);
   await screen.findByText("rejected");
   const table = screen.getByRole("table");
   expect(table).toHaveAttribute("aria-busy", "false");
   await userEvent.click(screen.getByRole("button", { name: /Error/ }));
   await waitFor(() => expect(table).toHaveAttribute("aria-busy", "true"));
   const body = table.querySelector("tbody") as HTMLElement;
-  expect(getComputedStyle(body).opacity).toBe("0.55");
+  // No opacity on the text: muted text stays at its tested 4.5:1, icons dim, and a bar marks the load.
+  expect(getComputedStyle(body).opacity).not.toBe("0.55");
+  const muted = document.createElement("span");
+  muted.style.color = controlRoomDark.color.textMuted;
+  document.body.append(muted);
+  expect(getComputedStyle(body.querySelector("td") as HTMLElement).color).toBe(getComputedStyle(muted).color);
+  expect(pseudoRules(table, "[data-busy] svg").join("")).toMatch(/opacity/);
+  expect(screen.getByTestId("table-busy")).toBeInTheDocument();
   await act(async () => release?.());
   await waitFor(() => expect(table).toHaveAttribute("aria-busy", "false"));
-  expect(getComputedStyle(body).opacity).not.toBe("0.55");
+  expect(screen.queryByTestId("table-busy")).toBeNull();
 });
 
 it("an error on a new query never shows the previous query's rows", async () => {

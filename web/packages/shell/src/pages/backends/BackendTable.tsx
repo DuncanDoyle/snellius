@@ -104,6 +104,8 @@ interface BackendTableProps {
   page?: Page<BackendRow>;
   busy: boolean;
   onClearFilters?: () => void;
+  /** The empty state's action label; ObjectTable's clearLabel. */
+  clearLabel?: string;
   sort: SortState;
   onSort: (key: string) => void;
   onPage: (cursor: string) => void;
@@ -117,6 +119,7 @@ export function BackendTable({
   page,
   busy,
   onClearFilters,
+  clearLabel,
   sort,
   onSort,
   onPage,
@@ -138,6 +141,7 @@ export function BackendTable({
       busy={busy}
       emptyTitle={emptyTitle}
       onClearFilters={onClearFilters}
+      clearLabel={clearLabel}
       sort={sort}
       onSort={onSort}
       onPage={onPage}

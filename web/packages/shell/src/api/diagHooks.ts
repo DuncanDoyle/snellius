@@ -55,7 +55,8 @@ export function useDiagnostics(id: string) {
 export function useProcesses(id: string, query: URLSearchParams) {
   const { cache } = useSWRConfig();
   const key = withQuery(`${installApi(id)}/processes`, query);
-  const r = useSWR<ProcessesResponse, ApiError>(key, apiFetch, { ...live, keepPreviousData: true });
+  // An empty id holds the request, as useList does.
+  const r = useSWR<ProcessesResponse, ApiError>(id ? key : null, apiFetch, { ...live, keepPreviousData: true });
   const own = cache.get(key)?.data !== undefined;
   const cursorRejected = query.has("cursor") && r.error?.status === 400;
   // As useFindingDetail: kept data shows only while the new key loads, and a rejected cursor keeps it.

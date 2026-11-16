@@ -43,8 +43,9 @@ export function useList<T, P extends { install: string } = Page<T>>(id: string, 
   const rejects = (e: ApiError | undefined) => hasCursor && e?.status === 400;
   // A rejected cursor is final: its key neither polls nor retries, so it never loops on a 400.
   const [rejected, setRejected] = useState<string>();
+  // An empty id holds the request (useListPage waiting for /meta).
   const key = withQuery(path, query);
-  const paged = useSWR<P, ApiError>(key, apiFetch, {
+  const paged = useSWR<P, ApiError>(id ? key : null, apiFetch, {
     ...live,
     // A filter or page change keeps the old rows until the new ones arrive; forInstall still hides another install's.
     keepPreviousData: true,
