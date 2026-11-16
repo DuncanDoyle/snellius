@@ -1514,3 +1514,15 @@ Measured on the reference machine, 5 runs per world:
 9. **README.** The defaults are the secure choice; the README explains how to tighten (`cacheTTL: 30s`, shorter session lifetimes) and how to relax (`cacheTTL` up to 15 min) and what each costs.
 
 **Consequences:** `resourceNames`-only read grants no longer make objects appear in lists by default. A removed RoleBinding stays effective in Snellius for up to 60 s, a new grant shows within 5 min. Fixed in 7.4 regardless: `deniedInInstall` counts and hidden findings in health aggregates (D-085), and EndpointSlices join the full-read set when they become an authorised population.
+
+## D-101 — At most 1,000 sessions by default, configurable; sessions hold only the refresh token (2026-11-16, Phase 7, amends D-096)
+**Status:** accepted by the user (2026-11-16), after the 7.3 memory bench.
+
+**Context:** The 7.3 bench measured the D-057 retained heap at +81.1 MiB against 64 MiB with 5,000 sessions (25.4 MiB, about 5.2 KiB each). Each session also held the ID token and access token, which nothing reads. A Snellius install serves a platform team and some application teams: dozens of people, not thousands.
+
+**Decision:**
+1. A session stores the identity, the refresh token and its timestamps, not the ID token or access token.
+2. At most 1,000 sessions by default: chart `auth.session.max`, flag `--session-max`, at least 1. Past it, the session unused for longest ends (audited, as before).
+3. `auth.session.idle` (30 min) and `auth.session.absolute` (8 h) stay as they are. The README and site docs say that the IdP's refresh-token lifetime can end a session sooner.
+
+**Consequences:** About 2 KiB per session, about 2 MiB at the default bound. An install with more concurrent browsers raises `auth.session.max` and accepts the memory.
