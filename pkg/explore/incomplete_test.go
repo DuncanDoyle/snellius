@@ -3,6 +3,7 @@ package explore
 import (
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
@@ -184,7 +185,7 @@ func delegatingParent(name string) *unstructured.Unstructured {
 // in its own status; p2 and the hidden Gateway and Service vary per variant.
 func hiddenWorld(variant string) *world {
 	p1, p2 := testutil.HTTPRouteRef("shop", "p1"), testutil.HTTPRouteRef("shop", "p2")
-	c := testutil.WithRules(testutil.HTTPRoute("shop", "c", nil, accepted(p1), accepted(p2)), incRule(beRef("secret")))
+	c := testutil.WithRules(testutil.HTTPRoute("shop", "c", []objects.ParentRef{gw, testutil.GwRef("infra", "hidden")}, accepted(gw), accepted(p1), accepted(p2)), incRule(beRef("secret")))
 	objs := []*unstructured.Unstructured{c, delegatingParent("p1")}
 	switch variant {
 	case "p2 absent":
@@ -198,16 +199,19 @@ func hiddenWorld(variant string) *world {
 		objs = append(objs, testutil.WithRules(testutil.HTTPRoute("shop", "p2", nil), incRule(testutil.DelegateTo("shop", "c"))))
 	case "hidden gateway and backend":
 		objs = append(objs, delegatingParent("p2"), testutil.Gateway("infra", "hidden", "kgateway", nil), testutil.Backend("shop", "secret", nil))
+	case "hidden gateway in another class, backend faulted":
+		objs = append(objs, testutil.GatewayClass("other", "example.com/other", true), testutil.Gateway("infra", "hidden", "other", nil),
+			testutil.Backend("shop", "secret", []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}))
 	}
 	return newWorld(objs...)
 }
 
-var hiddenVariants = []string{"p2 absent", "p2 present", "p2 faulted", "p2 detached", "hidden gateway and backend"}
+var hiddenVariants = []string{"p2 absent", "p2 present", "p2 faulted", "p2 detached", "hidden gateway and backend", "hidden gateway in another class, backend faulted"}
 
 // The answer for a readable route never depends on hidden objects: it comes
 // from the route and the viewer's permissions, on a production-built index.
 func TestIncompleteIgnoresHiddenObjects(t *testing.T) {
-	deny := perms{noGet: map[objects.Ref]bool{routeRef("shop", "p2"): true}}
+	deny := perms{noGet: map[objects.Ref]bool{routeRef("shop", "p2"): true, backendObj("secret"): true, {Group: objects.GatewayAPIGroup, Kind: "Gateway", Namespace: "infra", Name: "hidden"}: true}}
 	for _, p := range []Permissions{deny, perms{}} {
 		var want bool
 		for i, v := range hiddenVariants {
@@ -309,5 +313,48 @@ func TestIncompleteDelegationRefs(t *testing.T) {
 	}
 	if incomplete(t, w.build(t), "r", perms{noList: map[objects.GroupKind]map[string]bool{sliceGK: {"team": true}}}) {
 		t.Error("a delegation ref needed an EndpointSlice list")
+	}
+}
+
+// A readable ListenerSet outside the install is read from its own object:
+// its unreadable Gateway makes the path incomplete whether or not that
+// Gateway exists, or which class it is in.
+func TestIncompleteForeignListenerSet(t *testing.T) {
+	hid := objects.Ref{Group: objects.GatewayAPIGroup, Kind: "Gateway", Namespace: "infra", Name: "hid"}
+	ls := objects.ParentRef{Group: objects.GatewayAPIGroup, Kind: "ListenerSet", Namespace: "shop", Name: "ls"}
+	for _, v := range []string{"absent", "present", "other class"} {
+		objs := []*unstructured.Unstructured{
+			testutil.ListenerSet("shop", "ls", testutil.GwRef("infra", "hid"), nil),
+			testutil.HTTPRoute("shop", "r", []objects.ParentRef{gw, ls}, accepted(gw)),
+		}
+		switch v {
+		case "present":
+			objs = append(objs, testutil.Gateway("infra", "hid", "kgateway", nil))
+		case "other class":
+			objs = append(objs, testutil.GatewayClass("other", "example.com/other", true), testutil.Gateway("infra", "hid", "other", nil))
+		}
+		ix := newWorld(objs...).build(t)
+		if !incomplete(t, ix, "r", perms{noGet: map[objects.Ref]bool{hid: true}}) {
+			t.Errorf("Gateway %s: an unreadable ListenerSet Gateway is complete", v)
+		}
+		if incomplete(t, ix, "r", perms{}) {
+			t.Errorf("Gateway %s: a readable path is incomplete", v)
+		}
+	}
+}
+
+// A readable parent route with no row is read from its own object.
+func TestIncompleteParentRouteWithoutRow(t *testing.T) {
+	hid := objects.Ref{Group: objects.GatewayAPIGroup, Kind: "Gateway", Namespace: "infra", Name: "hid"}
+	parent := testutil.HTTPRoute("out", "p", []objects.ParentRef{testutil.GwRef("infra", "hid")})
+	ix := newWorld(parent, testutil.HTTPRoute("shop", "r", []objects.ParentRef{gw, testutil.HTTPRouteRef("out", "p")}, accepted(gw))).build(t)
+	if _, ok := ix.Row(routeRef("out", "p")); ok {
+		t.Fatal("the parent route has a row; the test needs one without")
+	}
+	if !incomplete(t, ix, "r", perms{noGet: map[objects.Ref]bool{hid: true}}) {
+		t.Error("an unreadable ref in a row-less parent route is complete")
+	}
+	if incomplete(t, ix, "r", perms{}) {
+		t.Error("a readable row-less parent route is incomplete")
 	}
 }

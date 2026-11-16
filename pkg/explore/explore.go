@@ -302,6 +302,9 @@ type Index struct {
 	// rule set's delegation switch: install context for PathIncomplete.
 	controllers  []string
 	noDelegation bool
+	// parentObjs holds every ListenerSet and HTTPRoute of the snapshot, member or
+	// not: PathIncomplete reads a readable parent from its own object.
+	parentObjs map[objects.Ref]*unstructured.Unstructured
 }
 
 // DepSet is a computed result's dependencies, as indexes into Index.Refs.

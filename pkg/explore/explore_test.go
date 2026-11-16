@@ -644,6 +644,7 @@ func TestBuildIsDeterministic(t *testing.T) {
 // stripObjects returns a copy of ix without object pointers.
 func stripObjects(ix *Index) Index {
 	c := *ix
+	c.parentObjs = nil
 	c.Routes = slices.Clone(ix.Routes)
 	for i := range c.Routes {
 		c.Routes[i].Obj = nil

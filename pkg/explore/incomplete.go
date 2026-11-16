@@ -2,7 +2,8 @@ package explore
 
 import (
 	"slices"
-	"sort"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
@@ -26,11 +27,10 @@ var (
 // reported edges, which hidden objects decide.
 func (ix *Index) PathIncomplete(id RowID, p Permissions) bool {
 	seen := map[objects.Ref]bool{ix.Routes[id].Ref: true}
-	queue := []RowID{id}
+	queue := []pathData{ix.routeData(&ix.Routes[id])}
 	for len(queue) > 0 {
-		r := &ix.Routes[queue[0]]
+		d := queue[0]
 		queue = queue[1:]
-		d := ix.routeData(r)
 		if ix.refsIncomplete(d, p) {
 			return true
 		}
@@ -43,7 +43,9 @@ func (ix *Index) PathIncomplete(id RowID, p Permissions) bool {
 				return true
 			}
 			if pid, ok := ix.Row(parent); ok {
-				queue = append(queue, pid)
+				queue = append(queue, ix.routeData(&ix.Routes[pid]))
+			} else if u := ix.object(parent); u != nil {
+				queue = append(queue, ix.routeData(&RouteRow{Ref: parent, Obj: u}))
 			}
 		}
 	}
@@ -127,12 +129,19 @@ func (ix *Index) refsIncomplete(d pathData, p Permissions) bool {
 }
 
 // listenerSetGatewayIncomplete reports whether ref is a ListenerSet whose own
-// spec.parentRef Gateway cannot be got or its namespace listed.
+// spec.parentRef Gateway cannot be got or its namespace listed. The
+// ListenerSet is read from its own object, member of the install or not.
 func (ix *Index) listenerSetGatewayIncomplete(ref objects.Ref, p Permissions) bool {
-	i := sort.Search(len(ix.ListenerSets), func(i int) bool { return compareRefs(ix.ListenerSets[i].Ref, ref) >= 0 })
-	if i == len(ix.ListenerSets) || ix.ListenerSets[i].Ref != ref || ix.ListenerSets[i].View == nil {
+	if ref.Kind != "ListenerSet" {
 		return false
 	}
-	g := ix.ListenerSets[i].View.Parent.Ref()
+	u := ix.object(ref)
+	if u == nil {
+		return false
+	}
+	g := objects.DecodeListenerSet(u).Parent.Ref()
 	return !p.Get(g) || !p.List(gatewayGK, g.Namespace)
 }
+
+// object returns the snapshot ListenerSet or HTTPRoute ref names, or nil.
+func (ix *Index) object(ref objects.Ref) *unstructured.Unstructured { return ix.parentObjs[ref] }

@@ -105,6 +105,7 @@ func Build(in Input) *Index {
 	}
 	ix.parentKinds = b.parents
 	ix.controllers, ix.noDelegation = b.in.Install.ControllerNames, b.in.Install.NoDelegation
+	ix.parentObjs = b.parentObjects()
 	ix.Findings, ix.findings, ix.findingsOf, ix.unknown = b.worst, b.in.Health.Findings, b.findingsOf, b.unknown
 	ix.admitted = b.admit(ix)
 	return ix
@@ -1341,4 +1342,20 @@ func (ix *Index) members(resource objects.Ref, ls []objects.Listener) []RowID {
 	}
 	slices.Sort(out)
 	return slices.Compact(out)
+}
+
+// parentObjects indexes the snapshot's ListenerSets and HTTPRoutes by ref.
+func (b *builder) parentObjects() map[objects.Ref]*unstructured.Unstructured {
+	if b.in.Snapshot == nil {
+		return nil
+	}
+	m := map[objects.Ref]*unstructured.Unstructured{}
+	for _, k := range b.in.Served {
+		if k.Category == kinds.CategoryListenerSet || isHTTPRoute(k.Group, k.Kind) {
+			for _, u := range b.in.Snapshot.Objects[k.GVR()] {
+				m[objects.RefOf(u)] = u
+			}
+		}
+	}
+	return m
 }
