@@ -289,27 +289,39 @@ func (h *handler) visibleOverview(v *view, m *engine.Model, i *engine.InstallMod
 		}
 	}
 	owned := &install.Owned{GatewayClasses: keep(o.GatewayClasses), Gateways: keep(o.Gateways), ListenerSets: keep(o.ListenerSets),
-		Routes: keepObjs(o.Routes), Policies: keepObjs(o.Policies), Listed: keepObjs(o.Listed), Unattached: unattached, Backends: keep(o.Backends)}
-	if v.omits() {
-		owned.Backends = consumed(i, owned.Routes, owned.Backends)
-	}
+		Routes: keepObjs(o.Routes), Policies: keepObjs(o.Policies), Listed: keepObjs(o.Listed), Unattached: unattached, Backends: v.backends(i)}
 	return overview.Build(i.Resolved, owned, m.Snapshot, m.Served, rep, h.src.Platform())
 }
 
-// consumed keeps the backends of bs that one of routes names: a Backend joins
-// an install through its consumer routes, which are not install context (D-107).
-func consumed(i *engine.InstallModel, routes []install.OwnedObject, bs []*unstructured.Unstructured) []*unstructured.Unstructured {
+// backends are install i's Backends the caller of v may see. In secure mode
+// without the full read, only those a readable owned route names: a Backend
+// joins an install through its consumer routes, which are not install context (D-107).
+func (v *view) backends(i *engine.InstallModel) []*unstructured.Unstructured {
+	out := []*unstructured.Unstructured{}
+	if i.Owned == nil {
+		return out
+	}
+	for _, b := range i.Owned.Backends {
+		if v.can(objects.RefOf(b)) {
+			out = append(out, b)
+		}
+	}
+	if !v.omits() || v.readsAll() {
+		return out
+	}
 	var dec objects.Decoder = objects.Direct{}
 	if i.Index != nil {
 		dec = indexViews{ix: i.Index}
 	}
 	named := map[objects.Ref]bool{}
-	for _, r := range routes {
-		for _, t := range dec.Route(r.Obj).Targets {
-			named[t.Ref] = true
+	for _, r := range i.Owned.Routes {
+		if v.can(objects.RefOf(r.Obj)) {
+			for _, t := range dec.Route(r.Obj).Targets {
+				named[t.Ref] = true
+			}
 		}
 	}
-	return slices.DeleteFunc(bs, func(b *unstructured.Unstructured) bool { return !named[objects.RefOf(b)] })
+	return slices.DeleteFunc(out, func(b *unstructured.Unstructured) bool { return !named[objects.RefOf(b)] })
 }
 
 func (h *handler) installs(w http.ResponseWriter, r *http.Request) {

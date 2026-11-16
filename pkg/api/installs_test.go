@@ -14,17 +14,21 @@ import (
 	"testing/fstest"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/internal/testutil/scale"
 	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/app"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/auth/sar"
+	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/ctrlmetrics"
 	"github.com/DuncanDoyle/snellius/pkg/engine"
 	"github.com/DuncanDoyle/snellius/pkg/extension"
 	"github.com/DuncanDoyle/snellius/pkg/health"
 	"github.com/DuncanDoyle/snellius/pkg/install"
+	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/overview"
 	"github.com/DuncanDoyle/snellius/pkg/scopeverify"
@@ -58,15 +62,25 @@ func (c *recorder) take() []sar.Attributes {
 // tierWorld is tier's world with a second, empty install kgw2.kgateway2, computed once.
 func tierWorld(t *testing.T, tier scale.Tier) *engine.Engine {
 	t.Helper()
+	return tierWorldWith(t, tier, 2, func(s *cache.Snapshot) {
+		s.Deployments = append(s.Deployments, testutil.ControllerDeployment("kgw2", "kgateway2", "cr.kgateway.dev/kgateway-dev/kgateway:v2.4.7", 1, 1,
+			testutil.Env(install.DiscoveryNamespaceSelectorsEnv, `[{"matchLabels":{"team":"none"}}]`)))
+	})
+}
+
+// tierWorldWith is tier's world with extra applied, computed once; it must have installs installs.
+func tierWorldWith(t *testing.T, tier scale.Tier, installs int, extra func(*cache.Snapshot)) *engine.Engine {
+	t.Helper()
 	s := scale.Snapshot(tier, 1)
-	s.Deployments = append(s.Deployments, testutil.ControllerDeployment("kgw2", "kgateway2", "cr.kgateway.dev/kgateway-dev/kgateway:v2.4.7", 1, 1,
-		testutil.Env(install.DiscoveryNamespaceSelectorsEnv, `[{"matchLabels":{"team":"none"}}]`)))
+	if extra != nil {
+		extra(s)
+	}
 	sortObjects(s)
 	e := engine.New(engine.Config{Snapshots: &holder{s: s}, Served: testutil.ServedUpstream(), Detectors: []install.Detector{install.UpstreamDetector{}},
 		Scope: install.NamespaceSelectorScope{}, Verifier: scopeverify.NewManagedCountVerifier(time.Hour), Checks: health.Upstream(),
 		Now: func() time.Time { return testutil.Now }})
-	if m := e.Compute(); len(m.Installs) != 2 {
-		t.Fatalf("%d installs, want 2", len(m.Installs))
+	if m := e.Compute(); len(m.Installs) != installs {
+		t.Fatalf("%d installs, want %d", len(m.Installs), installs)
 	}
 	return e
 }
@@ -76,7 +90,8 @@ func sarBucket(verb, resource, ns string) string { return verb + " " + resource 
 
 // basisBuckets are the list buckets the projection of m's reports may ask:
 // the resource and basis of every own-object and collection finding, and each install's controller Deployment.
-func basisBuckets(m *engine.Model) map[string]bool {
+// With ids, only those installs count.
+func basisBuckets(m *engine.Model, ids ...string) map[string]bool {
 	out := map[string]bool{}
 	add := func(r objects.Ref) {
 		if k, ok := (ruleKinds{}).Lookup(r.Group, r.Kind); ok {
@@ -88,6 +103,9 @@ func basisBuckets(m *engine.Model) map[string]bool {
 		}
 	}
 	for _, i := range m.Installs {
+		if len(ids) > 0 && !slices.Contains(ids, i.Resolved.ID()) {
+			continue
+		}
 		if d := i.Resolved.Deployment; d != nil {
 			add(objects.Ref{Group: "apps", Kind: "Deployment", Namespace: d.Namespace, Name: d.Name})
 		}
@@ -131,6 +149,62 @@ func TestDeniedAllSeesEveryInstall(t *testing.T) {
 			// The full read lists every served kind cluster-wide; the header lists GatewayClasses and Namespaces cluster-wide.
 			if a.Verb != "list" || a.Namespace != "" && !allowed[sarBucket(a.Verb, a.Resource, a.Namespace)] {
 				t.Errorf("SAR %+v is neither the full read, a header source nor a finding's basis", a)
+			}
+		}
+	})
+	// A reachability check would ask an install's buckets: adding an install
+	// whose only object sits in a bucket with no finding must add no SAR but
+	// its documented ones (its controller Deployment and its findings' bases).
+	t.Run("reachability", func(t *testing.T) {
+		// kgw watches the team=web namespaces in both worlds, so it never claims quiet.
+		base := func(s *cache.Snapshot) {
+			for _, d := range s.Deployments {
+				if d.Namespace == "kgw" && d.Name == "kgateway" {
+					c := &d.Spec.Template.Spec.Containers[0]
+					c.Env = append(c.Env, testutil.Env(install.DiscoveryNamespaceSelectorsEnv, `[{"matchLabels":{"team":"web"}}]`))
+				}
+			}
+		}
+		quiet := func(s *cache.Snapshot) {
+			base(s)
+			d := testutil.ControllerDeployment("kgw2", "kgateway2", "cr.kgateway.dev/kgateway-dev/kgateway:v2.4.7", 1, 1,
+				testutil.Env(install.DiscoveryNamespaceSelectorsEnv, `[{"matchLabels":{"team":"quiet"}}]`))
+			s.Namespaces = append(s.Namespaces, testutil.Namespace("quiet", map[string]string{"team": "quiet"}))
+			s.Deployments = append(s.Deployments, d, testutil.ProxyDeployment("quiet", "gw", 1, 1))
+			s.Pods = append(s.Pods, testutil.ControllerPod(d, "kgateway2-0", true))
+			k := testutil.ServedUpstream()[slices.IndexFunc(testutil.ServedUpstream(), func(k kinds.Served) bool { return k.Kind == "Gateway" })]
+			s.Objects[k.GVR()] = append(s.Objects[k.GVR()], testutil.Gateway("quiet", "gw", scale.Class, nil))
+		}
+		// sars is the set of SARs /installs asks for nobody, through a fresh SAR cache.
+		sars := func(e *engine.Engine) map[string]bool {
+			rec := &recorder{}
+			decode[[]api.InstallSummary](t, ruleServeWith(t, e, rec), nobodyUser, "/api/v1/installs")
+			out := map[string]bool{}
+			for _, a := range rec.take() {
+				out[sarBucket(a.Verb, a.Resource, a.Namespace)] = true
+			}
+			return out
+		}
+		one, e2 := tierWorldWith(t, scale.Large, 1, base), tierWorldWith(t, scale.Large, 2, quiet)
+		m := e2.Current().Model
+		k := slices.IndexFunc(m.Installs, func(i engine.InstallModel) bool { return i.Resolved.ID() == "kgw2.kgateway2" })
+		if k < 0 || !slices.ContainsFunc(m.Installs[k].Owned.Gateways, func(u *unstructured.Unstructured) bool { return u.GetNamespace() == "quiet" }) {
+			t.Fatal("kgw2 does not own quiet/gw; the fixture tests nothing")
+		}
+		for _, i := range m.Installs {
+			for _, f := range i.Health.Findings {
+				if f.Resource != nil && f.Resource.Namespace == "quiet" {
+					t.Fatalf("quiet holds finding %s; it must be a bucket with no finding", f.Code)
+				}
+			}
+		}
+		before, after, documented := sars(one), sars(e2), basisBuckets(m, "kgw2.kgateway2")
+		if len(before) == 0 {
+			t.Fatal("no SAR recorded")
+		}
+		for b := range after {
+			if !before[b] && !documented[b] || strings.HasSuffix(b, " quiet") {
+				t.Errorf("the second install adds SAR %q: a reachability check", b)
 			}
 		}
 	})
@@ -448,5 +522,30 @@ func TestOverviewDataPlaneShownOnly(t *testing.T) {
 		if dp != api.DataPlaneUnknown {
 			t.Errorf("restricted %s: data plane %q, want unknown", ref, dp)
 		}
+	}
+}
+
+// TestOwnedBackendsLeakViewerBackendsDoNot: Install.Owned.Backends depends on
+// hidden consumer routes (D-107), so an extension serving it through VisibleTo
+// changes for the restricted viewer when a hidden route starts consuming a
+// readable Backend; Viewer.Backends does not.
+func TestOwnedBackendsLeakViewerBackendsDoNot(t *testing.T) {
+	before, after := ruleServe(t, ruleWorld(t, ruleChange{name: "base"})), ruleServe(t, ruleWorld(t, change("backendConsumer")))
+	same := func(path string) bool {
+		_, b := fetch(t, before, restrictedUser, path)
+		_, a := fetch(t, after, restrictedUser, path)
+		return a == b
+	}
+	if same("/api/ext/rule/owned-backends") {
+		t.Error("Owned.Backends no longer depends on hidden consumers; the negative is stale")
+	}
+	if !same("/api/ext/rule/backends") {
+		t.Error("Viewer.Backends changed for the restricted viewer under a hidden consumer")
+	}
+	// Full readers see every Backend of the install either way.
+	_, full := fetch(t, after, fullUser, "/api/ext/rule/backends")
+	_, owned := fetch(t, after, fullUser, "/api/ext/rule/owned-backends")
+	if full != owned {
+		t.Errorf("full reader: Viewer.Backends %.200s, Owned.Backends %.200s", full, owned)
 	}
 }

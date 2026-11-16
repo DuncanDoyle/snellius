@@ -518,24 +518,29 @@ type viewerAnswers struct {
 	Lists map[string]bool
 }
 
-// ruleExt serves the cluster's Backends through Deps.View, as an extension
-// serving cluster objects must, and the Viewer's raw answers. It reads the
-// snapshot, not the install's Backends: hidden consumer routes decide those (D-107).
+// ruleExt serves the install's Backends through Deps.View, as an extension
+// serving cluster objects must, and the Viewer's raw answers. /owned-backends
+// is the unsafe form, VisibleTo over Install.Owned.Backends, kept as a negative.
 func ruleExt(r extension.Router, d extension.Deps) {
-	r.Handle("GET /backends", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		v, i := d.View(req), ruleInstallOf(d)
-		k := testutil.ServedUpstream()[slices.IndexFunc(testutil.ServedUpstream(), func(k kinds.Served) bool { return k.Kind == "Backend" })]
-		out := []extBackend{}
-		for _, u := range api.VisibleTo(v, d.Current().Model.Snapshot.Objects[k.GVR()], objects.RefOf) {
-			row := extBackend{Ref: objects.RefOf(u), Codes: []string{}}
-			for k := range i.Health.Findings {
-				if f := &i.Health.Findings[k]; f.Resource != nil && *f.Resource == row.Ref && v.Shown(f) {
-					row.Codes = append(row.Codes, f.Code)
+	serve := func(backends func(api.Viewer, *engine.InstallModel) []*unstructured.Unstructured) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			v, i := d.View(req), ruleInstallOf(d)
+			out := []extBackend{}
+			for _, u := range backends(v, i) {
+				row := extBackend{Ref: objects.RefOf(u), Codes: []string{}}
+				for k := range i.Health.Findings {
+					if f := &i.Health.Findings[k]; f.Resource != nil && *f.Resource == row.Ref && v.Shown(f) {
+						row.Codes = append(row.Codes, f.Code)
+					}
 				}
+				out = append(out, row)
 			}
-			out = append(out, row)
-		}
-		api.WriteJSON(w, out)
+			api.WriteJSON(w, out)
+		})
+	}
+	r.Handle("GET /backends", serve(func(v api.Viewer, i *engine.InstallModel) []*unstructured.Unstructured { return v.Backends(i) }))
+	r.Handle("GET /owned-backends", serve(func(v api.Viewer, i *engine.InstallModel) []*unstructured.Unstructured {
+		return api.VisibleTo(v, i.Owned.Backends, objects.RefOf)
 	}))
 	r.Handle("GET /viewer", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		v, i := d.View(req), ruleInstallOf(d)
