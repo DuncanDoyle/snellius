@@ -258,12 +258,20 @@ func allRows(n int) []RowID {
 // admits every row. The Backends filter reads the visible routes' specs
 // through ByBackend and never looks up a backend (rule 2a).
 func (ix *Index) QueryRoutes(q Query, visible func(objects.Ref) bool) (Page, error) {
-	p, _, err := ix.queryRoutes(q, visible)
+	p, _, err := ix.queryRoutes(q, Viewer{Visible: visible})
 	return p, err
 }
 
-// queryRoutes is QueryRoutes; it also returns the number of candidates scanned.
-func (ix *Index) queryRoutes(in Query, visible func(objects.Ref) bool) (Page, int, error) {
+// QueryRoutesAs is QueryRoutes for vw: the health and state filters and the
+// health sort use vw's states and flags (RouteStateOf).
+func (ix *Index) QueryRoutesAs(q Query, vw Viewer) (Page, error) {
+	p, _, err := ix.queryRoutes(q, vw)
+	return p, err
+}
+
+// queryRoutes is QueryRoutesAs; it also returns the number of candidates scanned.
+func (ix *Index) queryRoutes(in Query, vw Viewer) (Page, int, error) {
+	visible := vw.Visible
 	q, err := prepare(in, sortName, sortKind, sortHealth)
 	if err != nil {
 		return Page{}, 0, err
@@ -325,16 +333,25 @@ func (ix *Index) queryRoutes(in Query, visible func(objects.Ref) bool) (Page, in
 	for _, id := range cands {
 		r := &ix.Routes[id]
 		gk := objects.GroupKind{Group: r.Ref.Group, Kind: r.Ref.Kind}
-		if !q.common(r.Ref, r.State, func() string { return r.search }) ||
+		st, shown := r.State, vw.Shown != nil
+		var f Flag
+		if shown {
+			// Hidden rows are skipped before their findings are read.
+			if visible != nil && !visible(r.Ref) {
+				continue
+			}
+			st, f, _ = ix.RouteStateOf(id, vw)
+		}
+		if !q.common(r.Ref, st, func() string { return r.search }) ||
 			len(q.Kinds) > 0 && !slices.Contains(q.Kinds, gk) ||
 			backends != nil && !backends[id] ||
-			q.States != 0 && ix.RowFlags(id, visible)&q.States == 0 ||
+			q.States != 0 && (shown && f&q.States == 0 || !shown && ix.RowFlags(id, visible)&q.States == 0) ||
 			q.Listener == ListenerUnknown && !ix.unknownRef(id, *q.Parent, visible) ||
 			visible != nil && !visible(r.Ref) ||
 			q.Parent != nil && (q.Attachment != "" || visible != nil) && !ix.Under(id, *q.Parent, q.Attachment, visible) {
 			continue
 		}
-		es = append(es, entry{id: id, ref: r.Ref, v: sortVal{group: r.Ref.Group, kind: r.Ref.Kind, n: healthRank(r.State)}})
+		es = append(es, entry{id: id, ref: r.Ref, v: sortVal{group: r.Ref.Group, kind: r.Ref.Kind, n: healthRank(st)}})
 	}
 	return q.page(es), len(cands), nil
 }
@@ -411,6 +428,18 @@ var rowOutcomes = []computed.RowOutcome{computed.OutcomeAttached, computed.Outco
 // on its paths (rules 4a, 4b). Both apply before Total and paging; nil
 // admits every row.
 func (ix *Index) QueryDelegation(parent objects.Ref, q DelegationQuery, visible func(objects.Ref) bool) (Page, error) {
+	return ix.queryDelegation(parent, q, visible, false)
+}
+
+// QueryDelegationVisible is QueryDelegation without the restricted rows: no
+// selection-restricted row (negative ID), and no row whose Deps visible
+// rejects; both are left out before Total and paging.
+func (ix *Index) QueryDelegationVisible(parent objects.Ref, q DelegationQuery, visible func(objects.Ref) bool) (Page, error) {
+	return ix.queryDelegation(parent, q, visible, true)
+}
+
+// queryDelegation is QueryDelegation, or QueryDelegationVisible with omit.
+func (ix *Index) queryDelegation(parent objects.Ref, q DelegationQuery, visible func(objects.Ref) bool, omit bool) (Page, error) {
 	switch {
 	case q.Limit == 0:
 		q.Limit = DefaultLimit
@@ -451,13 +480,14 @@ func (ix *Index) QueryDelegation(parent objects.Ref, q DelegationQuery, visible 
 			first = i
 			hidden = ix.SelectionHidden(RefKey{parent, k.Rule, k.Ref}, visible)
 			// It matches no outcome: its outcome is restricted (rule 4a).
-			if hidden && len(q.Outcomes) == 0 {
+			if hidden && len(q.Outcomes) == 0 && !omit {
 				match = append(match, -1-i)
 			}
 		}
 		if hidden && k.Child == (objects.Ref{}) ||
 			len(q.Outcomes) > 0 && (!slices.Contains(q.Outcomes, r.Outcome) || !ix.Visible(r.Deps, visible)) ||
-			visible != nil && k.Child != (objects.Ref{}) && !visible(k.Child) {
+			visible != nil && k.Child != (objects.Ref{}) && !visible(k.Child) ||
+			omit && !ix.Visible(r.Deps, visible) {
 			continue
 		}
 		match = append(match, i)
@@ -547,6 +577,13 @@ func lowerName(ref objects.Ref) string { return strings.ToLower(ref.Namespace + 
 // QueryGateways pages the Gateway rows, as QueryRoutes does. The routes sort
 // uses GatewayMemberCount, as the list row's routes column does.
 func (ix *Index) QueryGateways(in Query, visible func(objects.Ref) bool) (Page, error) {
+	return ix.QueryGatewaysAs(in, Viewer{Visible: visible})
+}
+
+// QueryGatewaysAs is QueryGateways for vw: the health filter and sort use
+// StateOf, and with Shown set the routes sort uses GatewayMemberCountAs.
+func (ix *Index) QueryGatewaysAs(in Query, vw Viewer) (Page, error) {
+	visible := vw.Visible
 	if err := routeOnly(in, false); err != nil {
 		return Page{}, err
 	}
@@ -557,12 +594,23 @@ func (ix *Index) QueryGateways(in Query, visible func(objects.Ref) bool) (Page, 
 	es := make([]entry, 0, len(ix.Gateways))
 	for i := range ix.Gateways {
 		g := &ix.Gateways[i]
-		if !q.common(g.Ref, g.State, func() string { return lowerName(g.Ref) }) || visible != nil && !visible(g.Ref) {
+		if visible != nil && !visible(g.Ref) {
 			continue
 		}
-		v := sortVal{group: g.Ref.Group, kind: g.Ref.Kind, n: healthRank(g.State)}
+		st := ix.StateOf(g.Ref, vw)
+		if vw.Shown == nil {
+			st = g.State
+		}
+		if !q.common(g.Ref, st, func() string { return lowerName(g.Ref) }) {
+			continue
+		}
+		v := sortVal{group: g.Ref.Group, kind: g.Ref.Kind, n: healthRank(st)}
 		if q.Sort.Key == sortRoutes {
-			if n, ok := ix.GatewayMemberCount(RowID(i)); ok { // #nosec G115 -- a row count fits in int32
+			count := ix.GatewayMemberCount
+			if vw.Shown != nil {
+				count = func(id RowID) (int, bool) { return ix.GatewayMemberCountAs(id, visible) }
+			}
+			if n, ok := count(RowID(i)); ok { // #nosec G115 -- a row count fits in int32
 				v.n = n
 			} else {
 				v.n = -1
@@ -610,6 +658,12 @@ func (ix *Index) memberCount(ref objects.Ref, ls []objects.Listener, members []R
 // QueryListenerSets pages the ListenerSet rows, as QueryRoutes does. Parent,
 // when set, is a Gateway.
 func (ix *Index) QueryListenerSets(in Query, visible func(objects.Ref) bool) (Page, error) {
+	return ix.QueryListenerSetsAs(in, Viewer{Visible: visible})
+}
+
+// QueryListenerSetsAs is QueryListenerSets for vw: the health filter and sort use ListenerSetStateOf.
+func (ix *Index) QueryListenerSetsAs(in Query, vw Viewer) (Page, error) {
+	visible := vw.Visible
 	if err := routeOnly(in, true); err != nil {
 		return Page{}, err
 	}
@@ -630,11 +684,14 @@ func (ix *Index) QueryListenerSets(in Query, visible func(objects.Ref) bool) (Pa
 	es := make([]entry, 0, len(cands))
 	for _, id := range cands {
 		l := &ix.ListenerSets[id]
-		if q.Parent != nil && l.Parent != *q.Parent ||
-			!q.common(l.Ref, l.State, func() string { return lowerName(l.Ref) }) || visible != nil && !visible(l.Ref) {
+		if q.Parent != nil && l.Parent != *q.Parent || visible != nil && !visible(l.Ref) {
 			continue
 		}
-		es = append(es, entry{id: id, ref: l.Ref, v: sortVal{group: l.Ref.Group, kind: l.Ref.Kind, n: healthRank(l.State)}})
+		st := ix.ListenerSetStateOf(id, vw)
+		if !q.common(l.Ref, st, func() string { return lowerName(l.Ref) }) {
+			continue
+		}
+		es = append(es, entry{id: id, ref: l.Ref, v: sortVal{group: l.Ref.Group, kind: l.Ref.Kind, n: healthRank(st)}})
 	}
 	return q.page(es), nil
 }

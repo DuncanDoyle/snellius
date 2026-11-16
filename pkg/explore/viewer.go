@@ -1,0 +1,190 @@
+package explore
+
+import (
+	"github.com/DuncanDoyle/snellius/pkg/health"
+	"github.com/DuncanDoyle/snellius/pkg/objects"
+)
+
+// Viewer is one caller's view of an index (design §7.4, D-106). Visible
+// admits population members; nil admits every one. Shown says which findings
+// the caller sees; nil means the precomputed states, flags and reasons, and
+// then Unknown is ignored. Unknown is the caller's install-wide unknown.
+type Viewer struct {
+	Visible func(objects.Ref) bool
+	Shown   func(*health.Finding) bool
+	Unknown bool
+}
+
+// WorstOf is ref's Worst over the findings vw shows.
+func (ix *Index) WorstOf(ref objects.Ref, vw Viewer) Worst {
+	if vw.Shown == nil {
+		return ix.Findings[ref]
+	}
+	var w Worst
+	for _, k := range ix.findingsOf[ref] {
+		if f := &ix.findings[k]; vw.Shown(f) {
+			w = w.Add(f)
+		}
+	}
+	return w
+}
+
+// StateOf is the row state of ref from the findings vw shows (design §6.3).
+// A ListenerSet row's lift by a rejecting parent is ListenerSetStateOf's.
+func (ix *Index) StateOf(ref objects.Ref, vw Viewer) health.State {
+	if vw.Shown == nil {
+		return ix.Findings[ref].State(ix.unknown)
+	}
+	return ix.WorstOf(ref, vw).State(vw.Unknown)
+}
+
+// ListenerSetStateOf is ListenerSet row id's state for vw: StateOf, lifted
+// when the row is programmed and its parent has a shown KGWUI-001.
+func (ix *Index) ListenerSetStateOf(id RowID, vw Viewer) health.State {
+	l := &ix.ListenerSets[id]
+	if vw.Shown == nil {
+		return l.State
+	}
+	return lifted(ix.StateOf(l.Ref, vw), l.programmed && ix.shownProblem(l.Parent, health.CodeXDSRejected, vw))
+}
+
+// shownProblem reports whether vw shows an error or warning finding with code on ref.
+func (ix *Index) shownProblem(ref objects.Ref, code string, vw Viewer) bool {
+	for _, k := range ix.findingsOf[ref] {
+		f := &ix.findings[k]
+		if f.Code == code && (f.Severity == health.SeverityError || f.Severity == health.SeverityWarning) && vw.Shown(f) {
+			return true
+		}
+	}
+	return false
+}
+
+// FindingShown reports whether shown admits any finding on ref.
+func (ix *Index) FindingShown(ref objects.Ref, shown func(*health.Finding) bool) bool {
+	for _, k := range ix.findingsOf[ref] {
+		if shown(&ix.findings[k]) {
+			return true
+		}
+	}
+	return false
+}
+
+// Disagreements is n, a row's count of disagreeing checks, when vw shows a
+// KGWUI-012 on ref; else 0, as the count comes from a derived check.
+func (ix *Index) Disagreements(ref objects.Ref, n int, vw Viewer) int {
+	if vw.Shown == nil || ix.shownProblem(ref, health.CodeComputedDisagrees, vw) {
+		return n
+	}
+	return 0
+}
+
+// ProblemBackend is the backend that sets route row id's FlagBackendProblem
+// for vw: the first non-mirror one with a shown error or warning (D-082).
+func (ix *Index) ProblemBackend(id RowID, vw Viewer) *objects.Ref {
+	r := &ix.Routes[id]
+	if vw.Shown == nil {
+		return r.Backend
+	}
+	for k := range r.problemBackends {
+		if w := ix.WorstOf(r.problemBackends[k], vw); w.Error != nil || w.Warning != nil {
+			return &r.problemBackends[k]
+		}
+	}
+	return nil
+}
+
+// RouteStateOf is route row id's state, flags and reason for vw: the worst
+// shown finding on the row; gateway-rejecting only from a shown KGWUI-001 on a
+// parent Gateway; backend-problem only from a shown finding on a non-mirror
+// backend; disagrees only from a shown KGWUI-012. Flags pass RowFlags first.
+func (ix *Index) RouteStateOf(id RowID, vw Viewer) (health.State, Flag, *health.RowReason) {
+	r := &ix.Routes[id]
+	f := ix.RowFlags(id, vw.Visible)
+	if vw.Shown == nil {
+		return r.State, f, ix.RouteReason(id)
+	}
+	f &^= FlagGatewayRejecting | FlagBackendProblem | FlagDisagrees
+	for _, g := range r.rejectedBy {
+		if ix.shownProblem(g, health.CodeXDSRejected, vw) {
+			f |= FlagGatewayRejecting
+			break
+		}
+	}
+	if r.Flags&FlagDisagrees != 0 && ix.shownProblem(r.Ref, health.CodeComputedDisagrees, vw) {
+		f |= FlagDisagrees
+	}
+	b := ix.ProblemBackend(id, vw)
+	if b != nil {
+		f |= FlagBackendProblem
+	}
+	w := ix.WorstOf(r.Ref, vw)
+	st := lifted(lifted(w.State(vw.Unknown), f&FlagGatewayRejecting != 0), b != nil)
+	return st, f, ix.routeReason(w, st, f, b, vw)
+}
+
+// routeReason is RouteReason over w, st, flags f and problem backend b.
+func (ix *Index) routeReason(w Worst, st health.State, f Flag, b *objects.Ref, vw Viewer) *health.RowReason {
+	out := w.Reason(st)
+	if out == nil || out.Kind != health.ReasonGatewayRejecting || f&FlagGatewayRejecting != 0 || b == nil {
+		return out
+	}
+	bw := ix.WorstOf(*b, vw)
+	d := bw.Error
+	if d == nil {
+		d = bw.Warning
+	}
+	return &health.RowReason{Kind: health.ReasonBackendProblem, Code: d.Code, Message: d.Message}
+}
+
+// GatewayMemberCountAs is GatewayMemberCount over the members visible
+// admits: a visible route with visible dependencies; nil counts them all.
+func (ix *Index) GatewayMemberCountAs(id RowID, visible func(objects.Ref) bool) (int, bool) {
+	g := &ix.Gateways[id]
+	if visible == nil || g.View == nil {
+		return ix.GatewayMemberCount(id)
+	}
+	if _, ok := ix.memberCount(g.Ref, g.View.Listeners, g.Members); !ok {
+		return 0, false
+	}
+	return ix.visibleMembers(g.Ref, g.View.Listeners, visible), true
+}
+
+// ListenerSetMemberCountAs is GatewayMemberCountAs for ListenerSet row id.
+func (ix *Index) ListenerSetMemberCountAs(id RowID, visible func(objects.Ref) bool) (int, bool) {
+	l := &ix.ListenerSets[id]
+	if visible == nil || l.View == nil {
+		return ix.ListenerSetMemberCount(id)
+	}
+	if _, ok := ix.memberCount(l.Ref, l.View.Listeners, l.Members); !ok {
+		return 0, false
+	}
+	return ix.visibleMembers(l.Ref, l.View.Listeners, visible), true
+}
+
+// ListenerCountAs is listener k's count over the members visible admits; nil
+// gives the computed count.
+func (ix *Index) ListenerCountAs(k ListenerKey, visible func(objects.Ref) bool) int {
+	if visible == nil {
+		return ix.Listeners[k].Count
+	}
+	n := 0
+	for _, id := range ix.listenerRows(k, visible) {
+		if visible(ix.Routes[id].Ref) {
+			n++
+		}
+	}
+	return n
+}
+
+// visibleMembers counts the distinct visible member routes of ref's listeners.
+func (ix *Index) visibleMembers(ref objects.Ref, ls []objects.Listener, visible func(objects.Ref) bool) int {
+	seen := map[RowID]bool{}
+	for _, l := range ls {
+		for _, id := range ix.listenerRows(ListenerKey{ref, l.Name}, visible) {
+			if !seen[id] && visible(ix.Routes[id].Ref) {
+				seen[id] = true
+			}
+		}
+	}
+	return len(seen)
+}

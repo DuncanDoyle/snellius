@@ -483,7 +483,7 @@ func TestNarrowestIndexIsUsed(t *testing.T) {
 		{"parent before backend", Query{Parent: &gwObj, Backends: []objects.Ref{backend}}, 2},
 		{"parent before namespace", Query{Parent: &gwObj, Namespaces: []string{"infra"}}, 2},
 	} {
-		if _, n, err := ix.queryRoutes(tc.q, nil); err != nil || n != tc.scanned {
+		if _, n, err := ix.queryRoutes(tc.q, Viewer{}); err != nil || n != tc.scanned {
 			t.Errorf("%s: scanned %d (%v), want %d", tc.name, n, err, tc.scanned)
 		}
 	}
@@ -740,7 +740,7 @@ func TestListenerFilter(t *testing.T) {
 		}
 	}
 	// The listener index is the narrowest.
-	if _, n, err := ix.queryRoutes(Query{Parent: &gwObj, Listener: "https", Namespaces: []string{"shop"}}, nil); err != nil || n != 1 {
+	if _, n, err := ix.queryRoutes(Query{Parent: &gwObj, Listener: "https", Namespaces: []string{"shop"}}, Viewer{}); err != nil || n != 1 {
 		t.Errorf("scanned %d (%v), want 1", n, err)
 	}
 }

@@ -172,6 +172,10 @@ type RouteRow struct {
 	DroppedDeps []DepSet
 	// search is the lower-cased "namespace/name" and hostnames.
 	search string
+	// rejectedBy are the Gateways with a KGWUI-001 that set FlagGatewayRejecting, in link order.
+	rejectedBy []objects.Ref
+	// problemBackends are the non-mirror backends with an error or warning finding, in rule order.
+	problemBackends []objects.Ref
 }
 
 // BackendUse is one row naming a backend. Mirror is set when the row names
@@ -215,6 +219,8 @@ type ListenerSetRow struct {
 	// Members and Disagreements are as on GatewayRow.
 	Members       []RowID
 	Disagreements int
+	// programmed is a current Programmed=True: a rejecting parent then lifts the row.
+	programmed bool
 }
 
 // Worst is the first error and the first warning finding on one object, and
@@ -280,6 +286,11 @@ type Index struct {
 	// DelegationCap names the first compute cap views B and C hit, or "".
 	DelegationCap string
 	admitted      map[objects.Ref]Admission
+	// findings are the report's findings, and findingsOf indexes them per resource, in report order.
+	findings   []health.Finding
+	findingsOf map[objects.Ref][]int32
+	// unknown is the install-wide unknown of the precomputed states.
+	unknown bool
 	// parentKinds are the served Gateway and ListenerSet kinds.
 	parentKinds map[objects.GroupKind]bool
 }

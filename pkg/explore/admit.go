@@ -28,7 +28,9 @@ type Admission struct {
 	// By is the first owned object that names a referenced candidate, or
 	// the first owned parent route that selects a selected one; Referrers
 	// are all of them, in row order, then ListenerSet order. Under a
-	// restricting Authorizer the handler shows the first visible one.
+	// restricting Authorizer the handler shows the first visible one. A
+	// finding candidate keeps the owned objects that name it as Referrers,
+	// for a caller who is not shown its findings, and no By.
 	By        *objects.Ref
 	Referrers []objects.Ref
 	// NoParent marks a no-parent row; alone it admits the YAML view only.
@@ -99,9 +101,9 @@ func (b *builder) admit(ix *Index) map[objects.Ref]Admission {
 		switch {
 		case !ok:
 			a = Admission{Reason: ReasonReferenced}
-		case a.Reason != ReasonReferenced:
-			return // owned or a finding
-		case a.Referrers[len(a.Referrers)-1] == by:
+		case a.Owned || a.Reason == ReasonSelected:
+			return
+		case len(a.Referrers) > 0 && a.Referrers[len(a.Referrers)-1] == by:
 			return
 		}
 		a.Referrers = append(a.Referrers, by)

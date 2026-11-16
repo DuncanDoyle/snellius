@@ -62,6 +62,8 @@ type builder struct {
 	rejecting map[objects.Ref]bool
 	// conds are the install's condition types beyond Gateway API's.
 	conds health.ConditionTypes
+	// findingsOf indexes the report's findings per resource, in report order.
+	findingsOf map[objects.Ref][]int32
 }
 
 // Build builds the index of one install. It is pure: the same input gives
@@ -102,14 +104,14 @@ func Build(in Input) *Index {
 		b.gateways(ix, lsViews)
 	}
 	ix.parentKinds = b.parents
-	ix.Findings = b.worst
+	ix.Findings, ix.findings, ix.findingsOf, ix.unknown = b.worst, b.in.Health.Findings, b.findingsOf, b.unknown
 	ix.admitted = b.admit(ix)
 	return ix
 }
 
 // findings fills the worst finding per object and the install-wide unknown rule.
 func (b *builder) findings() {
-	b.worst = map[objects.Ref]Worst{}
+	b.worst, b.findingsOf = map[objects.Ref]Worst{}, map[objects.Ref][]int32{}
 	fs := b.in.Health.Findings
 	for i := range fs {
 		f := &fs[i]
@@ -117,6 +119,7 @@ func (b *builder) findings() {
 			continue
 		}
 		b.worst[*f.Resource] = b.worst[*f.Resource].Add(f)
+		b.findingsOf[*f.Resource] = append(b.findingsOf[*f.Resource], int32(i)) // #nosec G115 -- a finding count fits in int32
 		if f.Severity != health.SeverityError && f.Severity != health.SeverityWarning {
 			continue
 		}
@@ -327,8 +330,13 @@ func (b *builder) fromStatus(i int, p objects.ParentRef) ParentLink {
 			r.Flags |= FlagNotProgrammed
 		}
 	}
-	if b.rejecting != nil && (b.rejecting[l.Target] || l.Via != nil && b.rejecting[*l.Via]) && isTrue(cs, programmedType) {
-		r.Flags |= FlagGatewayRejecting
+	if b.rejecting != nil && isTrue(cs, programmedType) {
+		for _, g := range []*objects.Ref{&l.Target, l.Via} {
+			if g != nil && b.rejecting[*g] {
+				r.Flags |= FlagGatewayRejecting
+				r.rejectedBy = append(r.rejectedBy, *g)
+			}
+		}
 	}
 	// The deciding condition: the first False among Accepted, ResolvedRefs and the optional types.
 	var optional *metav1.Condition
@@ -550,9 +558,11 @@ func (b *builder) index(ix *Index) {
 		// The first backend with an error or warning finding lifts the row; mirrors never do (D-082).
 		for _, t := range a.targets {
 			if w := b.worst[t.Ref]; !t.Mirror && (w.Error != nil || w.Warning != nil) {
-				ref := t.Ref
-				r.Backend, r.Flags, r.State = &ref, r.Flags|FlagBackendProblem, lifted(r.State, true)
-				break
+				if r.Backend == nil {
+					ref := t.Ref
+					r.Backend, r.Flags, r.State = &ref, r.Flags|FlagBackendProblem, lifted(r.State, true)
+				}
+				r.problemBackends = append(r.problemBackends, t.Ref)
 			}
 		}
 	}
@@ -599,7 +609,8 @@ func (b *builder) gateways(ix *Index, lsViews []*objects.ListenerSetView) {
 		ref := objects.RefOf(u)
 		l := ListenerSetRow{Ref: ref, Obj: u, View: v, Parent: v.Parent.Ref(), Routes: ix.ByParent[ref],
 			Members: ix.members(ref, v.Listeners), Disagreements: b.disagreements[ref]}
-		l.State = lifted(b.state(ref), b.rejecting[l.Parent] && health.GatewayPending(u, v.Conditions) == "" && isTrue(v.Conditions, "Programmed"))
+		l.programmed = health.GatewayPending(u, v.Conditions) == "" && isTrue(v.Conditions, "Programmed")
+		l.State = lifted(b.state(ref), b.rejecting[l.Parent] && l.programmed)
 		if c := objects.FindCondition(v.Conditions, "Accepted"); c != nil && c.Status != metav1.ConditionTrue {
 			l.AcceptedReason = c.Reason
 		}

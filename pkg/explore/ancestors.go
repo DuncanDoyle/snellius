@@ -49,13 +49,20 @@ type AncestorPath struct {
 // name (D-024). The walk does not continue past either, so a hidden route's
 // own parents, read from its status, are never named (design §7.4 rule 3).
 func (ix *Index) Ancestors(route objects.Ref, visible func(objects.Ref) bool) (paths []AncestorPath, truncated bool) {
-	paths, truncated, _ = ix.walkUp(route, visible)
+	paths, truncated, _ = ix.walkUp(route, visible, false)
 	return paths, truncated
 }
 
-// walkUp is Ancestors plus the number of route visits made.
-func (ix *Index) walkUp(route objects.Ref, visible func(objects.Ref) bool) ([]AncestorPath, bool, int) {
-	w := &walker{ix: ix, visible: visible, seen: map[string]bool{}}
+// VisibleAncestors is Ancestors without the paths that have a Hidden or
+// Restricted step: they neither count toward MaxPaths nor truncate the walk.
+func (ix *Index) VisibleAncestors(route objects.Ref, visible func(objects.Ref) bool) (paths []AncestorPath, truncated bool) {
+	paths, truncated, _ = ix.walkUp(route, visible, true)
+	return paths, truncated
+}
+
+// walkUp is Ancestors, or VisibleAncestors with omit, plus the number of route visits made.
+func (ix *Index) walkUp(route objects.Ref, visible func(objects.Ref) bool, omit bool) ([]AncestorPath, bool, int) {
+	w := &walker{ix: ix, visible: visible, seen: map[string]bool{}, omit: omit}
 	w.visit(route, true)
 	// Fully visible paths first; restricted ones keep their relative order.
 	slices.SortStableFunc(w.paths, func(a, b AncestorPath) int {
@@ -72,6 +79,8 @@ type walker struct {
 	seen      map[string]bool
 	visits    int
 	truncated bool
+	// omit drops the paths with a Hidden or Restricted step.
+	omit bool
 }
 
 // candidate is one parent of a route: another route, or a root.
@@ -157,6 +166,9 @@ func (w *walker) visit(route objects.Ref, start bool) {
 
 // emit records the path that has tail above the current stack.
 func (w *walker) emit(tail AncestorStep, cycle bool) {
+	if w.omit && (tail.Hidden || tail.Restricted) {
+		return
+	}
 	steps := make([]AncestorStep, 0, len(w.stack)+1)
 	steps = append(steps, tail)
 	key := []byte{}
