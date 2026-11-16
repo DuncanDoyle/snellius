@@ -1610,7 +1610,7 @@ Measured on the reference machine, 5 runs per world:
 
 **Context:** A response's `collectedAt` is the time of the snapshot it was computed from. Snellius recomputes on a source change or a due timer, and a change to an object the viewer cannot read triggers both. A viewer without the full read can therefore see that something in the install changed, though never what or where. Per-result times are already set to the response's time for such viewers.
 
-**Decision:** The response's `collectedAt` (and its header) stays the real snapshot time for every viewer: a stated exception to D-085, like collection failures (D-108 item 2). Serving restricted viewers an older tick time would show their own changes as older than they are and could read as stale.
+**Decision:** The response's `collectedAt` (and its header) stays the real snapshot time for every viewer: a stated exception to D-085, like collection failures (D-108 item 2). Serving restricted viewers an older tick time would show their own changes as older than they are and could read as stale. Per-result times and `/installs` `computedAt` are the same confirmation time for a viewer without the full read, so the surfaces agree.
 
 **Consequences:** Restricted viewers keep an accurate time. Rounding it to a confirm-tick grid stays possible later without a design change.
 
