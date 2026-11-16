@@ -1591,3 +1591,16 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** Install membership (which Gateways, ListenerSets, routes and policies belong to an install, and which namespaces are in its scope) is install context, like the controller's settings (D-106 item 1). A change to a GatewayClass, a parent Gateway or ListenerSet, or Namespace labels may move a viewer's readable objects into or out of an install, and change their rows and findings accordingly: a stated exception to D-085.
 
 **Consequences:** The UI shows the same membership the controller acts on. The D-085 rule tests treat membership changes as an explicit, named mask. Backend membership through consumer routes is not install context: Backend findings stay derived (D-106 item 3).
+
+## D-108 — Own-object inputs and basis granularity (2026-11-16, Phase 7, clarifies D-106)
+**Status:** our call, from the Task 31 review.
+
+**Context:** Keeping today's own-object findings unchanged needed inputs the plan did not list, and the review asked where they sit against D-085.
+
+**Decision:**
+1. The served and experimental kinds and the rule set's target-not-found flag are controller settings (D-106 item 1).
+2. Whether Snellius collected a kind in a namespace comes from its own access and configured namespaces, not from any cluster object. It is not a D-085 exception.
+3. The endpoints result for a partial read lists namespaces that routes reference, so it is a derived result (D-106 item 3), not a collection failure.
+4. The basis is recorded per resource and analyzer, not per finding. A viewer who can read parent A but not parent B does not see the 002 about A. This is stricter than D-106 item 2, never looser.
+
+**Consequences:** A restricted viewer may miss an own-object finding they could in principle read (item 4). Task 32's rule tests expect this.
