@@ -1582,3 +1582,12 @@ Measured on the reference machine, 5 runs per world:
 4. D-104's per-check kind lists and D-105's kind probe are not built.
 
 **Consequences:** D-085 holds by construction, apart from items 1 and D-102/D-103. Application teams see findings about their own objects; platform-wide findings and "What was checked" need the full read. Full-read viewers and local mode are unchanged.
+
+## D-107 — Install membership is install context (2026-11-16, Phase 7, extends D-106 item 1)
+**Status:** accepted by the user (2026-11-16), after the seventh Codex pass over the 7.4 plan.
+
+**Context:** Which objects belong to an install is decided not only by the controller's settings but by GatewayClasses (`controllerName`), the Gateway or ListenerSet a route attaches to, and Namespace labels when the controller watches selected namespaces (`pkg/install/assign.go`). A restricted viewer may be unable to read these. Lists already depend on membership since 7.3.
+
+**Decision:** Install membership (which Gateways, ListenerSets, routes and policies belong to an install, and which namespaces are in its scope) is install context, like the controller's settings (D-106 item 1). A change to a GatewayClass, a parent Gateway or ListenerSet, or Namespace labels may move a viewer's readable objects into or out of an install, and change their rows and findings accordingly: a stated exception to D-085.
+
+**Consequences:** The UI shows the same membership the controller acts on. The D-085 rule tests treat membership changes as an explicit, named mask. Backend membership through consumer routes is not install context: Backend findings stay derived (D-106 item 3).
