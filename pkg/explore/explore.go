@@ -298,6 +298,10 @@ type Index struct {
 	unknown bool
 	// parentKinds are the served Gateway and ListenerSet kinds.
 	parentKinds map[objects.GroupKind]bool
+	// controllers are the install's controller names and noDelegation is its
+	// rule set's delegation switch: install context for PathIncomplete.
+	controllers  []string
+	noDelegation bool
 }
 
 // DepSet is a computed result's dependencies, as indexes into Index.Refs.

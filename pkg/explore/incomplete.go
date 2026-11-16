@@ -1,6 +1,11 @@
 package explore
 
-import "github.com/DuncanDoyle/snellius/pkg/objects"
+import (
+	"slices"
+	"sort"
+
+	"github.com/DuncanDoyle/snellius/pkg/objects"
+)
 
 // Permissions is a viewer's authority over named objects and kinds (design
 // §8.1). Get is a named get; List is a list of gk in namespace.
@@ -16,18 +21,20 @@ var (
 )
 
 // PathIncomplete reports whether the viewer's permissions leave route id's
-// traffic path unassessable (design §8.1). It reads only the refs written in
-// the route and in the readable routes of its chain, never an object they name.
+// traffic path unassessable (design §8.1). It reads only the route objects
+// the viewer can get and their refs, never an object a ref names or the
+// reported edges, which hidden objects decide.
 func (ix *Index) PathIncomplete(id RowID, p Permissions) bool {
 	seen := map[objects.Ref]bool{ix.Routes[id].Ref: true}
 	queue := []RowID{id}
 	for len(queue) > 0 {
 		r := &ix.Routes[queue[0]]
 		queue = queue[1:]
-		if refsIncomplete(r, p) {
+		d := ix.routeData(r)
+		if ix.refsIncomplete(d, p) {
 			return true
 		}
-		for _, parent := range ix.ParentRoutes[r.Ref] {
+		for _, parent := range d.routeParents {
 			if seen[parent] {
 				continue
 			}
@@ -43,30 +50,89 @@ func (ix *Index) PathIncomplete(id RowID, p Permissions) bool {
 	return false
 }
 
-// refsIncomplete reports whether p lacks a get or list for a ref written in r.
-func refsIncomplete(r *RouteRow, p Permissions) bool {
-	v := r.View
-	if v == nil {
-		return false
+// pathData is the part of a route object that PathIncomplete reads.
+type pathData struct {
+	parents      []objects.ParentRef
+	routeParents []objects.Ref
+	targets      []objects.BackendRef
+}
+
+// routeData decodes r's own object, any route kind: its spec parentRefs, the
+// HTTPRoutes in those and in the install's status.parents, and its backendRefs.
+func (ix *Index) routeData(r *RouteRow) pathData {
+	var d pathData
+	var status []objects.RouteParentStatus
+	if r.View != nil {
+		d.parents, status = r.View.ParentRefs, r.View.Parents
+		for _, rule := range r.View.Rules {
+			d.targets = append(d.targets, rule.BackendRefs...)
+		}
+	} else if r.Obj != nil {
+		v := objects.DecodeRoute(r.Obj)
+		d.parents, status = v.ParentRefs, v.Parents
+		for _, t := range v.Targets {
+			if !t.Mirror {
+				d.targets = append(d.targets, objects.BackendRef{Ref: t.Ref})
+			}
+		}
 	}
-	for _, pr := range v.ParentRefs {
+	add := func(ref objects.Ref) {
+		if ref.Group == httpRouteGK.Group && ref.Kind == httpRouteGK.Kind && !slices.Contains(d.routeParents, ref) {
+			d.routeParents = append(d.routeParents, ref)
+		}
+	}
+	for _, pr := range d.parents {
+		add(pr.Ref())
+	}
+	for _, st := range status {
+		if slices.Contains(ix.controllers, st.ControllerName) {
+			add(st.ParentRef.Ref())
+		}
+	}
+	return d
+}
+
+// refsIncomplete reports whether p lacks a get or list for a ref in d.
+// RequestMirror targets are not path rows (D-082), so they are not checked.
+func (ix *Index) refsIncomplete(d pathData, p Permissions) bool {
+	for _, pr := range d.parents {
 		ref := pr.Ref()
-		if !p.Get(ref) || ref.Group == gatewayGK.Group && ref.Kind == gatewayGK.Kind && !p.List(gatewayGK, ref.Namespace) {
+		if !p.Get(ref) {
+			return true
+		}
+		switch {
+		case ref.Group == gatewayGK.Group && ref.Kind == gatewayGK.Kind:
+			if !p.List(gatewayGK, ref.Namespace) {
+				return true
+			}
+		case ix.listenerSetGatewayIncomplete(ref, p):
 			return true
 		}
 	}
-	for _, rule := range v.Rules {
-		for _, b := range rule.BackendRefs {
-			if d := b.Delegation; d != nil {
-				if !p.List(httpRouteGK, d.Namespace) {
-					return true
-				}
-				continue
-			}
-			if !p.Get(b.Ref) || !p.List(endpointSliceGK, b.Ref.Namespace) {
+	for _, b := range d.targets {
+		if dl := b.Delegation; dl != nil && !ix.noDelegation {
+			if !p.List(httpRouteGK, dl.Namespace) {
 				return true
 			}
+			if dl.Mode == objects.DelegationName && !p.Get(objects.Ref{Group: httpRouteGK.Group, Kind: httpRouteGK.Kind, Namespace: dl.Namespace, Name: dl.Name}) {
+				return true
+			}
+			continue
+		}
+		if !p.Get(b.Ref) || !p.List(endpointSliceGK, b.Ref.Namespace) {
+			return true
 		}
 	}
 	return false
+}
+
+// listenerSetGatewayIncomplete reports whether ref is a ListenerSet whose own
+// spec.parentRef Gateway cannot be got or its namespace listed.
+func (ix *Index) listenerSetGatewayIncomplete(ref objects.Ref, p Permissions) bool {
+	i := sort.Search(len(ix.ListenerSets), func(i int) bool { return compareRefs(ix.ListenerSets[i].Ref, ref) >= 0 })
+	if i == len(ix.ListenerSets) || ix.ListenerSets[i].Ref != ref || ix.ListenerSets[i].View == nil {
+		return false
+	}
+	g := ix.ListenerSets[i].View.Parent.Ref()
+	return !p.Get(g) || !p.List(gatewayGK, g.Namespace)
 }

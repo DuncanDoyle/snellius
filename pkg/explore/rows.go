@@ -104,6 +104,7 @@ func Build(in Input) *Index {
 		b.gateways(ix, lsViews)
 	}
 	ix.parentKinds = b.parents
+	ix.controllers, ix.noDelegation = b.in.Install.ControllerNames, b.in.Install.NoDelegation
 	ix.Findings, ix.findings, ix.findingsOf, ix.unknown = b.worst, b.in.Health.Findings, b.findingsOf, b.unknown
 	ix.admitted = b.admit(ix)
 	return ix

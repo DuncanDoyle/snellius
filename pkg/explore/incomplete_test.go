@@ -3,6 +3,9 @@ package explore
 import (
 	"testing"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
 
@@ -35,6 +38,11 @@ func incRoute(name string, gw, svc objects.Ref) RouteRow {
 	return r
 }
 
+// withParentRoute adds a spec parentRef from r to the HTTPRoute shop/parent.
+func withParentRoute(r *RouteRow, parent string) {
+	r.View.ParentRefs = append(r.View.ParentRefs, objects.ParentRef{Group: objects.GatewayAPIGroup, Kind: "HTTPRoute", Namespace: "shop", Name: parent})
+}
+
 func incIx(rows ...RouteRow) *Index {
 	ix := hand(rows...)
 	ix.ParentRoutes = map[objects.Ref][]objects.Ref{}
@@ -55,18 +63,13 @@ func TestIncompleteAbsentIsComplete(t *testing.T) {
 	}
 }
 
-// A denied get is incomplete, with the object present or absent alike.
+// A denied get on a written ref is incomplete; TestIncompleteUnreadableExistence
+// covers the target present and absent.
 func TestIncompleteUnreadable(t *testing.T) {
 	for _, ref := range []objects.Ref{incGW, incSvc} {
-		for _, exists := range []bool{true, false} {
-			ix := incIx(incRoute("r", incGW, incSvc))
-			ix.Findings = map[objects.Ref]Worst{}
-			if exists {
-				ix.Findings[ref] = Worst{}
-			}
-			if !incomplete(t, ix, "r", perms{noGet: map[objects.Ref]bool{ref: true}}) {
-				t.Errorf("denied get on %v (exists=%v) is complete", ref, exists)
-			}
+		ix := incIx(incRoute("r", incGW, incSvc))
+		if !incomplete(t, ix, "r", perms{noGet: map[objects.Ref]bool{ref: true}}) {
+			t.Errorf("denied get on %v is complete", ref)
 		}
 	}
 }
@@ -118,7 +121,7 @@ func TestIncompleteDelegationList(t *testing.T) {
 func TestIncompleteThroughReadableChain(t *testing.T) {
 	hiddenGW := objects.Ref{Group: objects.GatewayAPIGroup, Kind: "Gateway", Namespace: "other", Name: "x"}
 	ix := incIx(incRoute("child", incGW, incSvc), incRoute("parent", hiddenGW, incSvc))
-	ix.ParentRoutes[routeRef("shop", "child")] = []objects.Ref{routeRef("shop", "parent")}
+	withParentRoute(&ix.Routes[0], "parent")
 	if !incomplete(t, ix, "child", perms{noGet: map[objects.Ref]bool{hiddenGW: true}}) {
 		t.Error("an unreadable ref in a readable parent route is complete")
 	}
@@ -131,7 +134,7 @@ func TestIncompleteThroughReadableChain(t *testing.T) {
 func TestHiddenChainStops(t *testing.T) {
 	hiddenGW := objects.Ref{Group: objects.GatewayAPIGroup, Kind: "Gateway", Namespace: "other", Name: "x"}
 	ix := incIx(incRoute("child", incGW, incSvc), incRoute("parent", hiddenGW, incSvc))
-	ix.ParentRoutes[routeRef("shop", "child")] = []objects.Ref{routeRef("shop", "parent")}
+	withParentRoute(&ix.Routes[0], "parent")
 	asked := map[objects.Ref]bool{}
 	p := recorder{perms{noGet: map[objects.Ref]bool{routeRef("shop", "parent"): true}}, asked}
 	if !incomplete(t, ix, "child", p) {
@@ -152,21 +155,159 @@ func (r recorder) Get(ref objects.Ref) bool {
 	return r.perms.Get(ref)
 }
 
-// Creating, deleting and faulting hidden targets never changes the answer.
-func TestIncompleteIgnoresHiddenObjects(t *testing.T) {
-	p := perms{noGet: map[objects.Ref]bool{incSvc: true}}
-	base := incIx(incRoute("r", incGW, incSvc))
-	want := incomplete(t, base, "r", p)
-	faulted := incIx(incRoute("r", incGW, incSvc))
-	faulted.Findings = map[objects.Ref]Worst{incSvc: {}, incGW: {}}
-	r := &faulted.Routes[0]
-	r.Parents = []ParentLink{{Target: incGW, Attachment: AttachmentAccepted}}
-	r.Flags = FlagRefsUnresolved | FlagNotAccepted
-	if got := incomplete(t, faulted, "r", p); got != want {
-		t.Errorf("hidden objects changed the answer: %v, want %v", got, want)
+// incRule is an HTTPRoute rule with the given backendRefs.
+func incRule(refs ...map[string]any) map[string]any {
+	bs := make([]any, 0, len(refs))
+	for _, r := range refs {
+		bs = append(bs, r)
 	}
-	clean := perms{}
-	if incomplete(t, base, "r", clean) != incomplete(t, faulted, "r", clean) {
-		t.Error("hidden objects changed a complete answer")
+	return map[string]any{"backendRefs": bs}
+}
+
+func svcRef(name string) map[string]any { return map[string]any{"name": name, "port": int64(80)} }
+
+// beRef is a backendRef to the kgateway Backend of that name.
+func beRef(name string) map[string]any {
+	return map[string]any{"group": "gateway.kgateway.dev", "kind": "Backend", "name": name}
+}
+
+func backendObj(name string) objects.Ref {
+	return objects.Ref{Group: "gateway.kgateway.dev", Kind: "Backend", Namespace: "shop", Name: name}
+}
+
+// delegatingParent is an HTTPRoute on the edge Gateway that delegates to shop/c.
+func delegatingParent(name string) *unstructured.Unstructured {
+	return testutil.WithRules(testutil.HTTPRoute("shop", name, []objects.ParentRef{gw}, accepted(gw)), incRule(testutil.DelegateTo("shop", "c")))
+}
+
+// hiddenWorld builds shop/c with reported parents p1 (readable) and p2 (hidden)
+// in its own status; p2 and the hidden Gateway and Service vary per variant.
+func hiddenWorld(variant string) *world {
+	p1, p2 := testutil.HTTPRouteRef("shop", "p1"), testutil.HTTPRouteRef("shop", "p2")
+	c := testutil.WithRules(testutil.HTTPRoute("shop", "c", nil, accepted(p1), accepted(p2)), incRule(beRef("secret")))
+	objs := []*unstructured.Unstructured{c, delegatingParent("p1")}
+	switch variant {
+	case "p2 absent":
+	case "p2 present":
+		objs = append(objs, delegatingParent("p2"))
+	case "p2 faulted":
+		p := delegatingParent("p2")
+		p.Object["status"] = map[string]any{"parents": []any{}}
+		objs = append(objs, p)
+	case "p2 detached":
+		objs = append(objs, testutil.WithRules(testutil.HTTPRoute("shop", "p2", nil), incRule(testutil.DelegateTo("shop", "c"))))
+	case "hidden gateway and backend":
+		objs = append(objs, delegatingParent("p2"), testutil.Gateway("infra", "hidden", "kgateway", nil), testutil.Backend("shop", "secret", nil))
+	}
+	return newWorld(objs...)
+}
+
+var hiddenVariants = []string{"p2 absent", "p2 present", "p2 faulted", "p2 detached", "hidden gateway and backend"}
+
+// The answer for a readable route never depends on hidden objects: it comes
+// from the route and the viewer's permissions, on a production-built index.
+func TestIncompleteIgnoresHiddenObjects(t *testing.T) {
+	deny := perms{noGet: map[objects.Ref]bool{routeRef("shop", "p2"): true}}
+	for _, p := range []Permissions{deny, perms{}} {
+		var want bool
+		for i, v := range hiddenVariants {
+			ix := hiddenWorld(v).build(t)
+			got := incomplete(t, ix, "c", p)
+			if i == 0 {
+				want = got
+			}
+			if got != want {
+				t.Errorf("%s: incomplete %v, but %v with p2 absent", v, got, want)
+			}
+		}
+	}
+	// The unreadable parent named in the readable route's status is incomplete.
+	if !incomplete(t, hiddenWorld("p2 absent").build(t), "c", deny) {
+		t.Error("an unreadable parent route in the route's status is complete")
+	}
+}
+
+// Whether a readable ref's target exists never changes the answer.
+func TestIncompleteUnreadableExistence(t *testing.T) {
+	svc := backendObj("web")
+	for _, denied := range []bool{true, false} {
+		for _, exists := range []bool{true, false} {
+			objs := []*unstructured.Unstructured{testutil.WithRules(testutil.HTTPRoute("shop", "r", []objects.ParentRef{gw}, accepted(gw)), incRule(beRef("web")))}
+			if exists {
+				objs = append(objs, testutil.Backend("shop", "web", nil))
+			}
+			ix := newWorld(objs...).build(t)
+			p := perms{noGet: map[objects.Ref]bool{svc: denied}}
+			if got := incomplete(t, ix, "r", p); got != denied {
+				t.Errorf("denied=%v exists=%v: incomplete %v", denied, exists, got)
+			}
+		}
+	}
+}
+
+// A GRPCRoute is decided from its own object like an HTTPRoute.
+func TestIncompleteNonHTTPRoute(t *testing.T) {
+	g := testutil.WithRules(testutil.HTTPRoute("shop", "g", []objects.ParentRef{gw}, accepted(gw)), incRule(svcRef("web")))
+	g.SetKind("GRPCRoute")
+	ix := newWorld(g).build(t)
+	if !incomplete(t, ix, "g", perms{noGet: map[objects.Ref]bool{incSvc: true}}) {
+		t.Error("a GRPCRoute with an unreadable backend is complete")
+	}
+	if !incomplete(t, ix, "g", perms{noGet: map[objects.Ref]bool{gwObj: true}}) {
+		t.Error("a GRPCRoute with an unreadable Gateway is complete")
+	}
+	if incomplete(t, ix, "g", perms{}) {
+		t.Error("a readable GRPCRoute is incomplete")
+	}
+}
+
+// A ListenerSet parent needs its Gateway readable and listable too.
+func TestIncompleteListenerSetGateway(t *testing.T) {
+	ls := objects.ParentRef{Group: objects.GatewayAPIGroup, Kind: "ListenerSet", Namespace: "shop", Name: "ls"}
+	ix := newWorld(
+		testutil.ListenerSet("shop", "ls", gw, nil),
+		testutil.HTTPRoute("shop", "r", []objects.ParentRef{ls}, accepted(ls)),
+	).build(t)
+	if incomplete(t, ix, "r", perms{}) {
+		t.Error("a readable ListenerSet chain is incomplete")
+	}
+	if !incomplete(t, ix, "r", perms{noGet: map[objects.Ref]bool{gwObj: true}}) {
+		t.Error("an unreadable ListenerSet Gateway is complete")
+	}
+	if !incomplete(t, ix, "r", perms{noList: map[objects.GroupKind]map[string]bool{gwKind: {"infra": true}}}) {
+		t.Error("Gateways not listable in the ListenerSet's Gateway namespace but the path is complete")
+	}
+}
+
+// A readable parent cycle terminates.
+func TestIncompleteCycle(t *testing.T) {
+	ix := incIx(hr("a", ""), hr("b", ""))
+	ix.controllers = []string{testutil.Controller}
+	for i, other := range []string{"b", "a"} {
+		ix.Routes[i].Obj = testutil.HTTPRoute("shop", ix.Routes[i].Ref.Name, []objects.ParentRef{testutil.HTTPRouteRef("shop", other)})
+	}
+	if incomplete(t, ix, "a", perms{}) {
+		t.Error("a readable cycle is incomplete")
+	}
+	if !incomplete(t, ix, "a", perms{noGet: map[objects.Ref]bool{routeRef("shop", "b"): true}}) {
+		t.Error("an unreadable parent in a cycle is complete")
+	}
+}
+
+// A named delegation ref needs a get; NoDelegation makes it an ordinary target.
+func TestIncompleteDelegationRefs(t *testing.T) {
+	r := testutil.WithRules(testutil.HTTPRoute("shop", "r", []objects.ParentRef{gw}, accepted(gw)), incRule(testutil.DelegateTo("team", "kid")))
+	w := newWorld(r)
+	kid := routeRef("team", "kid")
+	if !incomplete(t, w.build(t), "r", perms{noGet: map[objects.Ref]bool{kid: true}}) {
+		t.Error("a named delegation ref without get is complete")
+	}
+	ix := w.build(t)
+	ix.noDelegation = true
+	if !incomplete(t, ix, "r", perms{noList: map[objects.GroupKind]map[string]bool{sliceGK: {"team": true}}}) {
+		t.Error("with NoDelegation an HTTPRoute backendRef needs an EndpointSlice list")
+	}
+	if incomplete(t, w.build(t), "r", perms{noList: map[objects.GroupKind]map[string]bool{sliceGK: {"team": true}}}) {
+		t.Error("a delegation ref needed an EndpointSlice list")
 	}
 }
