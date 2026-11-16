@@ -49,10 +49,15 @@ type procSummary struct {
 	selfManaged map[objects.Ref]bool
 }
 
+// newProcSummary reads the facts of the findings the caller of v is shown:
+// in secure mode without the full read, derived findings add none (D-106).
 func newProcSummary(v *view, i *engine.InstallModel) *procSummary {
 	ps := &procSummary{v: v, i: i, facts: map[objects.Ref]*subjectFacts{}, selfManaged: map[objects.Ref]bool{}}
 	for k := range i.Health.Findings {
 		f := &i.Health.Findings[k]
+		if !v.shown(f) {
+			continue
+		}
 		if f.Resource != nil && f.Code == health.CodeSelfManagedProxy {
 			ps.selfManaged[*f.Resource] = true
 		}

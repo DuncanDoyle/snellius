@@ -392,6 +392,7 @@ func (h *handler) diagnostics(w http.ResponseWriter, r *http.Request) {
 	d, rep, at := v.diagnosis(i), &vr, wireTime(p.ConfirmedAt)
 	in := stepsInput(p.Model, i)
 	out := Diagnostics{Install: i.Resolved.ID(), Verdict: verdict(v, rep), Groups: []GroupRow{}, Checks: wireChecks(rep.Checks), CollectedAt: at}
+	v.stampChecks(out.Checks, at)
 	// d.Rank lists each group's members in group order, so a group's first is its top member.
 	off := 0
 	for k := range d.Groups {
@@ -457,6 +458,18 @@ func gatewaysWith(i *engine.InstallModel, code string, sev health.Severity, show
 func xdsUnavailable(checks []health.CheckResult) bool {
 	j := slices.IndexFunc(checks, func(c health.CheckResult) bool { return c.Name == xdsCheckName })
 	return j >= 0 && !checks[j].OK
+}
+
+// stampChecks gives each of cs, results already in wire form, the response's
+// collectedAt when v projects: a result's own stamp is when the last compute
+// ran, which a hidden change may have triggered (D-085).
+func (v *view) stampChecks(cs []health.CheckResult, collectedAt time.Time) {
+	if !v.projects() {
+		return
+	}
+	for k := range cs {
+		cs[k].CollectedAt = wireTime(collectedAt)
+	}
 }
 
 // wireChecks is cs with UTC times, never nil. A hold is copied, as the model shares it.

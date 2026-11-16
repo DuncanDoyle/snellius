@@ -362,6 +362,7 @@ func (h *handler) health(w http.ResponseWriter, r *http.Request) {
 // Typed evidence is in wire form (§14 rule 14). State, counts and severities stay.
 func healthResponse(v *view, l linker, i *engine.InstallModel, confirmedAt time.Time) HealthResponse {
 	rep := wireHealth(visibleHealth(v, i), confirmedAt)
+	v.stampChecks(rep.Checks, confirmedAt)
 	out := HealthResponse{Report: rep, Findings: make([]FindingDTO, 0, len(rep.Findings))}
 	out.Report.Findings = nil // shadowed by out.Findings
 	for k, f := range rep.Findings {

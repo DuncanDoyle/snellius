@@ -1,7 +1,6 @@
 package api_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -21,13 +20,6 @@ import (
 // Handler tests of what secure mode shows a viewer without the full read
 // (D-106): own-object findings whose basis they can read, collection
 // failures, and "Not checked" for every other result.
-
-var ns0 = testutil.ScaleNamespace(0)
-
-// gw0 is the parentRef to the Gateway of ns-000.
-func gw0() []objects.ParentRef {
-	return []objects.ParentRef{testutil.GwRef(ns0, testutil.ScaleGateway(0))}
-}
 
 // findingsOf is every finding row user sees.
 func findingsOf(t *testing.T, srv *httptest.Server, user string) []api.FindingRow {
@@ -116,7 +108,7 @@ func stuckIn(s ruleSnap, ns string, n int) {
 }
 
 // A namespace-scoped viewer sees the own-object findings on their objects
-// (002, 003, 013) and none of the derived ones (012, 018). A finding whose
+// (002, 003, 013) and none of the derived ones (012, 018, 022). A finding whose
 // analyzer named a hidden parent is hidden too, as its basis is per resource (D-108 item 4).
 func TestOwnObjectShownDerivedNot(t *testing.T) {
 	srv := ruleServe(t, ruleWorld(t, ruleChange{name: "mixed", apply: func(s ruleSnap) {
@@ -127,10 +119,13 @@ func TestOwnObjectShownDerivedNot(t *testing.T) {
 		two := routeTo(ns0, "two-parents", append(gw0(), hiddenGW("hidden-gw")...), "", "", true)
 		setParents(two, "Accepted", "NotAllowedByListeners")
 		s.add(two)
+		// Mixed Gateway API CRD bundles raise a 022.
+		s.CRDs[0].BundleVersion = "v1.3.0"
 	}}))
 	full, restricted := findingsOf(t, srv, fullUser), findingsOf(t, srv, restrictedUser)
 	fc, rc := codes(full), codes(restricted)
-	for _, c := range []string{health.CodeConditionFalse, health.CodeRouteUnattached, health.CodeRefUnresolved, health.CodeComputedDisagrees, health.CodeStatusNotProgressing} {
+	for _, c := range []string{health.CodeConditionFalse, health.CodeRouteUnattached, health.CodeRefUnresolved, health.CodeComputedDisagrees,
+		health.CodeStatusNotProgressing, health.CodeVersionSkew} {
 		if !fc[c] {
 			t.Errorf("the full viewer lacks %s; the fixture does not reach it", c)
 		}
@@ -326,20 +321,28 @@ func TestDataPlaneShownOnly(t *testing.T) {
 	}
 }
 
-// A finding the viewer is not shown answers the 404 of an absent ID.
+// A finding the viewer is not shown answers the 404 of an absent ID. A shown
+// one answers whole, and one whose resource the viewer may only get by name
+// answers whole and ungrouped, though the list leaves it out.
 func TestFindingDetailHidden404(t *testing.T) {
-	srv := ruleServe(t, ruleWorld(t, ruleChanges[slices.IndexFunc(ruleChanges, func(c ruleChange) bool { return c.name == "faulty" })]))
-	var hidden, shown string
+	srv := ruleServe(t, ruleWorld(t, ruleChange{name: "faulty+named", apply: func(s ruleSnap) {
+		ruleChanges[slices.IndexFunc(ruleChanges, func(c ruleChange) bool { return c.name == "faulty" })].apply(s)
+		named := routeTo(hiddenNS, namedOnly, gw0(), "", "", true)
+		setParents(named, "Accepted", "NotAllowedByListeners")
+		s.add(named)
+	}}))
+	var hidden, byName string
 	for _, f := range findingsOf(t, srv, fullUser) {
 		switch {
+		case f.Resource != nil && f.Resource.Name == namedOnly && f.Code == health.CodeConditionFalse:
+			byName = f.ID
 		case f.Resource != nil && f.Resource.Namespace == hiddenNS && hidden == "":
 			hidden = f.ID
-		case f.Resource != nil && f.Resource.Namespace == ns0 && f.Code == health.CodeConditionFalse && shown == "":
-			shown = f.ID
 		}
 	}
-	if hidden == "" {
-		t.Fatal("no finding on a hidden object")
+	shown := findingsOf(t, srv, restrictedUser)
+	if hidden == "" || byName == "" || len(shown) == 0 {
+		t.Fatalf("fixture: hidden %q, by name %q, %d shown", hidden, byName, len(shown))
 	}
 	if code, _ := fetch(t, srv, fullUser, ruleBase+"/findings/"+hidden); code != http.StatusOK {
 		t.Errorf("full viewer: %d", code)
@@ -349,11 +352,16 @@ func TestFindingDetailHidden404(t *testing.T) {
 	if code != http.StatusNotFound || absentCode != code || strings.ReplaceAll(body, hidden, "") != strings.ReplaceAll(absent, "f1-aaaaaaaaaaaaaaaaaaaaaaaaaa", "") {
 		t.Errorf("hidden finding: %d %s, absent one: %d %s", code, body, absentCode, absent)
 	}
-	if shown != "" {
-		var d api.FindingDetail
-		if code, b := fetch(t, srv, restrictedUser, ruleBase+"/findings/"+shown); code != http.StatusOK || json.Unmarshal([]byte(b), &d) != nil || d.Finding.Restricted {
-			t.Errorf("shown finding: %d %s", code, b)
-		}
+	d := decode[api.FindingDetail](t, srv, restrictedUser, ruleBase+"/findings/"+shown[0].ID)
+	if d.Finding.Restricted || d.Finding.EvidenceRestricted || d.Finding.Message == "" || d.Finding.Group != shown[0].Group {
+		t.Errorf("shown finding detail %+v, want it whole, as listed", d.Finding)
+	}
+	if slices.ContainsFunc(shown, func(f api.FindingRow) bool { return f.ID == byName }) {
+		t.Fatal("the list shows a finding whose resource the viewer may get by name only")
+	}
+	n := decode[api.FindingDetail](t, srv, restrictedUser, ruleBase+"/findings/"+byName)
+	if n.Finding.Restricted || n.Finding.Message == "" || n.Finding.Group != "" || n.Affected.Total != 0 {
+		t.Errorf("by-name finding detail %+v, want it whole and ungrouped", n.Finding)
 	}
 }
 

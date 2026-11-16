@@ -193,6 +193,24 @@ func TestCommitOutageNever404(t *testing.T) {
 		t.Errorf("GET %s denied: %d %s, want 404", detail, code, body)
 	}
 	wantUnavailable(t, secureServer(t, e, &fullAuthz{errAuthz: &errAuthz{deny: hiddenSome}, err: errOutage}), detail)
+	// An own-object finding on a denied resource: 404 when the named check
+	// denies its resource, 503 when that check fails.
+	rejected := func(ref objects.Ref) bool {
+		return ref.Kind == "HTTPRoute" && ref.Namespace == "shop" && ref.Name == "rejected"
+	}
+	var own string
+	for _, f := range get[HealthResponse](t, local, base+"/health", 200).Findings {
+		if f.Resource != nil && rejected(f.Resource.Ref) && f.Code == health.CodeConditionFalse {
+			own = base + "/findings/" + f.ID
+		}
+	}
+	if own == "" {
+		t.Fatal("visWorld has no KGWUI-002 on shop/rejected")
+	}
+	if code, _, body := fetchRaw(t, secureServer(t, e, &errAuthz{deny: rejected}), own); code != http.StatusNotFound {
+		t.Errorf("GET %s denied: %d %s, want 404", own, code, body)
+	}
+	wantUnavailable(t, secureServer(t, e, &errAuthz{deny: rejected, failAt: 1}), own)
 }
 
 // refsExt asks about n distinct refs through Visible and writes how many it may see.

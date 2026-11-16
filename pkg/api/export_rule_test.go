@@ -35,8 +35,9 @@ func (m ruleMetrics) Get(id string) (ctrlmetrics.Result, bool) {
 	return ctrlmetrics.Result{CollectedAt: m.now(), Metrics: ctrlmetrics.Metrics{Rejects: r, Managed: map[ctrlmetrics.ManagedKey]float64{}, ManagedPresent: true}}, true
 }
 
-// RuleCollected is the engine's Collected for the rule harness: install id's
-// controller metrics at now(), rejecting on each Gateway named in rejects.
-func RuleCollected(id string, now func() time.Time, rejects ...ctrlmetrics.GatewayKey) func() collect.Snapshot {
-	return served(ruleMetrics{id: id, now: now, rejects: rejects}, 30*time.Second, nil)
+// RuleCollected is the engine's Collected for the rule harness: base's values
+// (none when nil) and install id's controller metrics at now(), rejecting on
+// each Gateway named in rejects.
+func RuleCollected(id string, now func() time.Time, base func() collect.Snapshot, rejects ...ctrlmetrics.GatewayKey) func() collect.Snapshot {
+	return served(ruleMetrics{id: id, now: now, rejects: rejects}, 30*time.Second, base)
 }
