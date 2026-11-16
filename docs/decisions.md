@@ -1557,3 +1557,15 @@ Measured on the reference machine, 5 runs per world:
 4. Findings keep their per-finding basis (design §7.3). Anything decided by history or a threshold (grace timers, `Since`, deadlines, global caps such as the Events cap) has its whole population in the basis, as a permission, never derived from which objects exist.
 
 **Consequences:** The decision depends only on permissions, so hidden objects never change it. Restricted viewers mostly see "Not checked" in "What was checked"; full-read viewers and local mode are unchanged. The per-result projection machinery is not built.
+
+## D-105 — Two classes of finding, and reads checked by the tests (2026-11-16, Phase 7, amends D-104 item 4)
+**Status:** our call (2026-11-16), after the fifth Codex pass over the 7.4 plan. The user may override.
+
+**Context:** Five review passes found inputs missing from hand-written declarations: kinds a check reads, and the populations behind persistence windows, timers and representatives selected over many objects (listener counts, computed delegation, CRD bundles, proxy stats).
+
+**Decision:**
+1. **Own-object findings** are decided only by their resource and the objects it names (its status, spec and named refs, including their grace by first sight). They keep the per-finding basis of design §7.3.
+2. **Derived findings** are every other finding: computed views, aggregates, skew, process, probes, proxy stats, anything selected over a population or gated by a population's timer. A viewer without the full read sees one only when they may `list` every kind its analyzer declares, cluster-wide, as D-104 does for check results.
+3. Declarations are checked by the tests, not by review: every check and analyzer runs over a recording snapshot, and a test fails when one reads a kind it does not declare, or when an own-object analyzer reads anything other than its resource and the objects it names.
+
+**Consequences:** A restricted application-team viewer sees the findings about their own objects (not accepted, ref not found, conflicts on their routes) and not the platform-wide derived ones (listener-count disagreement, version skew, proxy stats). Full-read viewers and local mode are unchanged. A missing declaration fails a test instead of leaking.
