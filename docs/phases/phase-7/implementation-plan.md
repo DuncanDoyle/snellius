@@ -432,7 +432,7 @@ Install surface: **new flags** (secure mode only) `--authz-max-in-flight` (defau
 
 **Files:** `README.md`, `deploy/helm/snellius/README.md`, `deploy/helm/snellius/values.yaml` comments, `templates/NOTES.txt`, `docs/documentation-notes.md`.
 
-- The defaults are the secure choice: allowed answers 60 s, denials 5 min, lists by `list` permission.
+- The defaults are the secure choice: allowed answers 60 s, denials 4 to 5 min, lists by `list` permission.
 - **Tighten:** `auth.authz.cacheTTL: 30s` (a revoked permission shows for at most 30 s, about twice the SARs); shorter `auth.session.absolute`. Say plainly that `auth.session.idle` does not end a session while a visible tab keeps polling.
 - **Relax:** `cacheTTL` up to 15 min, with its cost: a revoked permission stays visible that long.
 - Global limits (`maxInFlight`, `rate`, `burst`) and when to raise them (large clusters, many viewers).
@@ -443,7 +443,7 @@ Install surface: **new flags** (secure mode only) `--authz-max-in-flight` (defau
 
 **Files:** `pkg/api/sar_bench_test.go`, `export_bench_test.go`.
 
-- `TestBudgetSARDeniedList` rerun, report-only, with the D-100 defaults (allow 60 s, deny 5 min, list enumeration, 8 workers, global limits) for a viewer allowed 10 of the Large fixture's 100 namespaces. Targets, stated in the report next to each number:
+- `TestBudgetSARDeniedList` rerun, report-only, with the D-100 defaults (allow 60 s, deny 4 to 5 min, list enumeration, 8 workers, global limits) for a viewer allowed 10 of the Large fixture's 100 namespaces. Targets, stated in the report next to each number:
   1. `/routes`: at most 400 SARs cold; at most 150 SARs per minute warm at a 5 s poll; every poll 200 without contention.
   2. `/gateways`, `/listenersets`, `/paths`: at most 400 SARs cold each, `/backends` at most 550, and every poll 200 without contention (D-100 item 7, amended).
   3. Details: cold and warm SARs reported.
