@@ -1114,13 +1114,14 @@ const diagnostics = shape<Diagnostics>(
       { controller: "!", proxies: "!" },
       {
         controller: shape<Diagnostics["processes"]["controller"]>(
-          { state: "!", observed: "!", ready: "?", desired: "?", version: "?", restricted: "?" },
+          { state: "!", observed: "!", ready: "?", desired: "?", version: "?", restricted: "?", notAssessed: "?" },
           {},
           { state: healthState },
         ),
         proxies: shape<Diagnostics["processes"]["proxies"]>(
           {
             state: "!",
+            notAssessed: "?",
             gateways: "!",
             ready: "!",
             rejecting: "!",
@@ -1165,6 +1166,7 @@ const processSet = shape<ProcessSet>(
     processes: "!",
     rollout: "?",
     restricted: "?",
+    notAssessed: "?",
   },
   {
     processes: processInfo,
@@ -1180,7 +1182,7 @@ const processes = shape<ProcessesResponse>(
     controller: processSet,
     proxies: page(
       shape<GatewayProcesses>(
-        { gateway: "!", health: "!", set: "!", rejects: "?", skew: "?" },
+        { gateway: "!", health: "!", notAssessed: "?", set: "!", rejects: "?", skew: "?" },
         { gateway: linkedRef, set: processSet },
         { health: healthState },
       ),

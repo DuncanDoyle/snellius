@@ -704,6 +704,22 @@ it("the hidden-routes line shows once for the route sections, and single pages h
   expect(screen.queryByRole("button", { name: "Next page" })).toBeNull();
 });
 
+it("secure mode sends no hidden count, so the hidden-routes line never shows there", async () => {
+  const base = api();
+  serve((u) => {
+    const b = base(u);
+    return u.pathname === `${API}/routes` ? { ...(b as RouteList), deniedInInstall: 2 } : b;
+  });
+  document.documentElement.dataset.authMode = "secure";
+  try {
+    mount(GW_PATH);
+    await within(await screen.findByRole("table", { name: "Attached routes" })).findByText("cart");
+    expect(screen.queryByText("You cannot view 2 routes in this install.")).toBeNull();
+  } finally {
+    delete document.documentElement.dataset.authMode;
+  }
+});
+
 // region View A (2.3)
 const EDGE = `${GW}/Gateway/infra/edge`;
 const edgeRef = { group: GW, kind: "Gateway", namespace: "infra", name: "edge", link: "detail" as const };
@@ -803,6 +819,20 @@ it("unknown listeners show no number; a hidden Namespace hides no count", async 
   const details = screen.getByTestId("listener-tcp-details");
   expect(details).toHaveTextContent("Computed routes: No count");
   expect(details).not.toHaveTextContent("None");
+});
+
+it("a count without its check shows the count and Not checked", async () => {
+  const g = gateway();
+  g.listeners = g.listeners.map((l) =>
+    l.name === "http" ? { ...l, computed: undefined, computedRoutes: 4, isolationNote: false } : l,
+  );
+  serve(api({ gateway: g }));
+  mount(GW_PATH);
+  const listeners = await screen.findByRole("table", { name: "Listeners" });
+  const cell = within(rowOf(listeners, "http")).getByTestId("computed-cell");
+  expect(cell).toHaveTextContent("4");
+  expect(within(cell).getByTestId("not-checked")).toHaveTextContent("Not checked");
+  expect(within(cell).queryByTestId("computed-badge")).toBeNull();
 });
 
 it("controller values carry no badge", async () => {

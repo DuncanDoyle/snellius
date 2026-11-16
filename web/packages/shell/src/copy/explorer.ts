@@ -536,6 +536,7 @@ export const diagnosticsCopy = {
   notAvailable: "Not available", // S358
   notChecked: "Not checked", // S840
   notCheckedReason: "Your permissions don't cover everything this check reads", // S841
+  notCheckedStatus: "Your permissions don't cover what this status depends on", // S842
   deciding: "Deciding",
   decidingOn: (n: number, when: string) => `Deciding on ${plural(n, ["object", "objects"])}, ${when}`,
   unavailableReason: {

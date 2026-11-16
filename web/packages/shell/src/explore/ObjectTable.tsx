@@ -13,6 +13,7 @@ import { ArrowDown, ArrowUp, ChevronDown, ChevronRight } from "lucide-react";
 import { type KeyboardEvent, type MouseEvent, type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { LinkedRef, Page } from "../api/types";
+import { isSecureMode } from "../auth/mode";
 import { listCopy } from "../copy/explorer";
 import { useLinkVia } from "../shell/trail";
 import { useMedia } from "../shell/useMedia";
@@ -271,7 +272,9 @@ export function ObjectTable<T>({
 }: ObjectTableProps<T>) {
   const navigate = useNavigate();
   const narrow = useMedia(NARROW);
-  const denied = showDenied && page?.deniedInInstall ? listCopy.denied(page.deniedInInstall, noun) : null;
+  // Secure mode sends no hidden count; local mode keeps the denied line (D-013).
+  const denied =
+    showDenied && !isSecureMode() && page?.deniedInInstall ? listCopy.denied(page.deniedInInstall, noun) : null;
   const pager = !page || !!page.prev || !!page.next;
   const footerEmpty = !denied && !pager;
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
