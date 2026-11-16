@@ -59,6 +59,7 @@ const (
 	// The two viewers: full may list everything, restricted the first ten scale namespaces.
 	fullUser       = "full"
 	restrictedUser = "restricted"
+	routeReader    = "route-reader"
 )
 
 var (
@@ -167,8 +168,9 @@ func hiddenGW(name string) []objects.ParentRef {
 // proxy, a hidden Backend and a hidden route between them, all healthy; a
 // hidden route to a hidden Service; a visible route to a visible Service; a
 // hidden parent route delegating to a visible child; a visible TrafficPolicy
-// selecting routes by label; a visible Backend that is not accepted; and the
-// Service, EndpointSlice, Event and CRD watches on.
+// selecting routes by label; a visible Backend that is not accepted; visible
+// routes naming hidden-gw, an absent hidden Gateway and a hidden child; and
+// the Service, EndpointSlice, Event and CRD watches on.
 func ruleSnapshot(t *testing.T) ruleSnap {
 	s := ruleSnap{t, scale.Snapshot(ruleTier, 1)}
 	s.add(testutil.Gateway(hiddenNS, "hidden-gw", scale.Class, nil), testutil.Backend(hiddenNS, "hidden-be", nil),
@@ -179,9 +181,15 @@ func ruleSnapshot(t *testing.T) ruleSnap {
 		delegating(hiddenNS, "hidden-parent", hiddenGW("hidden-gw"), ns0, "child"),
 		child(ns0, "child", objects.ParentRef{Group: objects.GatewayAPIGroup, Kind: "HTTPRoute", Namespace: hiddenNS, Name: "hidden-parent"}),
 		selectorPolicy(ns0, "selector-policy"),
-		testutil.Backend(ns0, "rejected-be", []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}))
+		testutil.Backend(ns0, "rejected-be", []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}),
+		routeTo(ns0, namesHidden, append(gw0(), hiddenGW("hidden-gw")...), ns0, "be-0000", true),
+		routeTo(ns0, namesAbsent, hiddenGW("absent-gw"), ns0, "be-0000", false),
+		delegating(ns0, delegToHidden, gw0(), hiddenNS, "hidden-child"))
 	// hidden-gw's proxy is not ready, so its 006 can carry the controller's deployer errors.
 	s.Deployments = append(s.Deployments, testutil.ProxyDeployment(hiddenNS, "hidden-gw", 1, 0))
+	// hidden-spare is a hidden Gateway no readable object depends on; its proxy is not ready either.
+	s.add(testutil.Gateway(hiddenNS, "hidden-spare", scale.Class, nil))
+	s.Deployments = append(s.Deployments, testutil.ProxyDeployment(hiddenNS, "hidden-spare", 1, 0))
 	s.Services = append(s.Services, service(hiddenNS, "hidden-svc"), service(ns0, "shared"))
 	s.EndpointSlices = append(s.EndpointSlices, slice(hiddenNS, "hidden-svc", 2), slice(ns0, "shared", 2))
 	for _, g := range []schema.GroupVersionResource{cache.ServicesGVR, cache.EndpointSlicesGVR, cache.EventsGVR, cache.CRDsGVR} {
@@ -192,6 +200,15 @@ func ruleSnapshot(t *testing.T) ruleSnap {
 	}
 	return s
 }
+
+// Visible routes of the base world whose neighbours are hidden: one on gw0
+// and hidden-gw, one naming an absent hidden Gateway (admitted only by its
+// finding), and one delegating to a hidden child.
+const (
+	namesHidden   = "names-hidden"
+	namesAbsent   = "names-absent"
+	delegToHidden = "deleg-to-hidden"
+)
 
 // gw0 is the parentRef to the Gateway of ns-000.
 func gw0() []objects.ParentRef {
@@ -331,11 +348,12 @@ var ruleChanges = []ruleChange{
 		s.EndpointSlices = append(s.EndpointSlices, slice(hiddenNS, "hidden-new-svc", 2))
 		s.add(serviceRoute(hiddenNS, "hidden-new-svc-route", hiddenGW("hidden-new-gw"), hiddenNS, "hidden-new-svc"))
 	}},
+	// hidden-spare goes, not hidden-gw: deleting a readable route's parent changes membership (D-107).
 	{name: "deleted", apply: func(s ruleSnap) {
 		s.remove("HTTPRoute", hiddenNS, "hidden-route")
 		s.remove("Backend", hiddenNS, "hidden-be")
-		s.remove("Gateway", hiddenNS, "hidden-gw")
-		s.removeDeployment(hiddenNS, "hidden-gw")
+		s.remove("Gateway", hiddenNS, "hidden-spare")
+		s.removeDeployment(hiddenNS, "hidden-spare")
 	}},
 	{name: "faulty", apply: func(s ruleSnap) {
 		failFirstParent(s.get("HTTPRoute", hiddenNS, "hidden-route"))
@@ -416,6 +434,15 @@ var ruleChanges = []ruleChange{
 	// The only consumer of a readable rejected Backend is hidden.
 	{name: "backendConsumer", apply: func(s ruleSnap) {
 		s.add(routeTo(hiddenNS, "hidden-rejected-consumer", hiddenGW("hidden-gw"), ns0, "rejected-be", true))
+	}},
+	// A hidden child of a visible delegating parent appears.
+	{name: "hiddenChild", apply: func(s ruleSnap) {
+		s.add(child(hiddenNS, "hidden-child", objects.ParentRef{Group: objects.GatewayAPIGroup, Kind: "HTTPRoute", Namespace: ns0, Name: delegToHidden}))
+	}},
+	// A hidden route attaches to a visible ListenerSet.
+	{name: "listenerSetRoute", apply: func(s ruleSnap) {
+		ls := objects.ParentRef{Group: objects.GatewayAPIGroup, Kind: "ListenerSet", Namespace: ns0, Name: "ls-0000"}
+		s.add(routeTo(hiddenNS, "hidden-ls-route", []objects.ParentRef{ls}, hiddenNS, "hidden-be", true))
 	}},
 	// The extension check fails on a hidden Backend once it is marked.
 	{name: "extension", apply: func(s ruleSnap) {
@@ -575,11 +602,12 @@ func ruleIdentity(ctx context.Context) (oidc.Identity, bool) {
 
 // ruleChecker allows the full viewer everything and the restricted one every
 // list and get in the first ten scale namespaces, apart from kindLimited in
-// kindLimitedNS, plus a get of namedOnly.
+// kindLimitedNS, plus a get of namedOnly. routeReader is restricted plus every
+// route kind in every namespace and cluster-wide.
 type ruleChecker struct{}
 
 func (ruleChecker) Check(_ context.Context, id oidc.Identity, a sar.Attributes) (bool, error) {
-	if id.Username == fullUser {
+	if id.Username == fullUser || id.Username == routeReader && strings.HasSuffix(a.Resource, "routes") {
 		return true, nil
 	}
 	if a.Verb == "get" && a.Namespace == hiddenNS && a.Name == namedOnly {
@@ -655,10 +683,21 @@ func decode[T any](t *testing.T, srv *httptest.Server, user, path string) T {
 	return v
 }
 
-// ruleSurface is one response the rule covers; its path may depend on the worlds compared.
+// ruleSurface is one response the rule covers; its path may depend on the
+// worlds compared. Every change must leave it unchanged for the restricted
+// viewer; when changes is set, the reach and bypass tests ask only those.
 type ruleSurface struct {
-	name string
-	path func(t *testing.T, before, after *httptest.Server) string
+	name    string
+	path    func(t *testing.T, before, after *httptest.Server) string
+	changes []string
+}
+
+// asks reports whether the reach and bypass tests ask surface s about change c.
+func (s ruleSurface) asks(c string) bool { return s.changes == nil || slices.Contains(s.changes, c) }
+
+// routePath is the detail path of the HTTPRoute ns/name, plus suffix.
+func routePath(ns, name, suffix string) func(*testing.T, *httptest.Server, *httptest.Server) string {
+	return fixed("/routes/" + objects.GatewayAPIGroup + "/HTTPRoute/" + ns + "/" + name + suffix)
 }
 
 func fixed(p string) func(*testing.T, *httptest.Server, *httptest.Server) string {
@@ -742,6 +781,19 @@ var ruleSurfaces = []ruleSurface{
 	{name: "/findings?view=groups", path: fixed("/findings?view=groups&limit=200")},
 	{name: "/diagnostics", path: fixed("/diagnostics")},
 	{name: "finding detail", path: hiddenFindingDetail},
+	// Lists and details whose neighbours the changes reach (Task 33).
+	{name: "/routes", path: fixed("/routes?limit=200"), changes: []string{"listenerCount", "listenerSetRoute", "rejecting", "hiddenChild"}},
+	{name: "/gateways", path: fixed("/gateways?limit=200"), changes: []string{"listenerCount", "created"}},
+	{name: "/listenersets", path: fixed("/listenersets?limit=200"), changes: []string{"listenerSetRoute"}},
+	{name: "/processes", path: fixed("/processes?limit=200"), changes: []string{"proxyReadyDeployment", "threshold"}},
+	{name: "route detail (hidden parent)", path: routePath(ns0, "child", ""), changes: []string{"computedTrigger"}},
+	{name: "route detail (hidden Gateway)", path: routePath(ns0, namesHidden, ""), changes: []string{"rejecting"}},
+	{name: "delegation", path: routePath(ns0, delegToHidden, "/delegation"), changes: []string{"hiddenChild"}},
+	{name: "route detail (hidden child)", path: routePath(ns0, delegToHidden, ""), changes: []string{"hiddenChild"}},
+	{name: "Gateway detail", path: fixed("/gateways/" + ns0 + "/" + testutil.ScaleGateway(0)), changes: []string{"listenerCount"}},
+	{name: "ListenerSet detail", path: fixed("/listenersets/" + objects.GatewayAPIGroup + "/ListenerSet/" + ns0 + "/ls-0000"), changes: []string{"listenerSetRoute"}},
+	{name: "YAML (finding only)", path: fixed("/resources/" + objects.GatewayAPIGroup + "/HTTPRoute/" + ns0 + "/" + namesAbsent), changes: []string{}},
+	{name: "YAML (hidden)", path: fixed("/resources/" + objects.GatewayAPIGroup + "/HTTPRoute/" + hiddenNS + "/hidden-route"), changes: []string{"faulty"}},
 }
 
 // ruleMasks are, per surface and change, the JSON paths (dot-separated) the
@@ -763,6 +815,7 @@ var ruleNotApplicable = map[[2]string]string{
 	{"/diagnostics", "listenerCount"}:           detailOnly,
 	{"/findings?view=groups", "selectorTarget"}: detailOnly,
 	{"/diagnostics", "selectorTarget"}:          detailOnly,
+	{"/listenersets", "listenerSetRoute"}:       sameNamespace,
 }
 
 // Why a change cannot reach a surface for the full viewer either.
@@ -770,15 +823,19 @@ const (
 	ctrlLogsOnly  = "the deployer error lands only in the hidden Gateway's 006 evidence, which only /health serialises"
 	eventsCapOnly = "the Events cap changes only the probe failures check's detail; no finding"
 	detailOnly    = "only a 012's detail changes; group rows and the diagnostics show its message and counts"
+	sameNamespace = "ls-0000's listener admits its own namespace only, so the hidden route is no member and the routes column stays"
 )
 
 // ruleHeldBefore are the pairs the 7.3 code already holds without the projection.
 var ruleHeldBefore = map[[2]string]string{
-	{"/health", "controller"}:            rowDropsDetail,
-	{"/health", "selectorTarget"}:        rowDropsDetail,
-	{"/findings", "selectorTarget"}:      rowDropsDetail,
-	{"/findings?q", "selectorTarget"}:    rowDropsDetail,
-	{"finding detail", "selectorTarget"}: rowDropsDetail,
+	{"/health", "controller"}:                  rowDropsDetail,
+	{"/health", "selectorTarget"}:              rowDropsDetail,
+	{"/findings", "selectorTarget"}:            rowDropsDetail,
+	{"/findings?q", "selectorTarget"}:          rowDropsDetail,
+	{"finding detail", "selectorTarget"}:       rowDropsDetail,
+	{"YAML (hidden)", "faulty"}:                "a hidden object's YAML answers 404 since 7.3",
+	{"delegation", "hiddenChild"}:              "rows of a hidden child are left out since 7.3, and the name ref's row stands for it either way",
+	{"ListenerSet detail", "listenerSetRoute"}: "routeCounts count visible routes since 7.3; the hidden route is no listener member",
 }
 
 // rowDropsDetail: the change alters only a hidden finding's detail or
@@ -882,6 +939,9 @@ func TestRuleChangesReachFullReader(t *testing.T) {
 	diffs := differences(t, rulePairs(t, ruleChanges), fullUser, nil)
 	for _, c := range ruleChanges {
 		for _, s := range ruleSurfaces {
+			if !s.asks(c.name) {
+				continue
+			}
 			key := [2]string{s.name, c.name}
 			_, differs := diffs[key]
 			reason, listed := ruleNotApplicable[key]
@@ -902,7 +962,7 @@ func TestRuleBypassBreaksInvariant(t *testing.T) {
 	for _, c := range ruleChanges {
 		for _, s := range ruleSurfaces {
 			key := [2]string{s.name, c.name}
-			if _, na := ruleNotApplicable[key]; na {
+			if _, na := ruleNotApplicable[key]; na || !s.asks(c.name) {
 				continue
 			}
 			_, differs := diffs[key]
@@ -993,7 +1053,7 @@ var installContext = []contextChange{
 		change: ruleChange{name: "parentListenerSet", apply: func(s ruleSnap) {
 			s.get("ListenerSet", hiddenNS, "hidden-ls").Object["spec"].(map[string]any)["parentRef"] = map[string]any{"name": "other-gw", "namespace": ns0}
 		}},
-		masks: map[string][]string{},
+		masks: map[string][]string{"/routes": listItems},
 	},
 	{
 		// Under a label selector, a readable namespace's Namespace object, hidden as every cluster-scoped object is, gains the label.
@@ -1009,6 +1069,9 @@ var installContext = []contextChange{
 	},
 }
 
+// listItems are a list's rows and total.
+var listItems = []string{"items", "total"}
+
 // gatewayCounts are the /diagnostics fields that count the install's Gateways.
 var gatewayCounts = []string{"dataPlane.gateways", "processes.proxies.gateways", "processes.proxies.notObserved"}
 
@@ -1019,6 +1082,7 @@ var scopeMasks = map[string][]string{
 	"/findings":             {"items", "total"},
 	"/findings?view=groups": {"items", "total"},
 	"/diagnostics":          append([]string{"groupTotal", "groups", "verdict.counts.error", "verdict.problems"}, gatewayCounts...),
+	"/routes":               listItems,
 }
 
 // withSearch is m with the search surface masked as the findings list.
@@ -1059,11 +1123,12 @@ func stableFindingDetail(t *testing.T, before, after *httptest.Server) string {
 	return ""
 }
 
-// contextSurfaces are ruleSurfaces with the detail of a finding membership leaves alone.
+// contextSurfaces are the finding surfaces, with the detail of a finding
+// membership leaves alone, and the routes list, whose rows membership moves.
 func contextSurfaces() []ruleSurface {
-	out := slices.Clone(ruleSurfaces)
-	out[len(out)-1] = ruleSurface{name: "finding detail", path: stableFindingDetail}
-	return out
+	out := slices.Clone(ruleSurfaces[:6])
+	out[5] = ruleSurface{name: "finding detail", path: stableFindingDetail}
+	return append(out, ruleSurface{name: "/routes", path: fixed("/routes?limit=200")})
 }
 
 // TestRuleInstallContextMayChange: an install-context change changes only the

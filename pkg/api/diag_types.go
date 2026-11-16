@@ -115,23 +115,30 @@ type ProcessSummaries struct {
 }
 
 // ProcessSummary is the controller line. State is the worst controller finding, unknown when not
-// observed and none fired; Restricted keeps the counts and state only (§14 rule 16).
+// observed and none fired; Restricted keeps the counts and state only (§14 rule 16) and is unset in
+// secure mode. NotAssessed marks a state from derived findings, which a viewer without the full read
+// is not shown (D-106): its State is unknown, and its counts are absent when the Deployment is hidden.
 type ProcessSummary struct {
 	State    health.State `json:"state"`
 	Observed bool         `json:"observed"`
 	Ready    *int32       `json:"ready,omitempty"`
 	Desired  *int32       `json:"desired,omitempty"`
 	// Version is the version every visible replica runs; empty when they differ.
-	Version    string `json:"version,omitempty"`
-	Restricted bool   `json:"restricted,omitempty"`
+	Version     string `json:"version,omitempty"`
+	Restricted  bool   `json:"restricted,omitempty"`
+	NotAssessed bool   `json:"notAssessed,omitempty"`
 }
 
 // ProxySummary counts the visible Gateways: those with every proxy ready, with
 // a reject, with version skew, with a restart, whose proxies are not observed, and whose
 // proxies are self-managed (KGWUI-010; also counted in NotObserved).
 // State is the worst known health of those Gateways; unknown when none is known.
+//
+// NotAssessed is as on ProcessSummary; then Ready and NotObserved count only the Gateways whose
+// proxy Deployments and Pods the viewer may list.
 type ProxySummary struct {
 	State       health.State `json:"state"`
+	NotAssessed bool         `json:"notAssessed,omitempty"`
 	Gateways    int          `json:"gateways"`
 	Ready       int          `json:"ready"`
 	Rejecting   int          `json:"rejecting"`
@@ -161,14 +168,16 @@ type ProcessesResponse struct {
 }
 
 // ProcessSetDTO is the processes behind one role; Observed false is "not observed", never failing.
-// Processes lists the Pods the caller may view; Restricted keeps the counts only (§14 rule 16).
+// Processes lists the Pods the caller may view; Restricted keeps the counts only (§14 rule 16) and
+// is unset in secure mode, where a set the caller may not read is NotAssessed with no counts.
 type ProcessSetDTO struct {
-	Observed   bool         `json:"observed"`
-	Desired    *int32       `json:"desired,omitempty"`
-	Ready      *int32       `json:"ready,omitempty"`
-	Processes  []ProcessDTO `json:"processes"`
-	Rollout    *RolloutDTO  `json:"rollout,omitempty"`
-	Restricted bool         `json:"restricted,omitempty"`
+	Observed    bool         `json:"observed"`
+	Desired     *int32       `json:"desired,omitempty"`
+	Ready       *int32       `json:"ready,omitempty"`
+	Processes   []ProcessDTO `json:"processes"`
+	Rollout     *RolloutDTO  `json:"rollout,omitempty"`
+	Restricted  bool         `json:"restricted,omitempty"`
+	NotAssessed bool         `json:"notAssessed,omitempty"`
 }
 
 // RolloutDTO is a workload's last rollout; Reason is a stuck one's.
@@ -193,16 +202,19 @@ type ProcessDTO struct {
 
 // GatewayProcesses is one Gateway's proxies: Health is its worst process or data-plane finding, Rejects
 // its rejecting streams, Skew a proxy on another controller version, patches included (never a finding).
+// NotAssessed is as on ProcessSummary: Health is then unknown.
 type GatewayProcesses struct {
-	Gateway LinkedRef     `json:"gateway"`
-	Health  health.State  `json:"health"`
-	Set     ProcessSetDTO `json:"set"`
-	Rejects *int          `json:"rejects,omitempty"`
-	Skew    bool          `json:"skew,omitempty"`
+	Gateway     LinkedRef     `json:"gateway"`
+	Health      health.State  `json:"health"`
+	NotAssessed bool          `json:"notAssessed,omitempty"`
+	Set         ProcessSetDTO `json:"set"`
+	Rejects     *int          `json:"rejects,omitempty"`
+	Skew        bool          `json:"skew,omitempty"`
 }
 
 // DataPlaneDTO is a Gateway's data plane (design §13.3). Rejecting says a KGWUI-001 is active;
 // its Rejects and RecentlyChanged need every evidence dependency (§14 rule 12), else EvidenceRestricted.
+// A viewer without the full read in secure mode gets no data plane: every fact in it is derived.
 type DataPlaneDTO struct {
 	Rejecting          bool             `json:"rejecting"`
 	Rejects            []DataPlaneTypes `json:"rejects"`

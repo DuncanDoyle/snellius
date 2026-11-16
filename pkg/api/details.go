@@ -47,6 +47,8 @@ type detail struct {
 	links map[objects.Ref]Link
 	// units counts what the response has materialized (maxPageUnits).
 	units int
+	// vw is v's explore form for the install.
+	vw explore.Viewer
 }
 
 // maxPageUnits bounds the contexts one response materializes (design §7.3).
@@ -128,7 +130,7 @@ func (h *handler) startDetail(w http.ResponseWriter, r *http.Request) *detail {
 	}
 	v := h.view(r)
 	l := h.linker(v, p, i, nil, nil)
-	return &detail{h: h, r: r, p: p, i: i, ix: ix, v: v, l: l, f: facts{ix: ix, v: v, l: l}}
+	return &detail{h: h, r: r, p: p, i: i, ix: ix, v: v, l: l, f: facts{ix: ix, v: v, l: l}, vw: v.viewer(i)}
 }
 
 // open returns the object ref names and its candidate block when the
@@ -148,7 +150,11 @@ func (d *detail) open(w http.ResponseWriter, ref objects.Ref) (*unstructured.Uns
 		return u, nil
 	}
 	c := &Candidate{Reason: a.Reason}
-	if a.Reason == explore.ReasonReferenced || a.Reason == explore.ReasonSelected {
+	if a.Reason == explore.ReasonFinding && !d.l.findingShown(ref, true) {
+		// Admitted through a referrer, as its findings are not shown.
+		c.Reason = explore.ReasonReferenced
+	}
+	if c.Reason == explore.ReasonReferenced || c.Reason == explore.ReasonSelected {
 		// The first visible referrer; link() admitted ref only because one exists.
 		for _, by := range a.Referrers {
 			if d.v.can(by) {
@@ -235,7 +241,7 @@ func (d *detail) listeners(u *unstructured.Unstructured, ls []objects.Listener, 
 
 // reason is the list rows' reason for ref in state st, with the deciding finding's id.
 func (d *detail) reason(ref objects.Ref, st health.State) *DetailReason {
-	w := d.ix.Findings[ref]
+	w := d.ix.WorstOf(ref, d.vw)
 	r := w.Reason(st)
 	if r == nil {
 		return nil
@@ -260,9 +266,9 @@ func (h *handler) gatewayDetail(w http.ResponseWriter, r *http.Request) {
 	var v *objects.GatewayView
 	var st health.State
 	if id, ok := d.ix.FindGateway(ref); ok {
-		v, st = d.ix.Gateways[id].View, d.ix.Gateways[id].State
+		v, st = d.ix.Gateways[id].View, d.ix.StateOf(ref, d.vw)
 	} else {
-		v, st = objects.DecodeGateway(u), explore.RowState(ref, d.i.Health)
+		v, st = objects.DecodeGateway(u), explore.RowState(ref, d.v.report(d.i))
 	}
 	out := GatewayDetail{Install: d.i.Resolved.ID(), Ref: LinkedRef{Ref: ref, Link: LinkDetail}, Generation: u.GetGeneration(), Class: v.Class,
 		Health: st, Candidate: cand, RuleSet: d.ix.RuleSet, RuleSetLabel: d.ix.RuleLabel, Conditions: conditions(u, v.Conditions), Addresses: append([]string{}, v.StatusAddresses...),
@@ -271,6 +277,10 @@ func (h *handler) gatewayDetail(w http.ResponseWriter, r *http.Request) {
 	out.Reason = d.reason(ref, st)
 	if cand == nil {
 		out.DataPlane, out.Proxies = d.dataPlane(ref)
+		if d.v.projects() {
+			// Every data-plane fact is derived (D-106): the block is absent.
+			out.DataPlane = nil
+		}
 	}
 	writeJSON(w, out)
 }
@@ -286,7 +296,7 @@ func (d *detail) dataPlane(gw objects.Ref) (*DataPlaneDTO, *ProcessSetDTO) {
 			set = &s
 		}
 	}
-	proxies := ps.set(set, gw.Namespace, ps.facts[gw], true)
+	proxies := ps.set(set, gw.Namespace, ps.facts[gw], ps.proxiesReadable(&gatewayProc{ref: gw, set: set}))
 	fs := d.i.Health.Findings
 	on := func(code string) int {
 		return slices.IndexFunc(fs, func(f health.Finding) bool { return f.Code == code && f.Resource != nil && *f.Resource == gw })
@@ -447,9 +457,9 @@ func (h *handler) listenerSetDetail(w http.ResponseWriter, r *http.Request) {
 	var v *objects.ListenerSetView
 	var st health.State
 	if id, ok := d.ix.FindListenerSet(ref); ok {
-		v, st = d.ix.ListenerSets[id].View, d.ix.ListenerSets[id].State
+		v, st = d.ix.ListenerSets[id].View, d.ix.ListenerSetStateOf(id, d.vw)
 	} else {
-		v, st = objects.DecodeListenerSet(u), explore.RowState(ref, d.i.Health)
+		v, st = objects.DecodeListenerSet(u), explore.RowState(ref, d.v.report(d.i))
 	}
 	parent := v.Parent.Ref()
 	out := ListenerSetDetail{Install: d.i.Resolved.ID(), Ref: LinkedRef{Ref: ref, Link: LinkDetail}, Generation: u.GetGeneration(), Health: st,
@@ -502,15 +512,15 @@ func (h *handler) routeDetail(w http.ResponseWriter, r *http.Request) {
 	id, row := d.ix.Row(ref)
 	switch {
 	case row && d.ix.Routes[id].View != nil:
-		v, st = d.ix.Routes[id].View, d.ix.Routes[id].State
+		v, st = d.ix.Routes[id].View, d.routeState(id)
 	case ref.Kind == "HTTPRoute":
-		v, st = objects.DecodeHTTPRoute(u), explore.RowState(ref, d.i.Health)
+		v, st = objects.DecodeHTTPRoute(u), explore.RowState(ref, d.v.report(d.i))
 	default:
 		// The other kinds share the HTTPRoute shape without annotations or delegation.
 		rv := objects.DecodeRoute(u)
-		v, st = &objects.HTTPRouteView{Hostnames: rv.Hostnames, ParentRefs: rv.ParentRefs, Parents: rv.Parents, Rules: objects.DecodeRouteRules(u)}, explore.RowState(ref, d.i.Health)
+		v, st = &objects.HTTPRouteView{Hostnames: rv.Hostnames, ParentRefs: rv.ParentRefs, Parents: rv.Parents, Rules: objects.DecodeRouteRules(u)}, explore.RowState(ref, d.v.report(d.i))
 		if row {
-			st = d.ix.Routes[id].State
+			st = d.routeState(id)
 		}
 	}
 	out := RouteDetail{Install: d.i.Resolved.ID(), Ref: LinkedRef{Ref: ref, Link: LinkDetail}, Generation: u.GetGeneration(), Health: st,
@@ -519,7 +529,7 @@ func (h *handler) routeDetail(w http.ResponseWriter, r *http.Request) {
 		ChildCount: d.count(d.ix.ByParentRoute[ref]), DeclaredCount: d.count(d.ix.Declared[ref]), CollectedAt: wireTime(d.p.ConfirmedAt)}
 	out.Reason = d.reason(ref, st)
 	if row {
-		if rr := routeReason(d.ix, d.v, d.l, id); rr != nil && rr.Kind == health.ReasonBackendProblem {
+		if rr := routeReason(d.ix, d.v, d.vw, d.l, id); rr != nil && rr.Kind == health.ReasonBackendProblem {
 			out.Reason = &DetailReason{RowReason: rr.RowReason, Backend: rr.Backend}
 		}
 	}
@@ -547,8 +557,15 @@ func (h *handler) routeDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// routeState is route row id's state for the caller.
+func (d *detail) routeState(id explore.RowID) health.State {
+	st, _, _ := d.ix.RouteStateOf(id, d.vw)
+	return st
+}
+
 // attachments is view A for each Gateway or ListenerSet parentRef of route
-// row id, in parentRef order; nil when none was computed.
+// row id, in parentRef order; nil when none was computed. In secure mode a
+// restricted one is left out.
 func (d *detail) attachments(id explore.RowID, refs []objects.ParentRef) []RouteAttachment {
 	fs := d.ix.Routes[id].Computed
 	if len(fs) == 0 {
@@ -560,7 +577,11 @@ func (d *detail) attachments(id explore.RowID, refs []objects.ParentRef) []Route
 		if f.Out.ParentRef >= len(refs) {
 			continue
 		}
-		out = append(out, RouteAttachment{ParentRef: refs[f.Out.ParentRef], Index: f.Out.ParentRef, Target: d.l.linkedNamed(f.Out.Resource), Result: d.f.attachment(f)})
+		a := d.f.attachment(f)
+		if d.f.omitted(a.Computed) {
+			continue
+		}
+		out = append(out, RouteAttachment{ParentRef: refs[f.Out.ParentRef], Index: f.Out.ParentRef, Target: d.l.linkedNamed(f.Out.Resource), Result: a})
 	}
 	return out
 }
@@ -698,9 +719,11 @@ func (d *detail) backendRef(route objects.Ref, rule, i int, b objects.BackendRef
 
 // delegationState is a name ref's state from status (design §7.3). The
 // Authorizer decides on the named ref alone, so a denied child and an absent
-// denied one are both restricted.
+// denied one are both restricted; in secure mode they have no state.
 func (d *detail) delegationState(parent, child objects.Ref) string {
 	switch {
+	case !d.v.canNamed(child) && d.v.omits():
+		return ""
 	case !d.v.canNamed(child):
 		return DelegationRestricted
 	case slices.Contains(d.ix.ParentRoutes[child], parent):
@@ -713,11 +736,15 @@ func (d *detail) delegationState(parent, child objects.Ref) string {
 }
 
 // backendState is a Backend's state and Accepted condition: restricted when
-// the caller may not view it, omitted when it does not open (absent or not
-// admitted; admission never follows chains). The state comes from the rule
-// set's computed.BackendJudge; without one the condition shows alone.
+// the caller may not view it (omitted in secure mode), omitted when it does
+// not open (absent or not admitted; admission never follows chains). The
+// state comes from the rule set's computed.BackendJudge; without one the
+// condition shows alone.
 func (d *detail) backendState(ref objects.Ref) *BackendStateDTO {
 	if !d.v.canNamed(ref) {
+		if d.v.omits() {
+			return nil
+		}
 		return &BackendStateDTO{Restricted: true}
 	}
 	if d.l.admitNamed(ref) == LinkNone {
@@ -751,9 +778,14 @@ func verdictState(v computed.BackendVerdict) health.State {
 
 // ancestors is the up-chain of route. A hidden Gateway or ListenerSet step
 // carries no identity; a hidden ancestor route its name and the matches it
-// delegated under (design §7.4 rule 3, D-024).
+// delegated under (design §7.4 rule 3, D-024). In secure mode a path with
+// either is left out.
 func (d *detail) ancestors(route objects.Ref) ([]AncestorPathDTO, bool) {
-	paths, truncated := d.ix.Ancestors(route, d.v.can)
+	walk := d.ix.Ancestors
+	if d.v.omits() {
+		walk = d.ix.VisibleAncestors
+	}
+	paths, truncated := walk(route, d.v.can)
 	out := make([]AncestorPathDTO, 0, len(paths))
 	for _, p := range paths {
 		dto := AncestorPathDTO{Steps: make([]AncestorStepDTO, 0, len(p.Steps)), Cycle: p.Cycle}
@@ -836,7 +868,9 @@ func (d *detail) refCounts(dto *DelegationRefDTO, k explore.RefKey) {
 			if d.ix.SelectionHidden(k, d.v.visible()) {
 				c = d.f.restricted()
 			}
-			dto.Computed = &c
+			if !d.f.omitted(c) {
+				dto.Computed = &c
+			}
 		}
 		return
 	}
@@ -874,7 +908,9 @@ func (d *detail) refCounts(dto *DelegationRefDTO, k explore.RefKey) {
 			attached++
 		}
 	}
-	dto.Computed = c
+	if c != nil && !d.f.omitted(*c) {
+		dto.Computed = c
+	}
 	if selKnown {
 		dto.Selected = &selected
 		if attKnown {
@@ -897,6 +933,9 @@ func (d *detail) effective(route objects.Ref, inherit bool) ([]EffectiveDTO, boo
 		ed := &e.Edges[j]
 		dto := EffectiveDTO{Parent: d.l.linked(ed.Parent), Mode: ed.Mode, ContextsTruncated: ed.ContextsTruncated,
 			Contexts: make([]EffectiveContext, 0, len(ed.Contexts)), Computed: d.f.effective(ed, e.EdgeDeps[j])}
+		if d.f.omitted(dto.Computed) {
+			continue
+		}
 		for x := range ed.Contexts {
 			if !d.v.allowDeps(d.ix, e.ContextDeps[j][x]) {
 				continue
@@ -924,7 +963,8 @@ func (d *detail) effective(route objects.Ref, inherit bool) ([]EffectiveDTO, boo
 		out = append(out, dto)
 	}
 	truncated := e.Truncated
-	if n := len(out); d.unreachedEdges(route, inherit, &out) && len(out) > n {
+	// Unreached edges are restricted ones only: secure mode has none.
+	if n := len(out); !d.v.omits() && d.unreachedEdges(route, inherit, &out) && len(out) > n {
 		// Every parent is an HTTPRoute: edges sort by (namespace, name), as view C's do.
 		slices.SortStableFunc(out, func(a, b EffectiveDTO) int {
 			return cmp.Or(strings.Compare(a.Parent.Namespace, b.Parent.Namespace), strings.Compare(a.Parent.Name, b.Parent.Name))
@@ -987,7 +1027,11 @@ func (h *handler) routeDelegation(w http.ResponseWriter, r *http.Request) {
 	if u, _ := d.open(w, ref); u == nil {
 		return
 	}
-	pg, err := d.ix.QueryDelegation(ref, q, d.v.visible())
+	query := d.ix.QueryDelegation
+	if d.v.omits() {
+		query = d.ix.QueryDelegationVisible
+	}
+	pg, err := query(ref, q, d.v.visible())
 	if err != nil {
 		fail(w, err)
 		return

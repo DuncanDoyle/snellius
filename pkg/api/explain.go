@@ -12,6 +12,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/engine"
 	"github.com/DuncanDoyle/snellius/pkg/explore"
 	"github.com/DuncanDoyle/snellius/pkg/health"
+	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
 
@@ -105,6 +106,12 @@ func (f facts) restricted() Computed {
 	return Computed{By: ComputedBy, Rules: f.ix.RuleSet, Label: f.ix.RuleLabel, State: string(computed.StateRestricted)}
 }
 
+// omitted reports whether c is a restricted fact the caller is not sent: in
+// secure mode the fact, with what it carries, is absent (brief row 16).
+func (f facts) omitted(c Computed) bool {
+	return f.v.omits() && c.State == string(computed.StateRestricted)
+}
+
 // unknown is a fact that could not be computed, with why.
 func (f facts) unknown(rule string, why computed.UnknownReason) Computed {
 	c := f.label(rule, computed.StateUnknown)
@@ -193,7 +200,9 @@ func (f facts) attachment(rf *explore.RefFacts) Attachment {
 	}
 	res := f.l.linked(rf.Out.Resource)
 	for i := range rf.Listeners {
-		out.Listeners = append(out.Listeners, f.membership(res, rf, &rf.Listeners[i]))
+		if m := f.membership(res, rf, &rf.Listeners[i]); !f.omitted(m.Computed) {
+			out.Listeners = append(out.Listeners, m)
+		}
 	}
 	return out
 }
@@ -217,6 +226,9 @@ func (f facts) membership(res LinkedRef, rf *explore.RefFacts, h *explore.Listen
 		return out
 	}
 	lc := lf.Check
+	if !f.population(rf.Out.Resource, h.Listener) {
+		lc = nil // the count's check reads routes the caller may not list
+	}
 	var lv, rv computed.CheckResult
 	if lc != nil {
 		lv = *lc
@@ -237,22 +249,68 @@ func (f facts) membership(res LinkedRef, rf *explore.RefFacts, h *explore.Listen
 }
 
 // listener adds view A's count of listener dto of resource, omitted when
-// unknown, with no isolation note then. A count is a fact of its listener: it
-// includes members the caller cannot view, as attachedRoutes does (rule 5).
+// unknown, with no isolation note then. Outside secure mode a count is a fact
+// of its listener: it includes members the caller cannot view, as
+// attachedRoutes does (rule 5). In secure mode it counts visible members, and
+// its check, state and isolation note need the listener's whole population.
 func (f facts) listener(resource objects.Ref, dto *ListenerDTO) {
-	lf, ok := f.ix.Listeners[explore.ListenerKey{Resource: resource, Listener: dto.Name}]
+	k := explore.ListenerKey{Resource: resource, Listener: dto.Name}
+	lf, ok := f.ix.Listeners[k]
 	if !ok {
+		return
+	}
+	whole := f.population(resource, dto.Name)
+	if lf.Known {
+		n := lf.Count
+		if f.v.omits() {
+			n = f.ix.ListenerCountAs(k, f.v.visible())
+		}
+		dto.ComputedRoutes = &n
+		if whole {
+			dto.IsolationNote = lf.IsolationNote
+		}
+	}
+	if !whole {
 		return
 	}
 	var c Computed
 	if lf.Known {
-		n := lf.Count
-		dto.ComputedRoutes, dto.IsolationNote = &n, lf.IsolationNote
 		c = f.checked(ruleListenerCount, lf.Check)
 	} else {
 		c = f.unknown(ruleListenerCount, lf.Unknown)
 	}
 	dto.Computed = &c
+}
+
+// population reports whether the caller may assess listener of resource's
+// count check, which compares its whole computed population with
+// attachedRoutes: true under the full read and outside secure mode, else
+// when the caller may list every route kind in every namespace the listener
+// admits (its own for Same, cluster-wide otherwise). Permissions alone decide it.
+func (f facts) population(resource objects.Ref, listener string) bool {
+	if !f.v.projects() {
+		return true
+	}
+	var ls []objects.Listener
+	if id, ok := f.ix.FindGateway(resource); ok && f.ix.Gateways[id].View != nil {
+		ls = f.ix.Gateways[id].View.Listeners
+	} else if id, ok := f.ix.FindListenerSet(resource); ok && f.ix.ListenerSets[id].View != nil {
+		ls = f.ix.ListenerSets[id].View.Listeners
+	}
+	j := slices.IndexFunc(ls, func(l objects.Listener) bool { return l.Name == listener })
+	if j < 0 {
+		return false
+	}
+	ns := ""
+	if from := ls[j].AllowedRoutes.Namespaces.From; from == "" || from == "Same" {
+		ns = resource.Namespace
+	}
+	for _, k := range kinds.ByCategory(f.l.m.Served, kinds.CategoryRoute) {
+		if !f.v.canList(objects.GroupKind{Group: k.Group, Kind: k.Kind}, ns) {
+			return false
+		}
+	}
+	return true
 }
 
 // stateRank orders check states for a merge, worst highest (design §7.3):

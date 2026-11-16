@@ -23,6 +23,8 @@ type list struct {
 	v  *view
 	l  linker
 	f  facts
+	// vw is v's explore form for the install.
+	vw explore.Viewer
 }
 
 // startList finds the install and parses the query, or writes 503, 404 or 400.
@@ -42,7 +44,7 @@ func (h *handler) startList(w http.ResponseWriter, r *http.Request, kind listKin
 	}
 	v := h.view(r)
 	l := h.linker(v, p, i, nil, nil)
-	return &list{h: h, r: r, p: p, i: i, ix: ix, q: q, v: v, l: l, f: facts{ix: ix, v: v, l: l}}
+	return &list{h: h, r: r, p: p, i: i, ix: ix, q: q, v: v, l: l, f: facts{ix: ix, v: v, l: l}, vw: v.viewer(i)}
 }
 
 func (ls *list) routeRef(id explore.RowID) objects.Ref { return ls.ix.Routes[id].Ref }
@@ -76,7 +78,7 @@ func (h *handler) routes(w http.ResponseWriter, r *http.Request) {
 			add(ls.ix.Routes[i].Ref)
 		}
 	})
-	pg, err := ls.ix.QueryRoutes(ls.q, ls.v.visible())
+	pg, err := ls.ix.QueryRoutesAs(ls.q, ls.vw)
 	if err != nil {
 		fail(w, err)
 		return
@@ -129,9 +131,10 @@ func (ls *list) prefetchRouteRows(ids []explore.RowID) {
 // routeRow is route row id on the wire.
 func (ls *list) routeRow(id explore.RowID) RouteRow {
 	r := &ls.ix.Routes[id]
+	st, flags, _ := ls.ix.RouteStateOf(id, ls.vw)
 	out := RouteRow{Ref: ls.l.linked(r.Ref), Hostnames: r.Hostnames, Parents: make([]ParentSummary, 0, len(r.Parents)),
-		ParentRoutes: make([]LinkedRef, 0, len(r.ParentRoutes)), Children: r.Children, Flags: ls.ix.RowFlags(id, ls.v.visible()).Names(), Health: r.State,
-		Reason: routeReason(ls.ix, ls.v, ls.l, id)}
+		ParentRoutes: make([]LinkedRef, 0, len(r.ParentRoutes)), Children: r.Children, Flags: flags.Names(), Health: st,
+		Reason: routeReason(ls.ix, ls.v, ls.vw, ls.l, id)}
 	if out.Hostnames == nil {
 		out.Hostnames = []string{}
 	}
@@ -151,15 +154,15 @@ func (ls *list) routeRow(id explore.RowID) RouteRow {
 	return out
 }
 
-// routeReason is route row id's reason on the wire. A backend-problem names
-// its backend and message only to a caller who may view the backend (D-013).
-func routeReason(ix *explore.Index, v *view, l linker, id explore.RowID) *RouteReason {
-	r := ix.RouteReason(id)
+// routeReason is route row id's reason for vw on the wire. A backend-problem
+// names its backend and message only to a caller who may view the backend (D-013).
+func routeReason(ix *explore.Index, v *view, vw explore.Viewer, l linker, id explore.RowID) *RouteReason {
+	_, _, r := ix.RouteStateOf(id, vw)
 	if r == nil {
 		return nil
 	}
 	out := &RouteReason{RowReason: *r}
-	if b := ix.Routes[id].Backend; r.Kind == health.ReasonBackendProblem {
+	if b := ix.ProblemBackend(id, vw); r.Kind == health.ReasonBackendProblem {
 		if v.can(*b) {
 			lr := l.linked(*b)
 			out.Backend = &lr
@@ -172,7 +175,8 @@ func routeReason(ix *explore.Index, v *view, l linker, id explore.RowID) *RouteR
 
 // parentSummary is one parent link on the wire. Via comes from the
 // ListenerSet's spec, so it is sent only when the caller may view both the
-// ListenerSet and its Gateway (rule 3). Computed is view A for row id's parentRef.
+// ListenerSet and its Gateway (rule 3); in secure mode it is else omitted.
+// Computed is view A for row id's parentRef, omitted there when restricted.
 func (ls *list) parentSummary(id explore.RowID, p explore.ParentLink) ParentSummary {
 	s := ParentSummary{Ref: ls.l.linked(p.Target), SectionName: p.Ref.SectionName, Port: p.Ref.Port, Attachment: p.Attachment}
 	if p.Via != nil {
@@ -180,7 +184,7 @@ func (ls *list) parentSummary(id explore.RowID, p explore.ParentLink) ParentSumm
 			v := ls.l.linked(*p.Via)
 			s.Via = &v
 		} else {
-			s.ViaRestricted = true
+			s.ViaRestricted = !ls.v.omits()
 		}
 	}
 	switch {
@@ -196,7 +200,9 @@ func (ls *list) parentSummary(id explore.RowID, p explore.ParentLink) ParentSumm
 				a = mergeAttachment(a, ls.f.attachment(d))
 			}
 		}
-		s.Computed = &a
+		if !ls.f.omitted(a.Computed) {
+			s.Computed = &a
+		}
 	}
 	return s
 }
@@ -229,7 +235,7 @@ func (h *handler) gateways(w http.ResponseWriter, r *http.Request) {
 			add(ls.ix.Gateways[i].Ref)
 		}
 	})
-	pg, err := ls.ix.QueryGateways(ls.q, ls.v.visible())
+	pg, err := ls.ix.QueryGatewaysAs(ls.q, ls.vw)
 	if err != nil {
 		fail(w, err)
 		return
@@ -238,18 +244,29 @@ func (h *handler) gateways(w http.ResponseWriter, r *http.Request) {
 	items := make([]GatewayListRow, 0, len(pg.IDs))
 	for _, id := range pg.IDs {
 		g := &ls.ix.Gateways[id]
-		row := GatewayListRow{Ref: ls.l.linked(g.Ref), Health: g.State, Reason: ls.ix.Findings[g.Ref].Reason(g.State), AttachedRoutes: g.AttachedRoutes,
-			NotAccepted: ls.notAccepted(g), ListenerSets: ls.v.recount(g.ListenerSets, ls.lsRef), Disagreements: g.Disagreements, Addresses: []string{}}
+		st := ls.ix.StateOf(g.Ref, ls.vw)
+		row := GatewayListRow{Ref: ls.l.linked(g.Ref), Health: st, Reason: ls.ix.WorstOf(g.Ref, ls.vw).Reason(st), AttachedRoutes: g.AttachedRoutes,
+			NotAccepted: ls.notAccepted(g), ListenerSets: ls.v.recount(g.ListenerSets, ls.lsRef), Disagreements: ls.ix.Disagreements(g.Ref, g.Disagreements, ls.vw),
+			Addresses: []string{}}
 		if v := g.View; v != nil {
 			row.Class, row.Listeners = v.Class, len(v.Listeners)
 			row.Addresses = append(row.Addresses, v.StatusAddresses...)
 		}
-		if n, ok := ls.ix.GatewayMemberCount(id); ok {
+		if n, ok := ls.memberCount(id, ls.ix.GatewayMemberCount, ls.ix.GatewayMemberCountAs); ok {
 			row.Routes = &n
 		}
 		items = append(items, row)
 	}
 	writeJSON(w, page(ls, pg, items, ls.v.deniedInInstall(len(ls.ix.Gateways), ls.gwRef)))
+}
+
+// memberCount is a routes column: rule 5's count, or in secure mode the
+// visible members only (D-085).
+func (ls *list) memberCount(id explore.RowID, all func(explore.RowID) (int, bool), as func(explore.RowID, func(objects.Ref) bool) (int, bool)) (int, bool) {
+	if ls.v.secure {
+		return as(id, ls.v.visible())
+	}
+	return all(id)
 }
 
 // prefetchGatewayRows resolves the buckets the page's Gateway rows read:
@@ -311,7 +328,7 @@ func (h *handler) listenerSets(w http.ResponseWriter, r *http.Request) {
 			add(ls.ix.ListenerSets[i].Ref)
 		}
 	})
-	pg, err := ls.ix.QueryListenerSets(ls.q, ls.v.visible())
+	pg, err := ls.ix.QueryListenerSetsAs(ls.q, ls.vw)
 	if err != nil {
 		fail(w, err)
 		return
@@ -324,12 +341,13 @@ func (h *handler) listenerSets(w http.ResponseWriter, r *http.Request) {
 	items := make([]ListenerSetRow, 0, len(pg.IDs))
 	for _, id := range pg.IDs {
 		s := &ls.ix.ListenerSets[id]
-		row := ListenerSetRow{Ref: ls.l.linked(s.Ref), Parent: ls.l.linked(s.Parent), Health: s.State, Reason: ls.ix.Findings[s.Ref].Reason(s.State), AcceptedReason: s.AcceptedReason,
-			Disagreements: s.Disagreements}
+		st := ls.ix.ListenerSetStateOf(id, ls.vw)
+		row := ListenerSetRow{Ref: ls.l.linked(s.Ref), Parent: ls.l.linked(s.Parent), Health: st, Reason: ls.ix.WorstOf(s.Ref, ls.vw).Reason(st), AcceptedReason: s.AcceptedReason,
+			Disagreements: ls.ix.Disagreements(s.Ref, s.Disagreements, ls.vw)}
 		if s.View != nil {
 			row.Listeners = len(s.View.Listeners)
 		}
-		if n, ok := ls.ix.ListenerSetMemberCount(id); ok {
+		if n, ok := ls.memberCount(id, ls.ix.ListenerSetMemberCount, ls.ix.ListenerSetMemberCountAs); ok {
 			row.Routes = &n
 		}
 		items = append(items, row)

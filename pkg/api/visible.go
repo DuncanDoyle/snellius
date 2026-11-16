@@ -47,6 +47,8 @@ type view struct {
 	secure bool
 	// projections memoises each install's projected report and diagnosis.
 	projections map[*engine.InstallModel]*projection
+	// listed memoises canList's cluster-wide answers.
+	listed map[ListQuery]bool
 }
 
 // projection is an install's report and diagnosis as a viewer without the full read sees them.
@@ -266,10 +268,19 @@ func (v *view) canList(gk objects.GroupKind, namespace string) bool {
 	if v.readsAll() {
 		return true
 	}
-	if allowed, ok := v.lists[ListQuery{Kind: gk, Namespace: namespace}]; ok && namespace != "" {
+	q := ListQuery{Kind: gk, Namespace: namespace}
+	if allowed, ok := v.lists[q]; ok && namespace != "" {
 		return allowed
 	}
-	return decideList(v.r, v.a, gk, namespace)
+	if allowed, ok := v.listed[q]; ok {
+		return allowed
+	}
+	allowed := decideList(v.r, v.a, gk, namespace)
+	if v.listed == nil {
+		v.listed = map[ListQuery]bool{}
+	}
+	v.listed[q] = allowed
+	return allowed
 }
 
 // visible is can in the form the explore queries take: nil under AllowAll,
@@ -387,10 +398,10 @@ func (v *view) recount(ids []explore.RowID, ref func(explore.RowID) objects.Ref)
 }
 
 // deniedInInstall is the number of the n rows of a listed kind that the
-// caller may not view. It takes no filter, so no query changes it, and it
-// is the only hidden count the API sends (rule 2).
+// caller may not view. It takes no filter, so no query changes it (rule 2).
+// Secure mode sends no hidden count: it is 0 there.
 func (v *view) deniedInInstall(n int, ref func(explore.RowID) objects.Ref) int {
-	if v.readsAll() {
+	if v.secure || v.readsAll() {
 		return 0
 	}
 	d := 0
@@ -414,6 +425,25 @@ func (v *view) projects() bool { return v.secure && !v.readsAll() }
 // f.ShownTo the caller.
 func (v *view) shown(f *health.Finding) bool {
 	return !v.projects() || f.ShownTo(v)
+}
+
+// omits reports whether v leaves out what D-013 shows as a placeholder:
+// in secure mode, a hidden object or fact is absent (brief row 16).
+func (v *view) omits() bool { return v.secure }
+
+// viewer is the explore form of v for install i: its population check and,
+// when v projects, the findings it shows and its install-wide unknown.
+func (v *view) viewer(i *engine.InstallModel) explore.Viewer {
+	vw := explore.Viewer{Visible: v.visible()}
+	if v.projects() {
+		vw.Shown, vw.Unknown = v.shown, requiredNotOK(v.report(i).Checks)
+	}
+	return vw
+}
+
+// requiredNotOK reports whether a required check of cs is not OK.
+func requiredNotOK(cs []health.CheckResult) bool {
+	return slices.ContainsFunc(cs, func(c health.CheckResult) bool { return c.Required && !c.OK })
 }
 
 // report is install i's report as the caller of v sees it: the model's under

@@ -727,19 +727,10 @@ func bodies(t *testing.T, srv *httptest.Server, user, base string, paths []strin
 	return out
 }
 
-// masked is b without deniedInInstall, which a hidden create or delete changes until 7.4.
+// masked is b as compared across worlds: 7.4 sends no hidden count, so it is b.
 func masked(t *testing.T, b string) string {
 	t.Helper()
-	var m map[string]any
-	if err := json.Unmarshal([]byte(b), &m); err != nil {
-		return b
-	}
-	delete(m, "deniedInInstall")
-	out, err := json.Marshal(m)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(out)
+	return b
 }
 
 var listPages = []string{"/routes?limit=200", "/gateways?limit=200", "/backends?limit=200", "/paths?limit=200"}
@@ -805,8 +796,11 @@ func TestHiddenCreateDeleteUnchanged(t *testing.T) {
 			want = got
 			continue
 		}
-		if i == 1 && got[listPages[0]] == want[listPages[0]] {
-			t.Error("the created route did not change deniedInInstall: it is not in the install")
+		if i == 1 {
+			full := serve(t, src, newAuthz(&checker{decide: func(string, sar.Attributes, int) (bool, error) { return true, nil }}, clocktesting.NewFakeClock(t0)))
+			if b := bodies(t, full, "v", base, listPages[:1]); !strings.Contains(b[listPages[0]], `"name":"hidden"`) {
+				t.Error("the created route is not in the install")
+			}
 		}
 		for _, p := range listPages {
 			if masked(t, got[p]) != masked(t, want[p]) {

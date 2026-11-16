@@ -109,19 +109,25 @@ func (ps *procSummary) controller() *process.Set {
 	return &ps.i.Process.Controller
 }
 
-// controllerSet is the controller set for the caller; a hidden Deployment keeps the counts only.
+// controllerSet is the controller set for the caller; a hidden Deployment keeps the counts only,
+// or in secure mode none.
 func (ps *procSummary) controllerSet() ProcessSetDTO {
 	d := ps.i.Resolved.Deployment
 	if d == nil {
 		return ps.set(ps.controller(), "", nil, true)
 	}
 	ref := objects.Ref{Group: "apps", Kind: "Deployment", Namespace: d.Namespace, Name: d.Name}
-	return ps.set(ps.controller(), d.Namespace, ps.facts[ref], ps.v.can(ref))
+	readable := ps.v.can(ref) && (!ps.v.projects() || ps.v.canList(objects.GroupKind{Kind: "Pod"}, d.Namespace))
+	return ps.set(ps.controller(), d.Namespace, ps.facts[ref], readable)
 }
 
 // set is s for the caller: a visible subject shows its rollout and the Pods
-// the caller may view; otherwise only the counts (§14 rule 16).
+// the caller may view; otherwise only the counts (§14 rule 16), or in secure
+// mode nothing: the set is not assessed.
 func (ps *procSummary) set(s *process.Set, podNS string, sf *subjectFacts, visible bool) ProcessSetDTO {
+	if !visible && ps.v.omits() {
+		return ProcessSetDTO{Processes: []ProcessDTO{}, NotAssessed: true}
+	}
 	out := ProcessSetDTO{Observed: s.Observed, Desired: s.Desired, Processes: []ProcessDTO{}}
 	if s.Observed {
 		n := int32(0)
@@ -169,14 +175,16 @@ func processDTO(p process.Process, sf *subjectFacts) ProcessDTO {
 }
 
 // controllerSummary is the controller line for the caller. Its state is the worst controller finding,
-// which a restricted caller already sees as a restricted row's severity (D-013).
+// which a restricted caller already sees as a restricted row's severity (D-013). A viewer the findings
+// are projected for gets it not assessed: every controller finding is derived (D-106).
 func (ps *procSummary) controllerSummary() ProcessSummary {
 	s := ps.controllerSet()
-	out := ProcessSummary{State: health.StateUnknown, Observed: s.Observed, Ready: s.Ready, Desired: s.Desired, Restricted: s.Restricted}
-	if d := ps.i.Resolved.Deployment; d != nil {
+	out := ProcessSummary{State: health.StateUnknown, Observed: s.Observed, Ready: s.Ready, Desired: s.Desired, Restricted: s.Restricted,
+		NotAssessed: ps.v.projects()}
+	if d := ps.i.Resolved.Deployment; d != nil && !out.NotAssessed {
 		out.State = subjectState(ps.facts[objects.Ref{Group: "apps", Kind: "Deployment", Namespace: d.Namespace, Name: d.Name}], s.Observed)
 	}
-	if s.Restricted || !s.Observed {
+	if s.Restricted || s.NotAssessed || !s.Observed {
 		return out
 	}
 	for k, p := range s.Processes {
@@ -233,6 +241,25 @@ func subjectState(sf *subjectFacts, observed bool) health.State {
 // health is the worst of g's findings; unknown when its proxies are not observed.
 func (g *gatewayProc) health() health.State { return subjectState(g.facts, g.set.Observed) }
 
+// proxiesReadable reports whether the caller may read Gateway g's proxy set:
+// always outside a projection, else when it may list Deployments and Pods in
+// g's namespace. Permissions alone decide it, so a hidden proxy Deployment
+// never shows through its counts.
+func (ps *procSummary) proxiesReadable(g *gatewayProc) bool {
+	if !ps.v.projects() {
+		return true
+	}
+	return ps.v.canList(objects.GroupKind{Group: "apps", Kind: "Deployment"}, g.ref.Namespace) && ps.v.canList(objects.GroupKind{Kind: "Pod"}, g.ref.Namespace)
+}
+
+// gatewayHealth is g's health for the caller: unknown when not assessed.
+func (ps *procSummary) gatewayHealth(g *gatewayProc) health.State {
+	if ps.v.projects() {
+		return health.StateUnknown
+	}
+	return g.health()
+}
+
 func (g *gatewayProc) restarting() bool { return g.facts != nil && g.facts.restarting }
 
 // skew reports a visible proxy on a version no visible controller replica has, or a 022.
@@ -271,7 +298,7 @@ func (ps *procSummary) proxySummary() ProxySummary {
 		if !ps.v.can(g.ref) {
 			continue
 		}
-		switch g.health() {
+		switch ps.gatewayHealth(&g) {
 		case health.StateError:
 			worst = health.StateError
 		case health.StateWarning:
@@ -282,7 +309,8 @@ func (ps *procSummary) proxySummary() ProxySummary {
 			unknown = true
 		}
 		out.Gateways++
-		if allReady(g.set) {
+		readable := ps.proxiesReadable(&g)
+		if readable && allReady(g.set) {
 			out.Ready++
 		}
 		if g.facts != nil && g.facts.reject != nil {
@@ -294,7 +322,7 @@ func (ps *procSummary) proxySummary() ProxySummary {
 		if g.restarting() {
 			out.Restarting++
 		}
-		if !g.set.Observed {
+		if readable && !g.set.Observed {
 			out.NotObserved++
 		}
 		if ps.selfManaged[g.ref] {
@@ -302,13 +330,14 @@ func (ps *procSummary) proxySummary() ProxySummary {
 		}
 	}
 	// No visible Gateway is no signal, never green.
-	out.State = overview.RowState(worst, unknown || out.Gateways == 0)
+	out.State, out.NotAssessed = overview.RowState(worst, unknown || out.Gateways == 0), ps.v.projects()
 	return out
 }
 
 // row is g on the wire; Rejects needs every dependency of its 001 (§14 rule 12).
 func (ps *procSummary) row(l linker, g *gatewayProc) GatewayProcesses {
-	out := GatewayProcesses{Gateway: l.linked(g.ref), Health: g.health(), Set: ps.set(g.set, g.ref.Namespace, g.facts, true), Skew: ps.skew(g)}
+	out := GatewayProcesses{Gateway: l.linked(g.ref), Health: ps.gatewayHealth(g), NotAssessed: ps.v.projects(),
+		Set: ps.set(g.set, g.ref.Namespace, g.facts, ps.proxiesReadable(g)), Skew: ps.skew(g)}
 	if g.facts != nil && g.facts.reject != nil && ps.v.allOf(g.facts.reject.Evidence) {
 		if ev, ok := g.facts.reject.Facts.(*health.XDSRejectsEvidence); ok {
 			n := 0
@@ -377,7 +406,7 @@ func parseProcessesQuery(r *http.Request) (processesQuery, error) {
 
 // match reports whether g passes q; q matches the Gateway's identity only.
 func (q *processesQuery) match(ps *procSummary, g *gatewayProc) bool {
-	if len(q.health) > 0 && !slices.Contains(q.health, g.health()) ||
+	if len(q.health) > 0 && !slices.Contains(q.health, ps.gatewayHealth(g)) ||
 		q.skew != nil && *q.skew != ps.skew(g) || q.restarts != nil && *q.restarts != g.restarting() {
 		return false
 	}
@@ -423,5 +452,13 @@ func (h *handler) processes(w http.ResponseWriter, r *http.Request) {
 	}
 	at := wireTime(p.ConfirmedAt)
 	writeJSON(w, ProcessesResponse{Install: i.Resolved.ID(), Controller: ps.controllerSet(), CollectedAt: at,
-		Proxies: Page[GatewayProcesses]{Install: i.Resolved.ID(), Items: items, Total: len(refs), Next: pg.next, Prev: pg.prev, DeniedInInstall: denied, CollectedAt: at}})
+		Proxies: Page[GatewayProcesses]{Install: i.Resolved.ID(), Items: items, Total: len(refs), Next: pg.next, Prev: pg.prev, DeniedInInstall: deniedProxies(v, denied), CollectedAt: at}})
+}
+
+// deniedProxies is denied, the hidden Gateways counted, or 0 in secure mode.
+func deniedProxies(v *view, denied int) int {
+	if v.omits() {
+		return 0
+	}
+	return denied
 }

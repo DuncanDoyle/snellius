@@ -5,6 +5,7 @@ import (
 
 	"github.com/DuncanDoyle/snellius/pkg/engine"
 	"github.com/DuncanDoyle/snellius/pkg/explore"
+	"github.com/DuncanDoyle/snellius/pkg/health"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/paths"
 )
@@ -97,8 +98,9 @@ func (l linker) admitWith(ref objects.Ref, named bool) Link {
 	if !ok {
 		return LinkNone
 	}
-	byReferrer := a.Reason == explore.ReasonReferenced || a.Reason == explore.ReasonSelected
-	candidate := a.Owned || a.Reason == explore.ReasonFinding || (byReferrer && l.v.anyOf(a.Referrers))
+	finding := a.Reason == explore.ReasonFinding && l.findingShown(ref, named)
+	byReferrer := a.Reason == explore.ReasonReferenced || a.Reason == explore.ReasonSelected || a.Reason == explore.ReasonFinding && !finding
+	candidate := a.Owned || finding || (byReferrer && l.v.anyOf(a.Referrers))
 	if !candidate && !a.NoParent {
 		return LinkNone
 	}
@@ -109,6 +111,21 @@ func (l linker) admitWith(ref objects.Ref, named bool) Link {
 		return LinkDetail
 	}
 	return LinkYAML
+}
+
+// findingShown reports whether a finding on ref is shown to the caller: a
+// finding admits an object only then (design §7.2), so a hidden basis that
+// raises or clears it never opens or closes a readable object. A named ref
+// is read by name, its basis as population members.
+func (l linker) findingShown(ref objects.Ref, named bool) bool {
+	if !l.v.projects() {
+		return true
+	}
+	var rd health.Readable = l.v
+	if named {
+		rd = namedSubject{v: l.v, subject: ref}
+	}
+	return l.i.Index.FindingShown(ref, func(f *health.Finding) bool { return f.ShownTo(rd) })
 }
 
 // linked is ref with its link, as a population member.
