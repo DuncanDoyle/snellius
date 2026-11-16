@@ -51,7 +51,7 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 		cfg.commands = diagnose.Kubectl{}
 	}
 	h := &handler{src: src, authz: authz, capSources: cfg.capSources, coreSource: cfg.coreSource, commands: cfg.commands, commandsFor: cfg.commandsFor,
-		featuresFor: cfg.featuresFor, packs: cfg.packs, kindFor: cfg.kindFor, pathMemo: cfg.pathMemo, scoped: cfg.scoped, consumersFor: cfg.consumersFor, secure: cfg.secure}
+		featuresFor: cfg.featuresFor, packs: cfg.packs, kindFor: cfg.kindFor, pathMemo: cfg.pathMemo, scoped: cfg.scoped, consumersFor: cfg.consumersFor, secure: cfg.secure, bypass: cfg.bypass}
 	if h.pathMemo == nil {
 		h.pathMemo = paths.NewMemo(nil)
 	}
@@ -126,6 +126,8 @@ type handler struct {
 	consumersFor func(install.Install, *install.Owned) []objects.Consumer
 	// secure is true when the handler was built with WithSecureMode.
 	secure bool
+	// bypass turns the secure-mode projection off (rule tests only).
+	bypass bool
 }
 
 // WithScopedReader reads one Service's endpoints for backend detail (design
@@ -207,14 +209,15 @@ func (h *handler) meta(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, resp)
 }
 
-// visibleHealth returns the install's report as the caller of v may see it
-// (D-013). A finding on a denied resource keeps its code, severity and ref but
-// is restricted: message, detail, since and evidence are emptied. State and counts still
+// visibleHealth returns the install's report as the caller of v may see it:
+// v.report, with D-013's restricted rows outside secure mode. There a finding
+// on a denied resource keeps its code, severity and ref but is restricted:
+// message, detail, since and evidence are emptied. State and counts still
 // cover every finding, so partial visibility never makes an install look
 // healthier, and the findings keep the order health returned.
 func visibleHealth(v *view, i *engine.InstallModel) health.Report {
-	if v.readsAll() {
-		return i.Health
+	if v.readsAll() || v.secure {
+		return v.report(i)
 	}
 	rep := i.Health
 	rep.Findings = make([]health.Finding, 0, len(i.Health.Findings))
@@ -276,7 +279,7 @@ func (h *handler) installs(w http.ResponseWriter, r *http.Request) {
 		hd, rep := i.Overview.Header, visibleHealth(v, i)
 		out = append(out, InstallSummary{ID: hd.ID, DisplayName: hd.DisplayName, Namespace: hd.Namespace, Name: hd.Name, Version: hd.Version,
 			Edition: hd.Edition, ControllerNames: hd.ControllerNames, Readiness: hd.Readiness, Scope: hd.Scope,
-			Health: HealthSummary{State: rep.State, Counts: rep.Counts}, GroupRows: min(groupTotal(diagnosis(i)), maxGroups),
+			Health: HealthSummary{State: rep.State, Counts: rep.Counts}, GroupRows: min(groupTotal(v.diagnosis(i)), maxGroups),
 			ComputedAt: wireTime(m.ComputedAt), ConfirmedAt: confirmed, Features: h.features(i)})
 	}
 	writeJSON(w, out)

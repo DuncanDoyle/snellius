@@ -18,6 +18,7 @@ import (
 
 	clocktesting "k8s.io/utils/clock/testing"
 
+	"github.com/DuncanDoyle/snellius/pkg/health"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
 
@@ -163,35 +164,35 @@ func TestCommitOutageNeverPartial(t *testing.T) {
 
 // A route that answers 404 on denial answers 503 when the check fails.
 func TestCommitOutageNever404(t *testing.T) {
-	e, _, _ := startWith(t, setup{}, visWorld()...)
-	cases := []struct {
-		path string
-		deny int
-	}{
-		{backendsURL + "/gateway.kgateway.dev/Backend/shop/be-x", http.StatusNotFound},
-		{routeDetail + "shop/secret", http.StatusNotFound},
-		{routeDetail + "shop/secret/delegation", http.StatusNotFound},
-		{lsDetail + "infra/ls1", http.StatusNotFound},
-		{base + "/resources/gateway.networking.k8s.io/HTTPRoute/shop/secret", http.StatusNotFound},
+	e, local, _ := startWith(t, setup{}, visWorld()...)
+	cases := []string{
+		backendsURL + "/gateway.kgateway.dev/Backend/shop/be-x",
+		routeDetail + "shop/secret",
+		routeDetail + "shop/secret/delegation",
+		lsDetail + "infra/ls1",
+		base + "/resources/gateway.networking.k8s.io/HTTPRoute/shop/secret",
 	}
-	for _, f := range get[HealthResponse](t, secureServer(t, e, &errAuthz{deny: hiddenSome}), base+"/health", 200).Findings {
-		if f.Resource != nil && hiddenSome(f.Resource.Ref) {
-			cases = append(cases, struct {
-				path string
-				deny int
-			}{base + "/findings/" + f.ID, http.StatusOK})
-			break
+	for _, p := range cases {
+		if code, _, body := fetchRaw(t, secureServer(t, e, &errAuthz{deny: hiddenSome}), p); code != http.StatusNotFound {
+			t.Errorf("GET %s denied: %d %s, want 404", p, code, body)
+		}
+		wantUnavailable(t, secureServer(t, e, &errAuthz{deny: hiddenSome, failAt: 1}), p)
+	}
+	// A derived finding needs the full read: its detail answers 404 without
+	// it and 503 when the full read fails.
+	var detail string
+	for _, f := range get[HealthResponse](t, local, base+"/health", 200).Findings {
+		if f.Resource != nil && hiddenSome(f.Resource.Ref) && f.Code == health.CodeDelegatedNotAttached {
+			detail = base + "/findings/" + f.ID
 		}
 	}
-	if len(cases) != 6 {
-		t.Fatal("visWorld has no finding on a denied resource")
+	if detail == "" {
+		t.Fatal("visWorld has no KGWUI-011 on a denied resource")
 	}
-	for _, c := range cases {
-		if code, _, body := fetchRaw(t, secureServer(t, e, &errAuthz{deny: hiddenSome}), c.path); code != c.deny {
-			t.Errorf("GET %s denied: %d %s, want %d", c.path, code, body, c.deny)
-		}
-		wantUnavailable(t, secureServer(t, e, &errAuthz{deny: hiddenSome, failAt: 1}), c.path)
+	if code, _, body := fetchRaw(t, secureServer(t, e, &fullAuthz{errAuthz: &errAuthz{deny: hiddenSome}}), detail); code != http.StatusNotFound {
+		t.Errorf("GET %s denied: %d %s, want 404", detail, code, body)
 	}
+	wantUnavailable(t, secureServer(t, e, &fullAuthz{errAuthz: &errAuthz{deny: hiddenSome}, err: errOutage}), detail)
 }
 
 // refsExt asks about n distinct refs through Visible and writes how many it may see.

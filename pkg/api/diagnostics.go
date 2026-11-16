@@ -388,7 +388,8 @@ func (h *handler) diagnostics(w http.ResponseWriter, r *http.Request) {
 	}
 	v := h.view(r)
 	l := h.linker(v, p, i, nil, nil)
-	d, rep, at := diagnosis(i), &i.Health, wireTime(p.ConfirmedAt)
+	vr := v.report(i)
+	d, rep, at := v.diagnosis(i), &vr, wireTime(p.ConfirmedAt)
 	in := stepsInput(p.Model, i)
 	out := Diagnostics{Install: i.Resolved.ID(), Verdict: verdict(v, rep), Groups: []GroupRow{}, Checks: wireChecks(rep.Checks), CollectedAt: at}
 	// d.Rank lists each group's members in group order, so a group's first is its top member.
@@ -410,11 +411,13 @@ func (h *handler) diagnostics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
-// dataPlane counts i's rejecting and withheld Gateways over every finding; a
-// hidden Gateway counts only when its restricted 001 or 024 row already names it.
+// dataPlane counts i's rejecting and withheld Gateways over the findings the
+// caller of v is shown. Outside secure mode a hidden Gateway counts when its
+// restricted 001 or 024 row already names it; in it, only readable Gateways count.
 func dataPlane(v *view, i *engine.InstallModel) DataPlaneSummary {
 	var out DataPlaneSummary
-	rejecting, withheld := rejectingGateways(i), withheldGateways(i)
+	rejecting := gatewaysWith(i, health.CodeXDSRejected, "", v.shown)
+	withheld := gatewaysWith(i, health.CodeConfigWithheld, health.SeverityError, v.shown)
 	out.Rejecting, out.Withheld = len(rejecting), len(withheld)
 	if i.Owned != nil {
 		for _, u := range i.Owned.Gateways {
@@ -423,26 +426,27 @@ func dataPlane(v *view, i *engine.InstallModel) DataPlaneSummary {
 			}
 		}
 	}
-	out.Unavailable = xdsUnavailable(i.Health.Checks)
+	out.Unavailable = xdsUnavailable(v.report(i).Checks)
 	return out
 }
 
 // rejectingGateways is the set of i's Gateways with a KGWUI-001.
 func rejectingGateways(i *engine.InstallModel) map[objects.Ref]bool {
-	return gatewaysWith(i, health.CodeXDSRejected, "")
+	return gatewaysWith(i, health.CodeXDSRejected, "", nil)
 }
 
 // withheldGateways is the set of i's Gateways with a KGWUI-024 error; its
 // warning (config released early) still updates the proxies.
 func withheldGateways(i *engine.InstallModel) map[objects.Ref]bool {
-	return gatewaysWith(i, health.CodeConfigWithheld, health.SeverityError)
+	return gatewaysWith(i, health.CodeConfigWithheld, health.SeverityError, nil)
 }
 
-// gatewaysWith is the set of resources of i's findings with code, of severity sev unless it is "".
-func gatewaysWith(i *engine.InstallModel, code string, sev health.Severity) map[objects.Ref]bool {
+// gatewaysWith is the set of resources of i's findings with code, of severity
+// sev unless it is "", that shown keeps; a nil shown keeps every finding.
+func gatewaysWith(i *engine.InstallModel, code string, sev health.Severity, shown func(*health.Finding) bool) map[objects.Ref]bool {
 	out := map[objects.Ref]bool{}
 	for k := range i.Health.Findings {
-		if f := &i.Health.Findings[k]; f.Code == code && f.Resource != nil && (sev == "" || f.Severity == sev) {
+		if f := &i.Health.Findings[k]; f.Code == code && f.Resource != nil && (sev == "" || f.Severity == sev) && (shown == nil || shown(f)) {
 			out[*f.Resource] = true
 		}
 	}

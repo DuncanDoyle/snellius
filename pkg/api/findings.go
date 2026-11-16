@@ -208,7 +208,9 @@ func (h *handler) findings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	v, fs, ix := h.view(r), i.Health.Findings, diagnosis(i).Index
+	v := h.view(r)
+	rep := v.report(i)
+	fs, ix := rep.Findings, v.diagnosis(i).Index
 	match := func(k int) bool { return q.match(v, &fs[k], nil) }
 	if q.q != "" {
 		// q asks about every hidden-identity row, like a route list.
@@ -239,7 +241,7 @@ func (h *handler) findings(w http.ResponseWriter, r *http.Request) {
 // when one member passes match (R98). A group whose cause the caller cannot view matches q
 // by its members' identity only (§14 rule 17).
 func (h *handler) findingGroups(w http.ResponseWriter, p *engine.Published, i *engine.InstallModel, v *view, q *findingsQuery, match func(k int) bool) {
-	d, fs := diagnosis(i), i.Health.Findings
+	d, fs := v.diagnosis(i), v.report(i).Findings
 	// d.Rank lists each group's members in group order, so a group's first is its top member.
 	tops := make([]int, len(d.Groups))
 	for k, off := 0, 0; k < len(d.Groups); k++ {
@@ -286,13 +288,13 @@ func (h *handler) findingDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	d, fs := diagnosis(i), i.Health.Findings
-	k, ok := d.Index.Find(fs, r.PathValue("findingId"))
+	v := h.view(r)
+	d, fs, k, ok := v.findFinding(i, r.PathValue("findingId"))
 	if !ok {
+		// A finding the caller is not shown gets the answer of an absent one.
 		writeErr(w, http.StatusNotFound, "finding "+r.PathValue("findingId")+" not found")
 		return
 	}
-	v := h.view(r)
 	l := h.linker(v, p, i, nil, nil)
 	f := &fs[k]
 	row := findingRow(v, l, f, true)
@@ -320,6 +322,35 @@ func (h *handler) findingDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	out.Affected = Page[LinkedRef]{Install: i.Resolved.ID(), Items: items, Total: len(refs), Next: affected.next, Prev: affected.prev, CollectedAt: at}
 	writeJSON(w, out)
+}
+
+// findFinding returns the diagnosis and findings the caller of v sees finding
+// id in, and its index. When v projects, the finding must be shown with its
+// resource read by name and its basis as a population; one shown only that way
+// stands alone, ungrouped.
+func (v *view) findFinding(i *engine.InstallModel, id string) (*diagnose.Diagnosis, []health.Finding, int, bool) {
+	if !v.projects() {
+		d := diagnosis(i)
+		k, ok := d.Index.Find(i.Health.Findings, id)
+		return d, i.Health.Findings, k, ok
+	}
+	k, ok := diagnosis(i).Index.Find(i.Health.Findings, id)
+	if !ok {
+		return nil, nil, 0, false
+	}
+	f := i.Health.Findings[k]
+	rd := health.Readable(v)
+	if f.Resource != nil {
+		rd = namedSubject{v: v, subject: *f.Resource}
+	}
+	if !f.ShownTo(rd) {
+		return nil, nil, 0, false
+	}
+	d, fs := v.diagnosis(i), v.report(i).Findings
+	if k, ok := d.Index.Find(fs, id); ok {
+		return d, fs, k, true
+	}
+	return d, health.Project(health.Report{Findings: []health.Finding{f}}, rd).Findings, 0, true
 }
 
 // wireFix is fx on the wire; nil when fx is nil or names an object the caller

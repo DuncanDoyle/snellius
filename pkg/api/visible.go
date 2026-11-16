@@ -5,7 +5,10 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/DuncanDoyle/snellius/pkg/diagnose"
+	"github.com/DuncanDoyle/snellius/pkg/engine"
 	"github.com/DuncanDoyle/snellius/pkg/explore"
+	"github.com/DuncanDoyle/snellius/pkg/health"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/paths"
 )
@@ -39,12 +42,23 @@ type view struct {
 	lists map[ListQuery]bool
 	// listFinal is set when a list denial is a member's final answer: no named-get scan.
 	listFinal bool
+	// secure is set in secure mode: without the full read, findings and check
+	// results are projected (D-106) instead of shown as D-013 restricted rows.
+	secure bool
+	// projections memoises each install's projected report and diagnosis.
+	projections map[*engine.InstallModel]*projection
+}
+
+// projection is an install's report and diagnosis as a viewer without the full read sees them.
+type projection struct {
+	rep  health.Report
+	diag *diagnose.Diagnosis
 }
 
 // view returns the view of the caller of r. Under a full read, asked the
 // first time a population needs it, it is the allow-all view.
 func (h *handler) view(r *http.Request) *view {
-	v := &view{a: h.authz, r: r, all: allowsAll(h.authz)}
+	v := &view{a: h.authz, r: r, all: allowsAll(h.authz), secure: h.secure && !h.bypass}
 	if !v.all {
 		v.lazy = true
 		v.seen, v.seenNamed = map[objects.Ref]bool{}, map[objects.Ref]bool{}
@@ -386,4 +400,98 @@ func (v *view) deniedInInstall(n int, ref func(explore.RowID) objects.Ref) int {
 		}
 	}
 	return d
+}
+
+// Ref implements health.Readable: whether the caller may read ref as a population member.
+func (v *view) Ref(ref objects.Ref) bool { return v.can(ref) }
+
+// projects reports whether v projects findings and check results (D-106):
+// secure mode without the full read.
+func (v *view) projects() bool { return v.secure && !v.readsAll() }
+
+// shown reports whether the caller of v sees f: always under the full read
+// and outside secure mode, where D-013's restricted rows stay; else when
+// f.ShownTo the caller.
+func (v *view) shown(f *health.Finding) bool {
+	return !v.projects() || f.ShownTo(v)
+}
+
+// report is install i's report as the caller of v sees it: the model's under
+// the full read and outside secure mode, else health.Project's, grouped by
+// v.diagnosis. It is memoised per request.
+func (v *view) report(i *engine.InstallModel) health.Report {
+	if !v.projects() {
+		return i.Health
+	}
+	return v.projection(i).rep
+}
+
+// diagnosis is install i's diagnosis as the caller of v sees it: the model's
+// under the full read and outside secure mode, else one built over v.report
+// that only names causes and affected objects the caller may read.
+func (v *view) diagnosis(i *engine.InstallModel) *diagnose.Diagnosis {
+	if !v.projects() {
+		return diagnosis(i)
+	}
+	return v.projection(i).diag
+}
+
+// projection builds and memoises i's projected report and diagnosis.
+func (v *view) projection(i *engine.InstallModel) *projection {
+	if p := v.projections[i]; p != nil {
+		return p
+	}
+	v.prefetchFindings(i.Health.Findings)
+	rep := health.Project(i.Health, v)
+	var dec objects.Decoder = objects.Direct{}
+	if i.Index != nil {
+		dec = indexViews{ix: i.Index}
+	}
+	d := diagnose.Build(&rep, diagnose.Input{Install: i.Resolved, Owned: i.Owned, Views: dec, Readable: v.can}, diagnose.Families())
+	p := &projection{rep: rep, diag: d}
+	if v.projections == nil {
+		v.projections = map[*engine.InstallModel]*projection{}
+	}
+	v.projections[i] = p
+	return p
+}
+
+// prefetchFindings resolves, in two parallel rounds, what ShownTo asks of fs:
+// the resources of own-object and collection findings, then the objects named
+// by those whose resource was not denied. Derived findings ask nothing.
+func (v *view) prefetchFindings(fs []health.Finding) {
+	if !v.batching() {
+		return
+	}
+	v.prefetch(func(add func(objects.Ref)) {
+		for k := range fs {
+			if f := &fs[k]; f.Resource != nil && (f.Class == health.ClassOwn || f.Basis.Collection) {
+				add(*f.Resource)
+			}
+		}
+	})
+	v.prefetch(func(add func(objects.Ref)) {
+		for k := range fs {
+			if f := &fs[k]; f.Class == health.ClassOwn && f.Resource != nil && !v.denied(*f.Resource) {
+				for _, r := range f.Basis.Refs {
+					add(r)
+				}
+			}
+		}
+	})
+}
+
+// namedSubject reads subject by name and every other ref as a population
+// member: a finding detail's resource and its basis (D-100).
+type namedSubject struct {
+	v       *view
+	subject objects.Ref
+}
+
+// Ref implements health.Readable.
+func (n namedSubject) Ref(r objects.Ref) bool {
+	if r == n.subject {
+		return n.v.canNamed(r)
+	}
+	return n.v.can(r)
 }
