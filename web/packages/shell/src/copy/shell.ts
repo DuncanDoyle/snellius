@@ -22,7 +22,7 @@ export const shellCopy = {
     /** The choice list when the server lists no namespace and none is chosen. */
     empty: "No namespaces found",
     /** A list's empty state under a scope, and its action that clears the scope. */
-    emptyList: (many: string) => `No ${many} in the chosen namespaces.`,
+    emptyList: (many: string) => `No ${many} in these namespaces.`,
     showAll: "Show all namespaces",
   },
 };

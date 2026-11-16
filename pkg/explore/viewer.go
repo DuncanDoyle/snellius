@@ -222,10 +222,16 @@ func (ix *Index) ListenerSetMemberCountIn(id RowID, visible func(objects.Ref) bo
 }
 
 // membersIn counts the distinct member routes of ref's listeners in scope
-// whose dependencies and own ref visible admits; nil admits all.
+// whose dependencies and own ref visible admits; nil admits all, and then,
+// as memberCount, a listener of unknown count gives no count.
 func (ix *Index) membersIn(ref objects.Ref, ls []objects.Listener, visible func(objects.Ref) bool, scope []string) (int, bool) {
 	if !ix.computed(ref, ls) {
 		return 0, false
+	}
+	if visible == nil {
+		if _, ok := ix.memberCount(ref, ls, nil); !ok {
+			return 0, false
+		}
 	}
 	seen := map[RowID]bool{}
 	for _, l := range ls {

@@ -1079,3 +1079,30 @@ func TestStatusRootTargetRestricts(t *testing.T) {
 		t.Errorf("unfiltered: %v, want the row listed as restricted", dpage(ix, p))
 	}
 }
+
+// TestScopedMemberCountUnknownListener: under a scope a full reader (visible
+// nil) gets no count for a Gateway with a listener of unknown count, as
+// unscoped; a projecting viewer counts the computed members, as GatewayMemberCountAs does.
+func TestScopedMemberCountUnknownListener(t *testing.T) {
+	w := viewWorld()
+	w.objs = append(w.objs, testutil.Gateway("infra", "third", "kgateway", nil))
+	in := w.input(t)
+	v := views()
+	third := testutil.GwRef("infra", "third").Ref()
+	v.Attachment.Counts = append(v.Attachment.Counts, computed.ListenerCount{Resource: third, Listener: "http", Unknown: computed.UnknownNamespaceLabels})
+	in.Computed = v
+	ix := Build(in)
+	i := slices.IndexFunc(ix.Gateways, func(g GatewayRow) bool { return g.Ref == third })
+	id := RowID(i) // #nosec G115 -- a row count fits in int32
+	scope := []string{"infra", "shop"}
+	if _, ok := ix.GatewayMemberCount(id); ok {
+		t.Fatal("the fixture's listener count is known")
+	}
+	if n, ok := ix.GatewayMemberCountIn(id, nil, scope); ok {
+		t.Errorf("full reader under a scope: count %d, want none", n)
+	}
+	all := func(objects.Ref) bool { return true }
+	if _, ok := ix.GatewayMemberCountIn(id, all, scope); !ok {
+		t.Error("projecting viewer under a scope: no count, want the computed members")
+	}
+}

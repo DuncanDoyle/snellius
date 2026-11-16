@@ -191,7 +191,7 @@ it("a scoped list page that comes back empty says so and offers all namespaces",
     </Routes>,
     { path: `/i/${ID}/routes` },
   );
-  expect(await screen.findByText(copy.emptyList("routes"))).toBeInTheDocument();
+  expect(await screen.findByText("No routes in these namespaces.")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: copy.showAll }));
   expect(getNamespaceScope()).toEqual([]);
   expect(await screen.findByText(listCopy.empty("routes"))).toBeInTheDocument();
