@@ -495,7 +495,9 @@ func TestBackendDetailReadContradictsCache(t *testing.T) {
 	if s.Complete != endpoints.Complete || s.Ready == nil || *s.Ready != 0 || s.CachedReady == nil || *s.CachedReady != 1 {
 		t.Fatalf("source %+v (cachedReady %v)", s, s.CachedReady)
 	}
-	waiting := func(sg SignalDTO) bool { return sg.Kind == paths.SignalWaiting && sg.Code == "KGWUI-023" && sg.State == "unknown" }
+	waiting := func(sg SignalDTO) bool {
+		return sg.Kind == paths.SignalWaiting && sg.Code == "KGWUI-023" && sg.State == "unknown"
+	}
 	if d.Problem.State == "healthy" || !slices.ContainsFunc(d.Problem.Signals, waiting) || !slices.ContainsFunc(d.Status, waiting) {
 		t.Fatalf("problem %+v status %+v", d.Problem, d.Status)
 	}

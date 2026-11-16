@@ -12,8 +12,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/DuncanDoyle/snellius/pkg/cli"
 	"github.com/DuncanDoyle/snellius/pkg/app"
+	"github.com/DuncanDoyle/snellius/pkg/cli"
 	"github.com/DuncanDoyle/snellius/pkg/extension"
 )
 

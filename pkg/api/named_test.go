@@ -46,7 +46,9 @@ func grantOf(lists []listKey, gets ...objects.Ref) *rbac {
 	return a
 }
 
-func (a *rbac) listed(ref objects.Ref) bool { return a.lists[listKey{ref.Group, ref.Kind, ref.Namespace}] }
+func (a *rbac) listed(ref objects.Ref) bool {
+	return a.lists[listKey{ref.Group, ref.Kind, ref.Namespace}]
+}
 
 func (a *rbac) Authorize(r *http.Request, ref objects.Ref) bool {
 	ok, _ := a.AuthorizeErr(r, ref)
@@ -79,7 +81,9 @@ var (
 	readableShop = []listKey{shopRoutes, infraGws}
 )
 
-func service(name string) objects.Ref { return objects.Ref{Kind: "Service", Namespace: "shop", Name: name} }
+func service(name string) objects.Ref {
+	return objects.Ref{Kind: "Service", Namespace: "shop", Name: name}
+}
 
 func kgwBackend(name string) objects.Ref {
 	return objects.Ref{Group: kinds.KgatewayGroup, Kind: "Backend", Namespace: "shop", Name: name}
