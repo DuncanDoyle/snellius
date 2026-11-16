@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"slices"
 	"strconv"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -84,42 +83,18 @@ func prefetchPaths(v *view, ix *explore.Index, t *paths.Topology) {
 }
 
 // prefetchRows resolves the dependencies of t's rows that want picks (all
-// when nil) in rounds, in the order allowTable asks them: each round asks every
-// undecided row's next unresolved bucket, and a row with a denied bucket is
-// decided. So no row asks a bucket its own check would not.
+// when nil), as prefetchSets does.
 func prefetchRows(v *view, t *paths.Topology, want func(paths.Row) bool) {
 	if !v.batching() {
 		return
 	}
-	// Rows share dependency sets; each distinct set is resolved once.
-	seen := map[*int32]bool{}
 	var sets []explore.DepSet
 	for _, r := range t.Rows {
-		if d := t.Deps(r); len(d) > 0 && !seen[&d[0]] && (want == nil || want(r)) {
-			seen[&d[0]] = true
-			sets = append(sets, d)
+		if want == nil || want(r) {
+			sets = append(sets, t.Deps(r))
 		}
 	}
-	denied := func(k int32) bool { return v.denied(t.Refs[k]) }
-	unknown := func(k int32) bool {
-		_, ok := v.lists[listQueryOf(t.Refs[k])]
-		return !ok
-	}
-	for len(sets) > 0 && v.batching() {
-		next := sets[:0]
-		v.prefetch(func(add func(objects.Ref)) {
-			for _, d := range sets {
-				if slices.ContainsFunc(d, denied) {
-					continue
-				}
-				if i := slices.IndexFunc(d, unknown); i >= 0 {
-					add(t.Refs[d[i]])
-					next = append(next, d)
-				}
-			}
-		})
-		sets = next
-	}
+	v.prefetchSets(sets, func(k int32) objects.Ref { return t.Refs[k] })
 }
 
 // pathModel is install i's topology from the path memo and its projection

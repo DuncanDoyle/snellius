@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"slices"
 	"sync"
 
 	"github.com/DuncanDoyle/snellius/pkg/explore"
@@ -111,6 +112,42 @@ func (v *view) prefetch(refs func(add func(objects.Ref))) {
 		}
 	})
 	v.prefetchLists(qs)
+}
+
+// prefetchSets resolves dependency sets in rounds, in the order allowDeps and
+// allowTable ask them: each round asks every undecided set's next unresolved
+// bucket, and a set with a denied bucket is decided. So no set asks a bucket
+// its own check would not. ref maps a set's index to its ref.
+func (v *view) prefetchSets(sets []explore.DepSet, ref func(int32) objects.Ref) {
+	// Rows share interned dependency sets; each distinct set is resolved once.
+	seen := map[*int32]bool{}
+	todo := make([]explore.DepSet, 0, len(sets))
+	for _, d := range sets {
+		if len(d) > 0 && !seen[&d[0]] {
+			seen[&d[0]] = true
+			todo = append(todo, d)
+		}
+	}
+	denied := func(k int32) bool { return v.denied(ref(k)) }
+	unknown := func(k int32) bool {
+		_, ok := v.lists[listQueryOf(ref(k))]
+		return !ok
+	}
+	for len(todo) > 0 && v.batching() {
+		next := todo[:0]
+		v.prefetch(func(add func(objects.Ref)) {
+			for _, d := range todo {
+				if slices.ContainsFunc(d, denied) {
+					continue
+				}
+				if i := slices.IndexFunc(d, unknown); i >= 0 {
+					add(ref(d[i]))
+					next = append(next, d)
+				}
+			}
+		})
+		todo = next
+	}
 }
 
 // denied reports whether a prefetch round denied ref's bucket, so a hidden

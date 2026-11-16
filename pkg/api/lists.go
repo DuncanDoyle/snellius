@@ -90,24 +90,16 @@ func (h *handler) routes(w http.ResponseWriter, r *http.Request) {
 }
 
 // prefetchRouteRows resolves the buckets the page's route rows read: their
-// parents, reported edges, problem backend and facts.
+// parents, reported edges, problem backend and facts. A ListenerSet's Gateway
+// is asked only for a ListenerSet not denied, as parentSummary asks it.
 func (ls *list) prefetchRouteRows(ids []explore.RowID) {
 	ix := ls.ix
+	var sets []explore.DepSet
 	ls.v.prefetch(func(add func(objects.Ref)) {
-		depSets := func(ds ...explore.DepSet) {
-			for _, d := range ds {
-				for _, k := range d {
-					add(ix.Ref(k))
-				}
-			}
-		}
 		for _, id := range ids {
 			r := &ix.Routes[id]
 			for _, p := range r.Parents {
 				add(p.Target)
-				if p.Via != nil {
-					add(*p.Via)
-				}
 			}
 			for _, p := range r.ParentRoutes {
 				add(p)
@@ -116,12 +108,22 @@ func (ls *list) prefetchRouteRows(ids []explore.RowID) {
 				add(*r.Backend)
 			}
 			for j := range r.Computed {
-				depSets(r.Computed[j].Deps)
+				sets = append(sets, r.Computed[j].Deps)
 			}
-			depSets(r.UnknownDeps...)
-			depSets(r.DroppedDeps...)
+			sets = append(sets, r.UnknownDeps...)
+			sets = append(sets, r.DroppedDeps...)
 		}
 	})
+	ls.v.prefetch(func(add func(objects.Ref)) {
+		for _, id := range ids {
+			for _, p := range ix.Routes[id].Parents {
+				if p.Via != nil && !ls.v.denied(p.Target) {
+					add(*p.Via)
+				}
+			}
+		}
+	})
+	ls.v.prefetchSets(sets, ix.Ref)
 }
 
 // routeRow is route row id on the wire.
@@ -251,7 +253,8 @@ func (h *handler) gateways(w http.ResponseWriter, r *http.Request) {
 }
 
 // prefetchGatewayRows resolves the buckets the page's Gateway rows read:
-// their ListenerSets and not-accepted routes with those routes' parents.
+// their ListenerSets and not-accepted routes, then the ListenerSets that
+// Under asks for the routes not denied (D-085).
 func (ls *list) prefetchGatewayRows(ids []explore.RowID) {
 	ix := ls.ix
 	ls.v.prefetch(func(add func(objects.Ref)) {
@@ -262,8 +265,21 @@ func (ls *list) prefetchGatewayRows(ids []explore.RowID) {
 			}
 			for _, id := range g.NotAccepted {
 				add(ix.Routes[id].Ref)
-				for _, p := range ix.Routes[id].Parents {
-					add(p.Target)
+			}
+		}
+	})
+	ls.v.prefetch(func(add func(objects.Ref)) {
+		for _, id := range ids {
+			g := &ix.Gateways[id]
+			for _, id := range g.NotAccepted {
+				r := &ix.Routes[id]
+				if ls.v.denied(r.Ref) {
+					continue
+				}
+				for _, p := range r.Parents {
+					if p.Attachment == explore.AttachmentNotAccepted && p.Via != nil && *p.Via == g.Ref {
+						add(p.Target)
+					}
 				}
 			}
 		}
