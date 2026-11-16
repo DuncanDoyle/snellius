@@ -771,3 +771,30 @@ func TestRetainedHeapAfterChurn(t *testing.T) {
 	}
 	runtime.KeepAlive(a)
 }
+
+// A deny lives between MinDenyTTL and DenyTTL, picked per answer; an allow is unchanged.
+func TestDenyTTLJitter(t *testing.T) {
+	f := newFixture(func(_ oidc.Identity, a Attributes) (bool, error) { return a.Namespace == "shop", nil })
+	next := []float64{0, 0.5, 1}
+	f.a.cache.rand = func() float64 { v := next[0]; next = next[1:]; return v }
+	var exp []time.Time
+	for _, ns := range []string{"a", "b", "c"} {
+		d := f.checkAt(t, user("alice"), listAt(ns))
+		if d.allowed {
+			t.Fatalf("%s allowed", ns)
+		}
+		exp = append(exp, d.expires)
+	}
+	want := []time.Duration{MinDenyTTL, (MinDenyTTL + DenyTTL) / 2, DenyTTL}
+	for i, w := range want {
+		if !exp[i].Equal(t0.Add(w)) {
+			t.Errorf("deny %d expires at +%v, want +%v", i, exp[i].Sub(t0), w)
+		}
+	}
+	if exp[0].Equal(exp[1]) || exp[1].Equal(exp[2]) {
+		t.Errorf("denies with different draws share an expiry: %v", exp)
+	}
+	if d := f.checkAt(t, user("alice"), listAt("shop")); !d.allowed || !d.expires.Equal(t0.Add(30*time.Second)) {
+		t.Errorf("allow %+v, want expiry at +30 s", d)
+	}
+}

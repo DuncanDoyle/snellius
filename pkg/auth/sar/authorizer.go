@@ -57,8 +57,10 @@ type Options struct {
 const (
 	// DefaultAllowTTL is an allow's lifetime when Options.AllowTTL is zero.
 	DefaultAllowTTL = 60 * time.Second
-	// DenyTTL is a deny's lifetime: a stale deny only hides.
+	// DenyTTL is the longest a deny lives: a stale deny only hides.
 	DenyTTL = 5 * time.Minute
+	// MinDenyTTL is the shortest: a jittered deny spreads refreshes, a shorter one only asks again sooner.
+	MinDenyTTL = 4 * time.Minute
 )
 
 // sweepEvery is how often Run drops expired decisions.

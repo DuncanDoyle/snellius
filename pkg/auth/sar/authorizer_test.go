@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"sync"
 	"testing"
@@ -20,6 +21,12 @@ import (
 const gwGroup = "gateway.networking.k8s.io"
 
 var t0 = time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+
+func TestMain(m *testing.M) {
+	// Denies live the full DenyTTL unless a test sets cache.rand.
+	denyJitter = func() float64 { return 1 }
+	os.Exit(m.Run())
+}
 
 // fakeChecker answers through decide and records every SAR it is asked.
 type fakeChecker struct {

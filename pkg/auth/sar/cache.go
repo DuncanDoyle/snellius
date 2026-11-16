@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -60,7 +61,7 @@ type entry struct {
 
 // cache holds decisions and full-read decisions under one byte budget with
 // one LRU across identities, and merges identical concurrent checks (design
-// §6.2, D-100). An allow lives allowTTL, a deny DenyTTL; an expiry never moves.
+// §6.2, D-100). An allow lives allowTTL, a deny up to DenyTTL; an expiry never moves.
 // An evicted entry is a miss.
 type cache struct {
 	checker Checker
@@ -68,8 +69,10 @@ type cache struct {
 	lim      *limiter
 	clock    clock.PassiveClock
 	allowTTL time.Duration
-	m        *metrics
-	log      *slog.Logger
+	// rand returns a value in [0, 1); tests replace it.
+	rand func() float64
+	m    *metrics
+	log  *slog.Logger
 
 	mu        sync.Mutex
 	decisions map[flightKey]*list.Element
@@ -88,20 +91,23 @@ type cache struct {
 	joined, woke func()
 }
 
+// denyJitter is the default source of a deny's jitter; tests replace it.
+var denyJitter = rand.Float64
+
 func newCache(c Checker, lim *limiter, clk clock.PassiveClock, allowTTL time.Duration, maxBytes int64, m *metrics) *cache {
 	return &cache{
-		checker: c, lim: lim, clock: clk, allowTTL: allowTTL, m: m, log: slog.Default(), max: maxBytes,
+		checker: c, lim: lim, clock: clk, allowTTL: allowTTL, m: m, log: slog.Default(), max: maxBytes, rand: denyJitter,
 		decisions: map[flightKey]*list.Element{}, ids: map[idHash]*idEntry{}, lru: list.New(),
 		flights: map[flightKey]*flight{}, fullFlights: map[fullKey]*flight{},
 	}
 }
 
-// ttl is the lifetime of an answer: allowTTL for an allow, DenyTTL for a deny.
+// ttl is the lifetime of an answer: allowTTL for an allow, a deny's is uniform in [MinDenyTTL, DenyTTL].
 func (c *cache) ttl(allowed bool) time.Duration {
 	if allowed {
 		return c.allowTTL
 	}
-	return DenyTTL
+	return MinDenyTTL + time.Duration(c.rand()*float64(DenyTTL-MinDenyTTL))
 }
 
 // check answers a for the identity from the cache, a running flight or a new
