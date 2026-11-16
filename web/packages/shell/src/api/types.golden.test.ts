@@ -1724,7 +1724,11 @@ describe("types.ts matches the golden v1 wire format", () => {
     expect(hidden && !("message" in hidden) && hidden.resource.link === "none").toBe(true);
     expect(findingDetailRestrictedGolden.body.finding.restricted).toBe(true);
     expect(health.body.findings.every((f) => "id" in f && f.id)).toBe(true);
-    expect(meta.body.filters?.findings).toEqual(["severity", "code", "kind", "namespace", "group", "q"]);
+    expect(meta.body.filters?.findings).toEqual(["severity", "code", "kind", "namespace", "group", "q", "namespaces"]);
+    // The namespace scope (Task 37) is listed for every list it applies to.
+    for (const l of ["routes", "gateways", "listenersets", "paths", "backends", "findings", "processes"]) {
+      expect((meta.body.filters as Record<string, string[]>)[l]).toContain("namespaces");
+    }
   });
 
   // The trail lookup: a hidden ref and an absent one both read as none, with only the requested identity.

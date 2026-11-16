@@ -200,6 +200,12 @@ export interface MetaResponse {
   /** Secure mode: the viewer cannot list every served kind everywhere; absent otherwise (design §7.5). */
   limitedView?: boolean;
 }
+/** GET …/namespaces: the sorted namespaces of the install's route, Gateway and ListenerSet rows the viewer can see. */
+export interface NamespacesResponse {
+  install: string;
+  namespaces: string[];
+  collectedAt: string;
+}
 /** One extension capability; reason says why it is not on. Only "on" ones are also in MetaResponse.capabilities. */
 export interface Capability {
   name: string;

@@ -7,6 +7,7 @@ import type {
   HealthReport,
   InstallSummary,
   MetaResponse,
+  NamespacesResponse,
   OverviewResponse,
   RawHealthReport,
   Ref,
@@ -78,6 +79,13 @@ export const installApi = (id: string) => `/api/v1/installs/${encodeURIComponent
 /** GET /api/v1/installs/{id}/overview. */
 export function useOverview(id: string) {
   return useSWR<OverviewResponse, ApiError>(`${installApi(id)}/overview`, apiFetch, live);
+}
+
+/** GET /api/v1/installs/{id}/namespaces, the namespace scope's choices; fetched only while enabled, not polled. */
+export function useNamespaces(id: string, enabled: boolean) {
+  return useSWR<NamespacesResponse, ApiError>(enabled && id ? `${installApi(id)}/namespaces` : null, apiFetch, {
+    onErrorRetry: retryEveryPoll,
+  });
 }
 
 /** GET /api/v1/installs/{id}/health. */

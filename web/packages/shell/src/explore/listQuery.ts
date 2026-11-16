@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiError } from "../api/client";
+import { useListFilter } from "../api/hooks";
 import type { Page } from "../api/types";
 import { useInstallId } from "../shell/extension";
+import { useNamespaceScope } from "../shell/namespaceScopeStore";
 import { type ParamChanges, useUrlParams } from "../shell/urlParams";
 
 // region Helpers
@@ -63,9 +65,19 @@ export function listValues(params: URLSearchParams, key: string): string[] {
   return params.get(key)?.split(",").filter(Boolean) ?? [];
 }
 
-/** The API query for list from the page URL: only documented params, repeatable ones expanded; skip is never sent. */
-export function apiQuery(list: ListName, params: URLSearchParams, q: string, skip: string[] = []): URLSearchParams {
+/**
+ * The API query for list from the page URL: only documented params, repeatable ones expanded; skip is never sent.
+ * scope, when not empty, is the header's namespace scope, sent comma-joined as namespaces.
+ */
+export function apiQuery(
+  list: ListName,
+  params: URLSearchParams,
+  q: string,
+  skip: string[] = [],
+  scope: readonly string[] = [],
+): URLSearchParams {
   const out = new URLSearchParams();
+  if (scope.length > 0) out.set("namespaces", scope.join(","));
   for (const key of API_PARAMS[list]) {
     if (skip.includes(key)) continue;
     if (key === "q") {
@@ -108,6 +120,7 @@ type ListHook<P> = (
 /**
  * URL state and data of one list page: filters, sort and cursor live in the query string (design §8.1).
  * skip names params the server does not advertise (/meta filters); they stay in the URL but are never sent.
+ * The header's namespace scope is sent when /meta lists it for list; a scope change returns to page one.
  */
 export function useListPage<T, P extends { install: string } = Page<T>>(
   list: ListName,
@@ -120,7 +133,27 @@ export function useListPage<T, P extends { install: string } = Page<T>>(
   const q = useDebounced(text, Q_DEBOUNCE_MS);
   // The debounced value starts at the URL's q, so a reload does not wait.
   const skipKey = skip.join(",");
-  const query = useMemo(() => apiQuery(list, params, q, skipKey.split(",")), [list, params, q, skipKey]);
+  const [scope] = useNamespaceScope();
+  const scopeKey = useListFilter(list, "namespaces") ? scope.join(",") : "";
+  // The scope the URL's cursor was minted under; until the cursor is dropped, a changed scope sends none.
+  const cursorScope = useRef(scopeKey);
+  const stale = cursorScope.current !== scopeKey;
+  useEffect(() => {
+    if (cursorScope.current === scopeKey) return;
+    cursorScope.current = scopeKey;
+    update({ cursor: null });
+  }, [scopeKey, update]);
+  const query = useMemo(
+    () =>
+      apiQuery(
+        list,
+        params,
+        q,
+        [...skipKey.split(","), ...(stale ? ["cursor"] : [])],
+        scopeKey ? scopeKey.split(",") : [],
+      ),
+    [list, params, q, skipKey, stale, scopeKey],
+  );
   const { data, error, cursorRejected, isLaggy } = useList(id, query);
   // A rejected cursor is dropped (replace) and page one shows (design §8.6).
   useEffect(() => {

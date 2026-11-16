@@ -16,8 +16,8 @@ const Nav = styled.nav`
   display: flex;
   flex: none;
   gap: ${(p) => p.theme.space(1)};
-  /* Narrow windows scroll the nav sideways rather than let it run over the install label. */
-  @media (max-width: 899px) {
+  /* Narrow windows scroll the nav sideways rather than let it run over the install label or out of the header. */
+  @media (max-width: 1099px) {
     flex: 0 1 auto;
     min-width: 0;
     overflow-x: auto;

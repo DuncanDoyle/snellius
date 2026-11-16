@@ -22,6 +22,7 @@ import { InstallName } from "./InstallName";
 import { InstallNav } from "./InstallNav";
 import { InstallSwitcher } from "./InstallSwitcher";
 import { MenuButton } from "./menu";
+import { NamespaceScope } from "./NamespaceScope";
 import { PermissionsNote } from "./PermissionsNote";
 import { ABOUT_PATH, installPath } from "./paths";
 import { ThemeSwitcher } from "./ThemeSwitcher";
@@ -73,7 +74,7 @@ const Identity = styled.div`
   border-left: 1px solid ${(p) => p.theme.color.borderStrong};
   white-space: nowrap;
   /* The install nav gives way first on narrow windows (it scrolls). */
-  @media (max-width: 899px) { flex: none; }
+  @media (max-width: 1099px) { flex: none; }
   /* Below this width the hidden-details note stays for screen readers only; the permissions note still shows. */
   @media (max-width: 1399px) {
     [data-part="details-hidden"] {
@@ -176,7 +177,10 @@ function ReadyTip({
 }
 
 // region Component
-/** Header: brand, install identity, version, edition and controller readiness, install and extension navigation, theme switcher. */
+/**
+ * Header: brand, install identity, version, edition and controller readiness, the namespace scope, install and
+ * extension navigation, theme switcher.
+ */
 export function Header({ installPaths }: { installPaths: readonly string[] }) {
   const { brand, navEntries } = useShellExtension();
   const match = useMatch("/i/:id/*");
@@ -240,6 +244,8 @@ export function Header({ installPaths }: { installPaths: readonly string[] }) {
       <Spacer />
       {/* Right of the spacer, so the note appearing only narrows the spacer. */}
       <PermissionsNote compact={compact} />
+      {/* Fixed width from the first paint on install pages; it scopes the list pages only. */}
+      {id ? <NamespaceScope installId={id} /> : null}
       {id ? <InstallNav installId={id} paths={installPaths} /> : null}
       {nav.length > 0 ? (
         <Nav aria-label="Extensions">

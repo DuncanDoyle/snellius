@@ -226,6 +226,7 @@ it("keeps the public export surface", () => {
         "MetaResponse",
         "Mirror",
         "NamespaceFacet",
+        "NamespacesResponse",
         "NavEntry",
         "NextStep",
         "ObjectHeaderProps",
