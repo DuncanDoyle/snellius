@@ -1535,3 +1535,12 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** The install ID stays `<namespace>.<name>` in every mode, for every viewer. Anyone who can see any object of an install learns its controller's namespace and name, and nothing more: edition, version, readiness, GatewayClass names and scope stay hidden per design §7.4.
 
 **Consequences:** The ID is a known disclosure, recorded here, not a D-085 leak: it never changes with hidden objects (`helm upgrade` patches the Deployment in place). A restricted viewer's responses contain no other field from the controller Deployment, and a test checks that.
+
+## D-103 — Every signed-in viewer sees every install (2026-11-16, Phase 7, amends D-102 and design §7.4)
+**Status:** accepted by the user (2026-11-16), after the Codex re-review of the 7.4 plan (`reviews/plan-7.4-codex.md`, re-review #N1, #N4).
+
+**Context:** Design §7.4 lists an install only when the viewer can read an object Snellius attributes to it. Deciding that needs a scan over the install's (kind, namespace) buckets. A bounded scan leaks: whether an install URL answers 404 or 200 depends on how many hidden buckets exist, and on a wide install the scan may never settle, because denials expire after 4–5 min.
+
+**Decision:** In secure mode every signed-in viewer sees every install's ID (D-102) and a neutral name, whatever they can read in it. No reachability check runs. Everything else about an install stays per viewer (design §7.4): GatewayClass names, controller readiness and version, scope details, and every row, count and finding.
+
+**Consequences:** Creating or removing a controller install is visible to every signed-in viewer: a stated exception to D-085, like D-102. An install with nothing the viewer can read shows empty pages, never a 404. No permission checks are spent on reachability.
