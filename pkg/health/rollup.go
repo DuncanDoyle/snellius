@@ -84,13 +84,18 @@ func Project(rep Report, rd Readable) Report {
 	for i := range rep.Findings {
 		if f := rep.Findings[i]; f.ShownTo(rd) {
 			f.Group = "" // the viewer's grouping is set per viewer
+			if f.Class != ClassOwn {
+				f.Detail = f.Basis.text // the API server's text may name objects or namespaces
+			}
 			out.Findings = append(out.Findings, f)
 			out.Counts[f.Severity]++
 		}
 	}
 	out.Checks = make([]CheckResult, len(rep.Checks))
 	for i, c := range rep.Checks {
-		if !c.Collection {
+		if c.Collection {
+			c.Error, c.Detail = c.fixed, ""
+		} else {
 			c = CheckResult{Name: c.Name, Required: c.Required, CollectedAt: c.CollectedAt, OK: true, NotAssessed: true}
 		}
 		out.Checks[i] = c
@@ -237,6 +242,7 @@ func evaluateOne(in Input, c Check, set InputSet, rt Runtime, memoize bool, outp
 	}
 	ctx := runContext(in, c, set, rt, outputs)
 	fs, cr = c.Run(ctx)
+	fs, cr = confine(c, fs, cr)
 	if ctx.sink.hold != nil {
 		cr.Hold = ctx.sink.hold
 	}

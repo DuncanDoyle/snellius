@@ -5,7 +5,10 @@ import (
 	"regexp"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"github.com/DuncanDoyle/snellius/internal/testutil"
+	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
 
@@ -95,7 +98,7 @@ func TestResultsNotCheckedForRestricted(t *testing.T) {
 			for i, c := range got.Checks {
 				orig := rep.Checks[i]
 				if orig.Collection {
-					if !reflect.DeepEqual(c, orig) {
+					if orig.Error, orig.Detail = orig.fixed, ""; !reflect.DeepEqual(c, orig) {
 						t.Errorf("%s: collection result %q changed: %+v", name, orig.Name, c)
 					}
 					continue
@@ -151,10 +154,22 @@ func TestCollectionFailureStays(t *testing.T) {
 
 // No collection result's text names an object or namespace of its world.
 func TestCollectionTextObjectFree(t *testing.T) {
+	worlds := ownWorlds(t)
+	// The API server's own text names namespaces, the UI's ServiceAccount and objects.
+	const sa = "system:serviceaccount:ops:snellius-reader"
+	forbidden := `services is forbidden: User "` + sa + `" cannot list resource "services" in API group "" in the namespace "shop"`
+	for name, access := range map[string]map[schema.GroupVersionResource]cache.Access{
+		"services forbidden": {cache.ServicesGVR: {Err: forbidden, Denied: true}, cache.EndpointSlicesGVR: {OK: true}},
+		"routes list error":  {httpRoutesGVR(): {Err: `failed to list: decoding object "shop/cart": unknown field "spec.rulez"`}},
+	} {
+		w := healthyWorld()
+		w.access = access
+		worlds["access/"+name] = ownWorld{w.input(t), w.runtime(Runtime{})}
+	}
 	collections := 0
-	for name, w := range ownWorlds(t) {
-		rep := Evaluate(w.in, Upstream(), w.rt)
-		var words []string
+	for name, w := range worlds {
+		rep := Project(Evaluate(w.in, Upstream(), w.rt), readSet{})
+		words := []string{"ops", "snellius-reader", "serviceaccount", "cart"}
 		for _, objs := range w.in.Snapshot.Objects {
 			for _, u := range objs {
 				words = append(words, u.GetName(), u.GetNamespace())
@@ -163,14 +178,22 @@ func TestCollectionTextObjectFree(t *testing.T) {
 		for _, n := range w.in.Snapshot.Namespaces {
 			words = append(words, n.Name)
 		}
+		var texts []string
 		for _, c := range rep.Checks {
-			if !c.Collection {
-				continue
+			if c.Collection {
+				collections++
+				texts = append(texts, c.Name+": "+c.Error+" "+c.Detail)
 			}
-			collections++
+		}
+		for _, f := range rep.Findings {
+			if f.Basis.Collection {
+				texts = append(texts, f.Code+": "+f.Message+" "+f.Detail)
+			}
+		}
+		for _, text := range texts {
 			for _, word := range words {
-				if len(word) > 2 && regexp.MustCompile(`\b`+regexp.QuoteMeta(word)+`\b`).MatchString(c.Error+" "+c.Detail) {
-					t.Errorf("%s: collection result %q names %q: %s", name, c.Name, word, c.Error)
+				if len(word) > 2 && regexp.MustCompile(`\b`+regexp.QuoteMeta(word)+`\b`).MatchString(text) {
+					t.Errorf("%s: collection text names %q: %s", name, word, text)
 				}
 			}
 		}
@@ -178,6 +201,41 @@ func TestCollectionTextObjectFree(t *testing.T) {
 	if collections == 0 {
 		t.Fatal("the fixtures have no collection result")
 	}
+}
+
+// httpRoutesGVR is the served HTTPRoute resource.
+func httpRoutesGVR() schema.GroupVersionResource {
+	for _, s := range testutil.ServedUpstream() {
+		if s.Group == objects.GatewayAPIGroup && s.Kind == "HTTPRoute" {
+			return s.GVR()
+		}
+	}
+	panic("HTTPRoute is not served")
+}
+
+// A check outside the core collection checks and runOwn cannot mark its
+// output own-object or collection: a restricted viewer still sees nothing of it.
+func TestNonCoreCannotMarkVisible(t *testing.T) {
+	res := objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: "cart"}
+	c := markingCheck{f: Finding{Code: "ACME-002", Severity: SeverityError, Resource: &res, Message: "m", Class: ClassOwn,
+		Basis: Basis{Collection: true, Refs: []objects.Ref{res}}}}
+	rep := Evaluate(Input{}, []Check{c}, Runtime{})
+	got := Project(rep, readAll{})
+	if len(got.Findings) != 0 {
+		t.Fatalf("restricted viewer sees %+v", got.Findings)
+	}
+	if r := got.Checks[0]; !r.NotAssessed || r.Error != "" || got.State == StateUnknown {
+		t.Fatalf("result %+v (state %s), want Not checked", r, got.State)
+	}
+}
+
+// markingCheck returns f and a failed result that both claim to be visible to every viewer.
+type markingCheck struct{ f Finding }
+
+func (markingCheck) Name() string     { return "acme" }
+func (markingCheck) Inputs() InputSet { return InputSet{} }
+func (c markingCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
+	return []Finding{c.f}, CheckResult{Name: "acme", Required: true, CollectedAt: ctx.Now, Error: "acme failed", Collection: true}
 }
 
 // A nil viewer is the full read: Project returns the report unchanged.

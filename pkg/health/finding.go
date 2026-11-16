@@ -3,6 +3,7 @@
 package health
 
 import (
+	"slices"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -86,6 +87,45 @@ type Basis struct {
 	Collection bool
 	// Refs are the objects an own-object analyzer named, present or absent.
 	Refs []objects.Ref
+	// text is a collection finding's fixed Detail, which names no object, for Project.
+	text string
+}
+
+// Only conditionsCheck (through runOwn) may mark a finding own-object, and only
+// the collection checks may mark output collection; Evaluate clears the rest.
+func ownTrusted(c Check) bool { _, ok := c.(conditionsCheck); return ok }
+
+func collectionTrusted(c Check) bool {
+	switch c.(type) {
+	case cacheCheck, kindsCheck, endpointsCheck:
+		return true
+	}
+	return false
+}
+
+// confine clears from c's output every visibility mark c may not set (D-106).
+// It copies fs before it changes it.
+func confine(c Check, fs []Finding, cr CheckResult) ([]Finding, CheckResult) {
+	own, coll := ownTrusted(c), collectionTrusted(c)
+	if !coll {
+		cr.Collection, cr.fixed = false, ""
+	}
+	marked := func(f *Finding) bool {
+		return !own && (f.Class != ClassDerived || len(f.Basis.Refs) > 0) || !coll && (f.Basis.Collection || f.Basis.text != "")
+	}
+	if !slices.ContainsFunc(fs, func(f Finding) bool { return marked(&f) }) {
+		return fs, cr
+	}
+	fs = slices.Clone(fs)
+	for i := range fs {
+		if !own {
+			fs[i].Class, fs[i].Basis.Refs = ClassDerived, nil
+		}
+		if !coll {
+			fs[i].Basis.Collection, fs[i].Basis.text = false, ""
+		}
+	}
+	return fs, cr
 }
 
 // Readable says which objects a viewer may read.
@@ -166,9 +206,11 @@ type CheckResult struct {
 	// NotAssessed marks a result shown as "Not checked" to a viewer without the full read.
 	NotAssessed bool `json:"notAssessed,omitempty"`
 	// Collection marks a collection or access failure (a watch denied, the
-	// cache not synced): its Error is fixed text that names no object, so
-	// every viewer sees it. Never serialised.
+	// cache not synced). Every viewer sees it, Error replaced by fixed text
+	// that names no object. Never serialised.
 	Collection bool `json:"-"`
+	// fixed is a collection result's fixed Error, for Project.
+	fixed string
 }
 
 // Hold is what a check waits on before it decides: counts and a time, never

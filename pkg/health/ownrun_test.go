@@ -6,10 +6,15 @@ import (
 	"encoding/json"
 	"flag"
 	"go/ast"
+	"go/constant"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"hash/fnv"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -285,62 +290,130 @@ func TestEveryCodeClassified(t *testing.T) {
 // own.Named are used or implemented only in ownrun.go. fromOwn refuses a
 // Finding that own did not build.
 func TestOwnFindingsOnlyFromOwn(t *testing.T) {
-	names, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
+	if bad := ownUseViolations(t, "."); len(bad) > 0 {
+		t.Errorf("own-object marks outside fromOwn and ownrun.go:\n%s", strings.Join(bad, "\n"))
 	}
-	for _, name := range names {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, d := range f.Decls {
-			fd, isFunc := d.(*ast.FuncDecl)
-			inFromOwn := isFunc && fd.Name.Name == "fromOwn"
-			if isFunc && fd.Recv != nil && name != "ownrun.go" && (fd.Name.Name == "Object" || fd.Name.Name == "FirstSeen") {
-				t.Errorf("%s: method %s may implement own.Named outside ownrun.go", name, fd.Name.Name)
-			}
-			var stack []ast.Node
-			ast.Inspect(d, func(n ast.Node) bool {
-				if n == nil {
-					stack = stack[:len(stack)-1]
-					return true
-				}
-				parent := ast.Node(nil)
-				if len(stack) > 0 {
-					parent = stack[len(stack)-1]
-				}
-				stack = append(stack, n)
-				if sel, ok := n.(*ast.SelectorExpr); ok && name != "ownrun.go" {
-					if x, ok := sel.X.(*ast.Ident); ok && x.Name == "own" && slices.Contains([]string{"Evaluate", "InstallContext", "Named"}, sel.Sel.Name) {
-						t.Errorf("%s: own.%s outside ownrun.go", name, sel.Sel.Name)
-					}
-				}
-				id, ok := n.(*ast.Ident)
-				if !ok || id.Name != "ClassOwn" || inFromOwn {
-					return true
-				}
-				switch p := parent.(type) {
-				case *ast.ValueSpec: // the declaration
-					return true
-				case *ast.BinaryExpr: // a comparison reads the class
-					if p.Op == token.EQL || p.Op == token.NEQ {
-						return true
-					}
-				case *ast.CaseClause:
-					return true
-				}
-				t.Errorf("%s: ClassOwn set outside fromOwn", name)
-				return true
-			})
-		}
+	if bad := ownUseViolations(t, filepath.Join("testdata", "badclass")); len(bad) != 6 {
+		t.Errorf("the check must reject a variable, a conversion, arithmetic, own.InstallContext, own.Evaluate and a Named type: %v", bad)
 	}
 	if _, ok := fromOwn(own.Finding{}, nil); ok {
 		t.Fatal("fromOwn must refuse a Finding own did not build")
 	}
+}
+
+// ownUseViolations type-checks the non-test files of the package in dir and
+// returns each expression of type health.Class with ClassOwn's value outside
+// fromOwn (a comparison or case only reads it), and each use of own.Evaluate,
+// own.InstallContext or a type implementing own.Named outside ownrun.go.
+// Types resolve, so aliased imports, variables and conversions are caught.
+func ownUseViolations(t *testing.T, dir string) []string {
+	t.Helper()
+	const healthPath, ownPath = "github.com/DuncanDoyle/snellius/pkg/health", "github.com/DuncanDoyle/snellius/pkg/health/own"
+	cmd := exec.Command("go", "list", "-export", "-deps", "-f", "{{.ImportPath}}={{.Export}}", ".")
+	cmd.Dir = dir
+	listed, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go list in %s: %v", dir, err)
+	}
+	exports := map[string]string{}
+	var self string
+	for _, l := range strings.Split(strings.TrimSpace(string(listed)), "\n") {
+		path, file, _ := strings.Cut(l, "=")
+		exports[path], self = file, path // the package itself is listed last
+	}
+	fset := token.NewFileSet()
+	names, _ := filepath.Glob(filepath.Join(dir, "*.go"))
+	var files []*ast.File
+	for _, n := range names {
+		if strings.HasSuffix(n, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, n, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, f)
+	}
+	imp := importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) { return os.Open(exports[path]) })
+	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}}
+	pkg, err := (&types.Config{Importer: imp}).Check(self, fset, files, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var healthPkg, ownPkg *types.Package
+	for _, p := range append(pkg.Imports(), pkg) {
+		switch p.Path() {
+		case healthPath:
+			healthPkg = p
+		case ownPath:
+			ownPkg = p
+		}
+	}
+	var bad []string
+	at := func(n ast.Node) string {
+		p := fset.Position(n.Pos())
+		return filepath.Base(p.Filename) + ":" + strconv.Itoa(p.Line)
+	}
+	if healthPkg != nil {
+		classOwn := healthPkg.Scope().Lookup("ClassOwn").(*types.Const)
+		for _, f := range files {
+			for _, d := range f.Decls {
+				if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == "fromOwn" && pkg == healthPkg {
+					continue
+				}
+				if g, ok := d.(*ast.GenDecl); ok && slices.ContainsFunc(g.Specs, func(s ast.Spec) bool { // ClassOwn's own declaration
+					vs, ok := s.(*ast.ValueSpec)
+					return ok && slices.ContainsFunc(vs.Names, func(n *ast.Ident) bool { return info.Defs[n] == classOwn })
+				}) {
+					continue
+				}
+				var stack []ast.Node
+				ast.Inspect(d, func(n ast.Node) bool {
+					if n == nil {
+						stack = stack[:len(stack)-1]
+						return true
+					}
+					var parent ast.Node
+					if len(stack) > 0 {
+						parent = stack[len(stack)-1]
+					}
+					stack = append(stack, n)
+					e, ok := n.(ast.Expr)
+					tv, typed := info.Types[e]
+					if !ok || !typed || tv.Value == nil || !types.Identical(tv.Type, classOwn.Type()) || !constant.Compare(tv.Value, token.EQL, classOwn.Val()) {
+						return true
+					}
+					if b, ok := parent.(*ast.BinaryExpr); ok && (b.Op == token.EQL || b.Op == token.NEQ) {
+						return true
+					}
+					if _, ok := parent.(*ast.CaseClause); ok {
+						return true
+					}
+					bad = append(bad, at(n)+": ClassOwn outside fromOwn")
+					return false
+				})
+			}
+		}
+	}
+	inRun := func(n ast.Node) bool {
+		return pkg == healthPkg && filepath.Base(fset.Position(n.Pos()).Filename) == "ownrun.go"
+	}
+	if ownPkg != nil {
+		for id, obj := range info.Uses {
+			if obj.Pkg() == ownPkg && slices.Contains([]string{"Evaluate", "InstallContext"}, obj.Name()) && !inRun(id) {
+				bad = append(bad, at(id)+": own."+obj.Name()+" outside ownrun.go")
+			}
+		}
+		named := ownPkg.Scope().Lookup("Named").Type().Underlying().(*types.Interface)
+		for id, obj := range info.Defs {
+			if tn, ok := obj.(*types.TypeName); ok && !inRun(id) &&
+				(types.Implements(tn.Type(), named) || types.Implements(types.NewPointer(tn.Type()), named)) {
+				bad = append(bad, at(id)+": "+tn.Name()+" implements own.Named outside ownrun.go")
+			}
+		}
+	}
+	slices.Sort(bad)
+	return bad
 }
 
 // A 015 inside its hint window wakes the report at the hint's deadline, as before the boundary.
@@ -460,51 +533,77 @@ func TestOwnBasisIsWhatWasNamed(t *testing.T) {
 }
 
 // Removing every object other than the resource and what it named, and
-// adding unrelated ones, leaves its own-object findings byte-equal; membership
-// is install context and stays. This supplements the import boundary.
+// adding unrelated ones, leaves its own-object findings byte-equal, for every
+// resource each analyzer runs on, with findings or without; membership is
+// install context and stays. This supplements the import boundary.
 func TestOwnBoundaryIgnoresOthers(t *testing.T) {
-	in := ownWorlds(t)["scale/typical-worst-faults"].in
-	checked := 0
-	for _, f := range Evaluate(in, []Check{conditionsCheck{}}, Runtime{}).Findings {
-		k, ok := ownKindOf(in, f)
-		if !ok {
-			continue
+	// A route on the install's Gateway that also names an existing Gateway of
+	// another controller: it has no finding while that Gateway exists.
+	w := healthyWorld()
+	edge, other := testutil.GwRef("infra", "edge"), testutil.GwRef("infra", "other")
+	w.objs = append(w.objs, testutil.GatewayClass("foreign", "example.com/other", true), testutil.Gateway("infra", "other", "foreign", nil),
+		testutil.HTTPRoute("shop", "both", []objects.ParentRef{edge, other}, testutil.AcceptedBy(edge, testutil.Controller)))
+	checked, withFindings := 0, 0
+	for _, in := range []Input{ownWorlds(t)["scale/typical-worst-faults"].in, w.input(t)} {
+		o := in.Owned
+		routes := objectsOf(o.Routes)
+		runs := []struct {
+			k         own.Kind
+			resources []*unstructured.Unstructured
+		}{
+			{own.Parents, ownRoutes(o)},
+			{own.Status, slices.Concat(o.Gateways, o.ListenerSets, routes, objectsOf(o.Policies))},
+			{own.Refs, routes},
+			{own.Rules, routes},
 		}
-		u := objectByRef(in, *f.Resource)
-		want, refs := ownFindings(in, k, u)
-		keep := append([]objects.Ref{*f.Resource}, refs...)
-		snap := *in.Snapshot
-		snap.Objects = map[schema.GroupVersionResource][]*unstructured.Unstructured{}
-		for gvr, objs := range in.Snapshot.Objects {
-			for _, o := range objs {
-				if slices.Contains(keep, objects.RefOf(o)) {
-					snap.Objects[gvr] = append(snap.Objects[gvr], o)
-				}
+		for _, run := range runs {
+			for _, u := range run.resources {
+				checked++
+				boundaryUnchanged(t, in, run.k, u, &withFindings)
 			}
 		}
-		other := testutil.HTTPRoute(u.GetNamespace(), "unrelated", []objects.ParentRef{testutil.GwRef(u.GetNamespace(), "elsewhere")})
-		for _, s := range in.Served {
-			if s.Group == objects.GatewayAPIGroup && s.Kind == "HTTPRoute" {
-				snap.Objects[s.GVR()] = append(snap.Objects[s.GVR()], other)
-			}
-		}
-		snap.Services = nil
-		for _, s := range in.Snapshot.Services {
-			if slices.Contains(keep, objects.Ref{Kind: "Service", Namespace: s.Namespace, Name: s.Name}) {
-				snap.Services = append(snap.Services, s)
-			}
-		}
-		perturbed := in
-		perturbed.Snapshot = &snap
-		got, _ := ownFindings(perturbed, k, u)
-		g, _ := json.Marshal(got)
-		w, _ := json.Marshal(want)
-		if !bytes.Equal(g, w) {
-			t.Errorf("%s on %s changed when other objects changed:\n got %s\nwant %s", f.Code, f.Resource, g, w)
-		}
-		checked++
 	}
-	if checked == 0 {
-		t.Fatal("no own-object finding to check")
+	if withFindings == 0 || withFindings == checked {
+		t.Fatalf("%d of %d resources have findings; want some with and some without", withFindings, checked)
+	}
+}
+
+// boundaryUnchanged checks analyzer k on u against a snapshot holding only u,
+// what it named and an unrelated route.
+func boundaryUnchanged(t *testing.T, in Input, k own.Kind, u *unstructured.Unstructured, withFindings *int) {
+	t.Helper()
+	want, refs := ownFindings(in, k, u)
+	if len(want) > 0 {
+		*withFindings++
+	}
+	keep := append([]objects.Ref{objects.RefOf(u)}, refs...)
+	snap := *in.Snapshot
+	snap.Objects = map[schema.GroupVersionResource][]*unstructured.Unstructured{}
+	for gvr, objs := range in.Snapshot.Objects {
+		for _, o := range objs {
+			if slices.Contains(keep, objects.RefOf(o)) {
+				snap.Objects[gvr] = append(snap.Objects[gvr], o)
+			}
+		}
+	}
+	other := testutil.HTTPRoute(u.GetNamespace(), "unrelated", []objects.ParentRef{testutil.GwRef(u.GetNamespace(), "elsewhere")})
+	for _, s := range in.Served {
+		if s.Group == objects.GatewayAPIGroup && s.Kind == "HTTPRoute" {
+			snap.Objects[s.GVR()] = append(snap.Objects[s.GVR()], other)
+		}
+	}
+	snap.Services = nil
+	for _, s := range in.Snapshot.Services {
+		if slices.Contains(keep, objects.Ref{Kind: "Service", Namespace: s.Namespace, Name: s.Name}) {
+			snap.Services = append(snap.Services, s)
+		}
+	}
+	perturbed := in
+	perturbed.Snapshot = &snap
+	got, _ := ownFindings(perturbed, k, u)
+	g, _ := json.Marshal(got)
+	w, _ := json.Marshal(want)
+	if !bytes.Equal(g, w) {
+		t.Errorf("analyzer %d on %s changed when other objects changed:\n got %s\nwant %s", k, objects.RefOf(u), g, w)
 	}
 }

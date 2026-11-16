@@ -60,9 +60,24 @@ func ok(name string, required bool, at time.Time) CheckResult {
 // unavailable is a KGWUI-008 and a required result that is not OK. With
 // collection, why must be fixed text that names no object: every viewer sees both.
 func unavailable(in Input, name, why string, collection bool) ([]Finding, CheckResult) {
+	b, r := Basis{Collection: collection}, CheckResult{Name: name, Required: true, CollectedAt: in.Now, Error: why, Collection: collection}
+	if collection {
+		b.text, r.fixed = why, why
+	}
 	return []Finding{{Code: CodeSignalUnavailable, Slug: "signal-unavailable", Severity: SeverityInfo, Install: in.Install.ID(),
-			Message: "Could not check " + name, Detail: why, Key: []string{name}, Basis: Basis{Collection: collection}}},
-		CheckResult{Name: name, Required: true, CollectedAt: in.Now, Error: why, Collection: collection}
+		Message: "Could not check " + name, Detail: why, Key: []string{name}, Basis: b}}, r
+}
+
+// accessText is fixed text for why access a fails: the API server's own
+// message may name namespaces, objects or the UI's ServiceAccount.
+func accessText(a cache.Access) string {
+	switch AccessAvailability(a) {
+	case AvailDenied:
+		return "access denied"
+	case AvailFailing:
+		return "the watch is failing"
+	}
+	return "not synced yet"
 }
 
 // cacheCheck: the snapshot is synced and the core kinds are readable; optional
@@ -93,15 +108,16 @@ func (c cacheCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 	for _, gvr := range core {
 		if a, known := in.Snapshot.Access[gvr]; known && !a.OK {
 			fs = append(fs, Finding{Code: CodeSignalUnavailable, Slug: "signal-unavailable", Severity: SeverityInfo, Install: in.Install.ID(),
-				Message: "No access to " + resourceName(gvr), Detail: a.Err, Key: []string{c.Name(), resourceName(gvr)}, Basis: Basis{Collection: true}})
+				Message: "No access to " + resourceName(gvr), Detail: a.Err, Key: []string{c.Name(), resourceName(gvr)},
+				Basis: Basis{Collection: true, text: accessText(a)}})
 		}
 	}
 	if len(fs) > 0 {
 		slices.SortFunc(fs, func(a, b Finding) int {
 			return cmp.Or(cmp.Compare(a.Message, b.Message), cmp.Compare(a.Detail, b.Detail))
 		})
-		return fs, CheckResult{Name: c.Name(), Required: true, CollectedAt: in.Snapshot.TakenAt, Error: fmt.Sprintf("%d kinds not readable", len(fs)),
-			Collection: true}
+		why := fmt.Sprintf("%d kinds not readable", len(fs))
+		return fs, CheckResult{Name: c.Name(), Required: true, CollectedAt: in.Snapshot.TakenAt, Error: why, Collection: true, fixed: why}
 	}
 	return nil, ok(c.Name(), true, in.Snapshot.TakenAt)
 }
@@ -141,8 +157,8 @@ func (c kindsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 	why := "served kinds changed: " + in.KindsChange.String()
 	return []Finding{{Code: CodeSignalUnavailable, Slug: "signal-unavailable", Severity: SeverityInfo, Install: in.Install.ID(),
 			Message: "Served kinds changed; restart the UI to watch them", Detail: in.KindsChange.String(), Key: []string{c.Name()},
-			Basis: Basis{Collection: true}}},
-		CheckResult{Name: c.Name(), Required: true, CollectedAt: in.Now, Error: why, Collection: true}
+			Basis: Basis{Collection: true, text: in.KindsChange.String()}}}, // kind names come from API discovery
+		CheckResult{Name: c.Name(), Required: true, CollectedAt: in.Now, Error: why, Collection: true, fixed: why}
 }
 
 // scopeCheck: the install's scope could be determined.

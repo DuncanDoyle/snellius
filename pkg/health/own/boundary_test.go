@@ -90,8 +90,21 @@ var closureAllowed = []string{
 	"golang.org/x/text/unicode/norm",
 }
 
+// stdDenied reports whether own's files may not import standard-library
+// package p: it reaches raw memory, reflection, files, processes or the network.
+func stdDenied(p string) bool {
+	for _, d := range []string{"C", "unsafe", "reflect", "os", "net", "syscall", "plugin", "runtime", "io/fs", "io/ioutil",
+		"embed", "debug", "internal", "log/syslog", "testing", "path/filepath", "expvar"} {
+		if p == d || strings.HasPrefix(p, d+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // importViolations walks the full transitive import graph of the package in
-// dir and returns every package outside the standard library and the lists.
+// dir and returns every package outside the standard library and the lists,
+// and every direct import stdDenied names.
 // A standard-library package imports only the standard library, so the walk stops there.
 func importViolations(t *testing.T, dir string) []string {
 	t.Helper()
@@ -112,10 +125,17 @@ func importViolations(t *testing.T, dir string) []string {
 	for len(queue) > 0 {
 		e := queue[0]
 		queue = queue[1:]
-		if seen[e.path] || e.path == "C" || e.path == "unsafe" {
+		if seen[e.path] {
 			continue
 		}
 		seen[e.path] = true
+		if e.direct && stdDenied(e.path) {
+			bad = append(bad, "direct import "+e.path)
+			continue
+		}
+		if e.path == "C" || e.path == "unsafe" {
+			continue
+		}
 		pkg, err := build.Import(e.path, root.Dir, 0)
 		if err != nil {
 			bad = append(bad, e.path+": "+err.Error())
@@ -152,6 +172,9 @@ func TestOwnImportsAllowlisted(t *testing.T) {
 	}
 	if bad := importViolations(t, filepath.Join("testdata", "badimport")); len(bad) == 0 {
 		t.Fatal("the check must reject a package that imports the cache")
+	}
+	if bad := importViolations(t, filepath.Join("testdata", "badstd")); len(bad) != 4 {
+		t.Fatalf("the check must reject unsafe, reflect, os and net/http: %v", bad)
 	}
 }
 
