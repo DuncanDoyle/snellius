@@ -439,9 +439,19 @@ func (v *view) omits() bool { return v.secure }
 // viewer is the explore form of v for install i: its population check and,
 // when v projects, the findings it shows and its install-wide unknown.
 func (v *view) viewer(i *engine.InstallModel) explore.Viewer {
+	return v.viewerIn(i, nil)
+}
+
+// viewerIn is viewer for a list under scope. A scoped list projects the
+// checks alone, so no finding outside the scope is asked about.
+func (v *view) viewerIn(i *engine.InstallModel, scope []string) explore.Viewer {
 	vw := explore.Viewer{Visible: v.visible()}
-	if v.projects() {
+	switch {
+	case !v.projects():
+	case scope == nil:
 		vw.Shown, vw.Unknown = v.shown, requiredNotOK(v.report(i).Checks)
+	default:
+		vw.Shown, vw.Unknown = v.shown, requiredNotOK(health.Project(health.Report{Checks: i.Health.Checks}, v).Checks)
 	}
 	return vw
 }
@@ -461,29 +471,54 @@ func (v *view) projectInput(p *engine.Published, i *engine.InstallModel) paths.P
 }
 
 // projectionFilter is what the caller of v may see of install i's path
-// projection in p: finding signals of shown findings only, and endpoint counts
+// projection: finding signals of shown findings only, and endpoint counts
 // only where it may list EndpointSlices. Nil when v does not project.
-func (v *view) projectionFilter(p *engine.Published, i *engine.InstallModel) *paths.ProjectionFilter {
+func (v *view) projectionFilter(i *engine.InstallModel) *paths.ProjectionFilter {
+	return v.scopedFilter(i, nil, nil)
+}
+
+// scopedFilter is projectionFilter projecting only the rows of t that rows
+// picks, all when nil. Findings are prefetched for the picked rows'
+// dependencies only, and each finding signal is decided when first read.
+func (v *view) scopedFilter(i *engine.InstallModel, t *paths.Topology, rows func(paths.Row) bool) *paths.ProjectionFilter {
 	if !v.projects() {
 		return nil
 	}
-	v.prefetchFindings(i.Health.Findings)
-	var shown map[titleKey]bool
+	var want func(objects.Ref) bool
+	if rows != nil {
+		deps := map[objects.Ref]bool{}
+		for _, r := range t.Rows {
+			if rows(r) {
+				for _, k := range t.Deps(r) {
+					deps[t.Refs[k]] = true
+				}
+			}
+		}
+		want = func(ref objects.Ref) bool { return deps[ref] }
+	}
+	v.prefetchFindings(i.Health.Findings, want)
+	var byKey map[titleKey][]*health.Finding
+	shown := map[titleKey]bool{}
 	signal := func(s paths.Signal) bool {
 		if s.Kind != paths.SignalFinding {
 			return true
 		}
-		if shown == nil {
-			shown = map[titleKey]bool{}
-			for k := range i.Health.Findings {
-				if f := &i.Health.Findings[k]; f.Resource != nil && v.shown(f) {
-					shown[titleKey{f.Code, *f.Resource}] = true
+		k := titleKey{s.Code, s.Ref}
+		if ok, done := shown[k]; done {
+			return ok
+		}
+		if byKey == nil {
+			byKey = map[titleKey][]*health.Finding{}
+			for j := range i.Health.Findings {
+				if f := &i.Health.Findings[j]; f.Resource != nil {
+					byKey[titleKey{f.Code, *f.Resource}] = append(byKey[titleKey{f.Code, *f.Resource}], f)
 				}
 			}
 		}
-		return shown[titleKey{s.Code, s.Ref}]
+		shown[k] = slices.ContainsFunc(byKey[k], v.shown)
+		return shown[k]
 	}
-	return &paths.ProjectionFilter{Signal: signal, Endpoints: func(ns string) bool { return v.canList(endpointSlices, ns) }}
+	return &paths.ProjectionFilter{Signal: signal, Endpoints: func(ns string) bool { return v.canList(endpointSlices, ns) }, Rows: rows}
 }
 
 // requiredNotOK reports whether a required check of cs is not OK.
@@ -516,14 +551,7 @@ func (v *view) projection(i *engine.InstallModel) *projection {
 	if p := v.projections[i]; p != nil {
 		return p
 	}
-	v.prefetchFindings(i.Health.Findings)
-	rep := health.Project(i.Health, v)
-	var dec objects.Decoder = objects.Direct{}
-	if i.Index != nil {
-		dec = indexViews{ix: i.Index}
-	}
-	d := diagnose.Build(&rep, diagnose.Input{Install: i.Resolved, Owned: i.Owned, Views: dec, Readable: v.can}, diagnose.Families())
-	p := &projection{rep: rep, diag: d}
+	p := v.project(i, i.Health)
 	if v.projections == nil {
 		v.projections = map[*engine.InstallModel]*projection{}
 	}
@@ -531,23 +559,55 @@ func (v *view) projection(i *engine.InstallModel) *projection {
 	return p
 }
 
-// prefetchFindings resolves, in two parallel rounds, what ShownTo asks of fs:
+// project is rep, a report of install i, projected for the caller of v and grouped.
+func (v *view) project(i *engine.InstallModel, rep health.Report) *projection {
+	v.prefetchFindings(rep.Findings, nil)
+	rep = health.Project(rep, v)
+	var dec objects.Decoder = objects.Direct{}
+	if i.Index != nil {
+		dec = indexViews{ix: i.Index}
+	}
+	d := diagnose.Build(&rep, diagnose.Input{Install: i.Resolved, Owned: i.Owned, Views: dec, Readable: v.can}, diagnose.Families())
+	return &projection{rep: rep, diag: d}
+}
+
+// findingsIn is install i's findings and diagnosis as the caller of v sees
+// them, under scope: for a projecting caller only the findings on resources
+// in scope are projected, so nothing is asked about the others (D-100 item 8).
+func (v *view) findingsIn(i *engine.InstallModel, scope []string) ([]health.Finding, *diagnose.Diagnosis) {
+	if scope == nil || !v.projects() {
+		return v.report(i).Findings, v.diagnosis(i)
+	}
+	rep := i.Health
+	rep.Findings = slices.DeleteFunc(slices.Clone(rep.Findings), func(f health.Finding) bool { return !findingInScope(&f, scope) })
+	p := v.project(i, rep)
+	return p.rep.Findings, p.diag
+}
+
+// findingInScope reports whether f's resource is a namespaced object in
+// scope; a finding without one is outside every scope.
+func findingInScope(f *health.Finding, scope []string) bool {
+	return scope == nil || f.Resource != nil && f.Resource.Namespace != "" && explore.InScope(scope, f.Resource.Namespace)
+}
+
+// prefetchFindings resolves, in two parallel rounds, what ShownTo asks of the
+// findings of fs on resources want admits (all when nil):
 // the resources of own-object and collection findings, then the objects named
 // by those whose resource was not denied. Derived findings ask nothing.
-func (v *view) prefetchFindings(fs []health.Finding) {
+func (v *view) prefetchFindings(fs []health.Finding, want func(objects.Ref) bool) {
 	if !v.batching() {
 		return
 	}
 	v.prefetch(func(add func(objects.Ref)) {
 		for k := range fs {
-			if f := &fs[k]; f.Resource != nil && (f.Class == health.ClassOwn || f.Basis.Collection) {
+			if f := &fs[k]; f.Resource != nil && (want == nil || want(*f.Resource)) && (f.Class == health.ClassOwn || f.Basis.Collection) {
 				add(*f.Resource)
 			}
 		}
 	})
 	v.prefetch(func(add func(objects.Ref)) {
 		for k := range fs {
-			if f := &fs[k]; f.Class == health.ClassOwn && f.Resource != nil && !v.denied(*f.Resource) {
+			if f := &fs[k]; f.Class == health.ClassOwn && f.Resource != nil && (want == nil || want(*f.Resource)) && !v.denied(*f.Resource) {
 				for _, r := range f.Basis.Refs {
 					add(r)
 				}

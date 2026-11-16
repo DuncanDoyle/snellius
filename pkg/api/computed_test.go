@@ -281,7 +281,7 @@ func TestListenerParam(t *testing.T) {
 			t.Errorf("listener=%s: %v", l, routeNames(p))
 		}
 	}
-	if m := get[MetaResponse](t, srv, "/api/v1/meta", 200); !reflect.DeepEqual(m.Filters["routes"], []string{"listener"}) {
+	if m := get[MetaResponse](t, srv, "/api/v1/meta", 200); !reflect.DeepEqual(m.Filters["routes"], []string{"listener", "namespaces"}) {
 		t.Errorf("meta filters %v", m.Filters)
 	}
 }

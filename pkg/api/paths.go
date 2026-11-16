@@ -60,8 +60,9 @@ func (h *handler) pathList(w http.ResponseWriter, r *http.Request) {
 	}
 	t, proj, kept := h.pathModel(p, i)
 	v := h.view(r)
-	prefetchPaths(v, i.Index, t)
-	proj = proj.For(t, v.projectInput(p, i), v.projectionFilter(p, i))
+	rows := pathScope(t, q.Scope)
+	prefetchPaths(v, i.Index, t, q.Scope, rows)
+	proj = proj.For(t, v.projectInput(p, i), v.scopedFilter(i, t, rows))
 	resp, err := pathsPage(h.linker(v, p, i, t, proj), p, i, v, t, proj, kept, q)
 	if err != nil {
 		fail(w, err)
@@ -70,17 +71,28 @@ func (h *handler) pathList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// prefetchPaths resolves the buckets of the install's routes, the roots,
-// then the dependencies of the rows no denied root hides.
-func prefetchPaths(v *view, ix *explore.Index, t *paths.Topology) {
+// pathScope picks the rows of t whose root route is in scope; nil when scope is nil.
+func pathScope(t *paths.Topology, scope []string) func(paths.Row) bool {
+	if scope == nil {
+		return nil
+	}
+	return func(r paths.Row) bool { return explore.InScope(scope, t.RootNamespace(r)) }
+}
+
+// prefetchPaths resolves the buckets of the install's routes in scope, the
+// roots, then the dependencies of the rows rows picks (all when nil) that no
+// denied root hides.
+func prefetchPaths(v *view, ix *explore.Index, t *paths.Topology, scope []string, rows func(paths.Row) bool) {
 	if ix != nil {
 		v.prefetch(func(add func(objects.Ref)) {
 			for i := range ix.Routes {
-				add(ix.Routes[i].Ref)
+				if explore.InScope(scope, ix.Routes[i].Ref.Namespace) {
+					add(ix.Routes[i].Ref)
+				}
 			}
 		})
 	}
-	prefetchRows(v, t, nil)
+	prefetchRows(v, t, rows)
 }
 
 // prefetchRows resolves the dependencies of t's rows that want picks (all

@@ -35,7 +35,7 @@ type routeTrace struct {
 // rows on route's own rules, as the caller may see them.
 func (d *detail) trace(route objects.Ref) routeTrace {
 	t, proj, _ := d.h.pathModel(d.p, d.i)
-	in, f := d.v.projectInput(d.p, d.i), d.v.projectionFilter(d.p, d.i)
+	in, f := d.v.projectInput(d.p, d.i), d.v.projectionFilter(d.i)
 	proj = proj.For(t, in, f)
 	var rows []int32
 	for _, k := range proj.Order {

@@ -6,6 +6,9 @@
       "workloads"
     ],
     "filters": {
+      "backends": [
+        "namespaces"
+      ],
       "delegation": [
         "rule",
         "ref",
@@ -17,10 +20,24 @@
         "kind",
         "namespace",
         "group",
-        "q"
+        "q",
+        "namespaces"
+      ],
+      "gateways": [
+        "namespaces"
+      ],
+      "listenersets": [
+        "namespaces"
+      ],
+      "paths": [
+        "namespaces"
+      ],
+      "processes": [
+        "namespaces"
       ],
       "routes": [
-        "listener"
+        "listener",
+        "namespaces"
       ]
     },
     "kinds": [

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/util/validation"
+
 	"github.com/DuncanDoyle/snellius/pkg/computed"
 	"github.com/DuncanDoyle/snellius/pkg/explore"
 	"github.com/DuncanDoyle/snellius/pkg/health"
@@ -30,14 +32,44 @@ const coreGroup = "core"
 
 // Query parameters (design §7.2). single are allowed at most once.
 var (
-	commonParams = []string{"namespace", "health", "q", "sort", "limit", "cursor"}
+	commonParams = []string{"namespace", scopeParam, "health", "q", "sort", "limit", "cursor"}
 	listParams   = map[listKind][]string{
 		listRoutes:       {"kind", "parent", "attachment", "listener", "state", "backend"},
 		listGateways:     nil,
 		listListenerSets: {"parent"},
 	}
-	singleParams = []string{"parent", "attachment", "listener", "q", "sort", "limit", "cursor"}
+	singleParams = []string{scopeParam, "parent", "attachment", "listener", "q", "sort", "limit", "cursor"}
 )
+
+// scopeParam is the namespace scope of the list endpoints (D-100 item 8).
+const scopeParam = "namespaces"
+
+// maxScope is the most namespaces one scope may name.
+const maxScope = 100
+
+// parseScope parses the namespace scope in vals: nil when absent, else the
+// distinct names, sorted. Given more than once, empty, a name that is not a
+// DNS-1123 label or more than maxScope names is a 400.
+func parseScope(vals url.Values) ([]string, error) {
+	vs, ok := vals[scopeParam]
+	switch {
+	case !ok:
+		return nil, nil
+	case len(vs) > 1:
+		return nil, badParam("parameter %q given more than once", scopeParam)
+	}
+	names := strings.Split(vs[0], ",")
+	if len(names) > maxScope {
+		return nil, badParam("%s: at most %d names", scopeParam, maxScope)
+	}
+	for _, n := range names {
+		if len(validation.IsDNS1123Label(n)) > 0 {
+			return nil, badParam("%s %q: want comma-separated namespace names", scopeParam, n)
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names), nil
+}
 
 // badParam is a 400 for a parameter value; it wraps explore.ErrBadQuery so
 // every 400 has one cause.
@@ -65,6 +97,9 @@ func parseQuery(r *http.Request, list listKind) (explore.Query, error) {
 		}
 	}
 	q.Namespaces = vals["namespace"]
+	if q.Scope, err = parseScope(vals); err != nil {
+		return q, err
+	}
 	for _, v := range vals["health"] {
 		q.Health = append(q.Health, health.State(v))
 	}
@@ -204,8 +239,8 @@ func parseDelegationQuery(r *http.Request) (explore.DelegationQuery, error) {
 
 // Path list parameters (design §5). pathsSingle are allowed at most once.
 var (
-	pathsParams = []string{"gateway", "listener", "route", "backend", "namespace", "state", "kind", "mirror", "q", "sort", "cursor", "limit"}
-	pathsSingle = []string{"listener", "route", "namespace", "kind", "mirror", "q", "sort", "cursor", "limit"}
+	pathsParams = []string{"gateway", "listener", "route", "backend", "namespace", scopeParam, "state", "kind", "mirror", "q", "sort", "cursor", "limit"}
+	pathsSingle = []string{"listener", "route", "namespace", scopeParam, "kind", "mirror", "q", "sort", "cursor", "limit"}
 )
 
 // parsePathsQuery parses r's query for GET …/paths. It rejects unknown and
@@ -238,6 +273,9 @@ func parsePathsQuery(r *http.Request) (paths.Query, error) {
 		}
 	}
 	q.Listener, q.Namespace, q.Kind = vals.Get("listener"), vals.Get("namespace"), vals.Get("kind")
+	if q.Scope, err = parseScope(vals); err != nil {
+		return q, err
+	}
 	if vals.Has("route") {
 		ref, err := parseRef(vals.Get("route"), "route")
 		if err != nil {
@@ -282,8 +320,8 @@ func parsePathsQuery(r *http.Request) (paths.Query, error) {
 
 // Backend list parameters (design §8.1). backendsSingle are allowed at most once.
 var (
-	backendsParams = []string{"kind", "namespace", "state", "used", "gateway", "q", "sort", "cursor", "limit"}
-	backendsSingle = []string{"kind", "namespace", "used", "q", "sort", "cursor", "limit"}
+	backendsParams = []string{"kind", "namespace", scopeParam, "state", "used", "gateway", "q", "sort", "cursor", "limit"}
+	backendsSingle = []string{"kind", "namespace", scopeParam, "used", "q", "sort", "cursor", "limit"}
 )
 
 // parseBackendsQuery parses r's query for GET …/backends. It rejects unknown
@@ -309,6 +347,9 @@ func parseBackendsQuery(r *http.Request) (paths.BackendQuery, error) {
 		}
 	}
 	q.Kind, q.Namespace, q.Used, q.Q, q.Cursor = vals.Get("kind"), vals.Get("namespace"), vals.Get("used"), vals.Get("q"), vals.Get("cursor")
+	if q.Scope, err = parseScope(vals); err != nil {
+		return q, err
+	}
 	for _, v := range vals["gateway"] {
 		ns, name, ok := strings.Cut(v, "/")
 		if !ok || ns == "" || name == "" || strings.Contains(name, "/") {

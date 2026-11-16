@@ -930,6 +930,12 @@ var ruleSurfaces = []ruleSurface{
 	{name: "/paths", path: fixed("/paths?limit=200"), changes: []string{"faulty", "proxyReadyDeployment"}},
 	{name: "/backends", path: fixed("/backends?limit=200"), changes: []string{"faulty", "proxyReadyDeployment"}},
 	{name: "backend detail (slices not listable)", path: fixed("/backends/-/Service/" + kindLimitedNS + "/" + limitedSvc), changes: []string{"faulty"}},
+	// The namespace scope and its namespace list (Task 37).
+	{name: "/routes?namespaces=visible", path: fixed("/routes?limit=200&namespaces=" + ns0), changes: []string{"rejecting", "hiddenChild"}},
+	// An empty page before and after for the restricted viewer; without the projection the D-013 count moves.
+	{name: "/routes?namespaces=hidden", path: fixed("/routes?limit=200&namespaces=" + hiddenNS), changes: []string{"created", "deleted"}},
+	// No change adds or empties a namespace, so none reaches it; the restricted and recompute tests still ask it.
+	{name: "/namespaces", path: fixed("/namespaces"), changes: []string{}},
 }
 
 // abs is the fixed path p outside the install's base.
@@ -944,6 +950,7 @@ func abs(p string) func(*testing.T, *httptest.Server, *httptest.Server) string {
 var ruleMasks = map[[2]string][]string{
 	// Deleting hidden-gw takes hidden-parent's child out of the install (D-107); nothing else moves.
 	{"/routes", "deleted"}:                      {"items.@child", "total"},
+	{"/routes?namespaces=visible", "deleted"}:   {"items.@child", "total"},
 	{"route detail (hidden parent)", "deleted"}: {""},
 	// The same move takes child out of the overview's HTTPRoute count and be-0000's routes.
 	{"/overview", "deleted"}: {"counts"},

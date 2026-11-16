@@ -334,7 +334,7 @@ func TestDelegationParams(t *testing.T) {
 func TestMetaAdvertisesDelegation(t *testing.T) {
 	_, srv, _ := startWith(t, setup{}, isolated()...)
 	m := get[MetaResponse](t, srv, "/api/v1/meta", 200)
-	if !slices.Equal(m.Filters["delegation"], []string{"rule", "ref", "outcome"}) || !slices.Equal(m.Filters["routes"], []string{"listener"}) {
+	if !slices.Equal(m.Filters["delegation"], []string{"rule", "ref", "outcome"}) || !slices.Equal(m.Filters["routes"], []string{"listener", "namespaces"}) {
 		t.Fatalf("filters %v", m.Filters)
 	}
 }

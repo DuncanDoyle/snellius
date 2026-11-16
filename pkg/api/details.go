@@ -290,7 +290,7 @@ const proxyStatsCheckName = "proxy connection"
 
 // dataPlane is owned Gateway gw's data plane and proxies for the caller (design §13.3).
 func (d *detail) dataPlane(gw objects.Ref) (*DataPlaneDTO, *ProcessSetDTO) {
-	ps, set := newProcSummary(d.v, d.i), &process.Set{}
+	ps, set := newProcSummary(d.v, d.i, nil), &process.Set{}
 	if d.i.Process != nil {
 		if s, ok := d.i.Process.Proxies[gw]; ok {
 			set = &s

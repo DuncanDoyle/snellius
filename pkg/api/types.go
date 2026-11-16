@@ -2,6 +2,7 @@
 package api
 
 import (
+	"slices"
 	"time"
 
 	"github.com/DuncanDoyle/snellius/pkg/health"
@@ -55,6 +56,14 @@ type OverviewResponse struct {
 	CollectedAt time.Time            `json:"collectedAt"`
 }
 
+// NamespacesResponse is GET …/namespaces: the sorted namespaces of the
+// install's route, Gateway and ListenerSet rows the caller can see.
+type NamespacesResponse struct {
+	Install     string    `json:"install"`
+	Namespaces  []string  `json:"namespaces"`
+	CollectedAt time.Time `json:"collectedAt"`
+}
+
 // MetaResponse is GET /api/v1/meta.
 type MetaResponse struct {
 	Version string `json:"version"`
@@ -88,8 +97,10 @@ type MetaResponse struct {
 
 // addedFilters are the list filters added after API v1 (design §7.2). The
 // delegation and findings lists are new; listing their filters tells a
-// client the endpoint exists (PF8, Phase 3 design §13.1).
-var addedFilters = map[string][]string{"routes": {"listener"}, "delegation": {"rule", "ref", "outcome"}, "findings": findingsFilters}
+// client the endpoint exists (PF8, Phase 3 design §13.1). Every list the
+// namespace scope applies to lists it (D-100 item 8).
+var addedFilters = map[string][]string{"routes": {"listener", scopeParam}, "gateways": {scopeParam}, "listenersets": {scopeParam},
+	"paths": {scopeParam}, "backends": {scopeParam}, "delegation": {"rule", "ref", "outcome"}, "findings": append(slices.Clone(findingsFilters), scopeParam), "processes": {scopeParam}}
 
 // deploymentKind is listed in /api/v1/meta because finding links reach
 // controller Deployments (D-013). It is read through typed informers, not counted.

@@ -44,7 +44,28 @@ func (h *handler) startList(w http.ResponseWriter, r *http.Request, kind listKin
 	}
 	v := h.view(r)
 	l := h.linker(v, p, i, nil, nil)
-	return &list{h: h, r: r, p: p, i: i, ix: ix, q: q, v: v, l: l, f: facts{ix: ix, v: v, l: l}, vw: v.viewer(i)}
+	return &list{h: h, r: r, p: p, i: i, ix: ix, q: q, v: v, l: l, f: facts{ix: ix, v: v, l: l}, vw: v.viewerIn(i, q.Scope)}
+}
+
+// addInScope adds root ref to a prefetch round when the query's scope holds it.
+func (ls *list) addInScope(add func(objects.Ref), ref objects.Ref) {
+	if explore.InScope(ls.q.Scope, ref.Namespace) {
+		add(ref)
+	}
+}
+
+// deniedInScope is deniedInInstall over the n rows in the query's scope only.
+func (ls *list) deniedInScope(n int, ref func(explore.RowID) objects.Ref) int {
+	if ls.q.Scope == nil {
+		return ls.v.deniedInInstall(n, ref)
+	}
+	var ids []explore.RowID
+	for i := range n {
+		if id := explore.RowID(i); explore.InScope(ls.q.Scope, ref(id).Namespace) { // #nosec G115 -- a row count fits in int32
+			ids = append(ids, id)
+		}
+	}
+	return ls.v.deniedInInstall(len(ids), func(k explore.RowID) objects.Ref { return ref(ids[k]) })
 }
 
 func (ls *list) routeRef(id explore.RowID) objects.Ref { return ls.ix.Routes[id].Ref }
@@ -75,7 +96,7 @@ func (h *handler) routes(w http.ResponseWriter, r *http.Request) {
 	defer ls.v.release()
 	ls.v.prefetch(func(add func(objects.Ref)) {
 		for i := range ls.ix.Routes {
-			add(ls.ix.Routes[i].Ref)
+			ls.addInScope(add, ls.ix.Routes[i].Ref)
 		}
 	})
 	pg, err := ls.ix.QueryRoutesAs(ls.q, ls.vw)
@@ -88,7 +109,7 @@ func (h *handler) routes(w http.ResponseWriter, r *http.Request) {
 	for _, id := range pg.IDs {
 		items = append(items, ls.routeRow(id))
 	}
-	writeJSON(w, page(ls, pg, items, ls.v.deniedInInstall(len(ls.ix.Routes), ls.routeRef)))
+	writeJSON(w, page(ls, pg, items, ls.deniedInScope(len(ls.ix.Routes), ls.routeRef)))
 }
 
 // prefetchRouteRows resolves the buckets the page's route rows read: their
@@ -236,7 +257,7 @@ func (h *handler) gateways(w http.ResponseWriter, r *http.Request) {
 	}
 	ls.v.prefetch(func(add func(objects.Ref)) {
 		for i := range ls.ix.Gateways {
-			add(ls.ix.Gateways[i].Ref)
+			ls.addInScope(add, ls.ix.Gateways[i].Ref)
 		}
 	})
 	pg, err := ls.ix.QueryGatewaysAs(ls.q, ls.vw)
@@ -261,7 +282,7 @@ func (h *handler) gateways(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, row)
 	}
-	writeJSON(w, page(ls, pg, items, ls.v.deniedInInstall(len(ls.ix.Gateways), ls.gwRef)))
+	writeJSON(w, page(ls, pg, items, ls.deniedInScope(len(ls.ix.Gateways), ls.gwRef)))
 }
 
 // memberCount is a routes column: rule 5's count, or in secure mode the
@@ -329,7 +350,7 @@ func (h *handler) listenerSets(w http.ResponseWriter, r *http.Request) {
 	}
 	ls.v.prefetch(func(add func(objects.Ref)) {
 		for i := range ls.ix.ListenerSets {
-			add(ls.ix.ListenerSets[i].Ref)
+			ls.addInScope(add, ls.ix.ListenerSets[i].Ref)
 		}
 	})
 	pg, err := ls.ix.QueryListenerSetsAs(ls.q, ls.vw)
@@ -356,5 +377,5 @@ func (h *handler) listenerSets(w http.ResponseWriter, r *http.Request) {
 		}
 		items = append(items, row)
 	}
-	writeJSON(w, page(ls, pg, items, ls.v.deniedInInstall(len(ls.ix.ListenerSets), ls.lsRef)))
+	writeJSON(w, page(ls, pg, items, ls.deniedInScope(len(ls.ix.ListenerSets), ls.lsRef)))
 }

@@ -73,6 +73,7 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 	mux.HandleFunc("GET /api/v1/installs/{id}/routes", h.routes)
 	mux.HandleFunc("GET /api/v1/installs/{id}/gateways", h.gateways)
 	mux.HandleFunc("GET /api/v1/installs/{id}/listenersets", h.listenerSets)
+	mux.HandleFunc("GET /api/v1/installs/{id}/namespaces", h.namespaces)
 	mux.HandleFunc("GET /api/v1/installs/{id}/gateways/{ns}/{name}", h.gatewayDetail)
 	mux.HandleFunc("GET /api/v1/installs/{id}/listenersets/{group}/{kind}/{ns}/{name}", h.listenerSetDetail)
 	mux.HandleFunc("GET /api/v1/installs/{id}/routes/{group}/{kind}/{ns}/{name}", h.routeDetail)

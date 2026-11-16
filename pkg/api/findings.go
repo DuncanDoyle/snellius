@@ -25,9 +25,9 @@ import (
 // grouped view (view=groups, design §17.1) takes only groupsParams.
 var (
 	findingsFilters = []string{"severity", "code", "kind", "namespace", "group", "q"}
-	findingsParams  = append(slices.Clone(findingsFilters), "sort", "limit", "cursor", "view")
-	findingsSingle  = []string{"group", "q", "sort", "limit", "cursor", "view"}
-	groupsParams    = []string{"severity", "code", "q", "limit", "cursor", "view"}
+	findingsParams  = append(slices.Clone(findingsFilters), scopeParam, "sort", "limit", "cursor", "view")
+	findingsSingle  = []string{scopeParam, "group", "q", "sort", "limit", "cursor", "view"}
+	groupsParams    = []string{"severity", "code", scopeParam, "q", "limit", "cursor", "view"}
 )
 
 // viewGroups is the view parameter of the grouped findings view.
@@ -47,11 +47,13 @@ type findingsQuery struct {
 	codes      []string
 	kinds      []objects.GroupKind
 	namespaces []string
-	group, q   string // q is lower-cased
-	groups     bool   // view=groups
-	sort       diagnose.Sort
-	limit      int
-	cursor     string
+	// scope is the namespace scope (D-100 item 8); nil is every namespace.
+	scope    []string
+	group, q string // q is lower-cased
+	groups   bool   // view=groups
+	sort     diagnose.Sort
+	limit    int
+	cursor   string
 }
 
 // parseFindingsQuery parses r's query; any bad parameter or value is
@@ -77,9 +79,12 @@ func parseFindingsQuery(r *http.Request) (findingsQuery, error) {
 		q.groups = true
 		for _, name := range slices.Sorted(maps.Keys(vals)) {
 			if !slices.Contains(groupsParams, name) {
-				return q, badParam("parameter %q: the groups view takes severity, code, q, limit and cursor", name)
+				return q, badParam("parameter %q: the groups view takes severity, code, namespaces, q, limit and cursor", name)
 			}
 		}
+	}
+	if q.scope, err = parseScope(vals); err != nil {
+		return q, err
 	}
 	for _, v := range vals["severity"] {
 		s := health.Severity(v)
@@ -136,6 +141,9 @@ func parseFindingsQuery(r *http.Request) (findingsQuery, error) {
 // match reports whether f passes q's filters for the caller of v; q sees only
 // what f's row shows (design §14 rule 17). t is f's lowered text, nil without q.
 func (q *findingsQuery) match(v *view, f *health.Finding, t *diagnose.Text) bool {
+	if !findingInScope(f, q.scope) {
+		return false
+	}
 	if len(q.severities) > 0 && !slices.Contains(q.severities, f.Severity) ||
 		len(q.codes) > 0 && !slices.Contains(q.codes, f.Code) ||
 		q.group != "" && f.Group != q.group {
@@ -209,8 +217,8 @@ func (h *handler) findings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := h.view(r)
-	rep := v.report(i)
-	fs, ix := rep.Findings, v.diagnosis(i).Index
+	fs, d := v.findingsIn(i, q.scope)
+	ix := d.Index
 	match := func(k int) bool { return q.match(v, &fs[k], nil) }
 	if q.q != "" {
 		// q asks about every hidden-identity row, like a route list.
@@ -220,7 +228,7 @@ func (h *handler) findings(w http.ResponseWriter, r *http.Request) {
 		match = func(k int) bool { return q.match(v, &fs[k], &ts[k]) }
 	}
 	if q.groups {
-		h.findingGroups(w, p, i, v, &q, match)
+		h.findingGroups(w, p, i, v, d, fs, &q, match)
 		return
 	}
 	pg, err := ix.Page(fs, i.Resolved.ID(), q.sort, q.limit, q.cursor, match)
@@ -237,11 +245,11 @@ func (h *handler) findings(w http.ResponseWriter, r *http.Request) {
 		CollectedAt: wireTime(p.ConfirmedAt)})
 }
 
-// findingGroups writes the page of i's groups for q (design §5.2, §17.1): a group matches
+// findingGroups writes the page of i's groups in d over fs for q (design §5.2, §17.1): a group matches
 // when one member passes match (R98). A group whose cause the caller cannot view matches q
 // by its members' identity only (§14 rule 17).
-func (h *handler) findingGroups(w http.ResponseWriter, p *engine.Published, i *engine.InstallModel, v *view, q *findingsQuery, match func(k int) bool) {
-	d, fs := v.diagnosis(i), v.report(i).Findings
+func (h *handler) findingGroups(w http.ResponseWriter, p *engine.Published, i *engine.InstallModel, v *view, d *diagnose.Diagnosis, fs []health.Finding,
+	q *findingsQuery, match func(k int) bool) {
 	// d.Rank lists each group's members in group order, so a group's first is its top member.
 	tops := make([]int, len(d.Groups))
 	for k, off := 0, 0; k < len(d.Groups); k++ {

@@ -18,8 +18,8 @@ import (
 
 // Processes list parameters (design §13.1); processesSingle may appear once.
 var (
-	processesParams = []string{"health", "q", "skew", "restarts", "limit", "cursor"}
-	processesSingle = []string{"q", "skew", "restarts", "limit", "cursor"}
+	processesParams = []string{scopeParam, "health", "q", "skew", "restarts", "limit", "cursor"}
+	processesSingle = []string{scopeParam, "q", "skew", "restarts", "limit", "cursor"}
 )
 
 // sortProcesses keeps processes cursors apart from every other list's.
@@ -51,11 +51,16 @@ type procSummary struct {
 
 // newProcSummary reads the facts of the findings the caller of v is shown:
 // in secure mode without the full read, derived findings add none (D-106).
-func newProcSummary(v *view, i *engine.InstallModel) *procSummary {
+// Under a scope only the controller's findings and those in scope are read.
+func newProcSummary(v *view, i *engine.InstallModel, scope []string) *procSummary {
 	ps := &procSummary{v: v, i: i, facts: map[objects.Ref]*subjectFacts{}, selfManaged: map[objects.Ref]bool{}}
+	var ctrl objects.Ref
+	if d := i.Resolved.Deployment; d != nil {
+		ctrl = objects.Ref{Group: "apps", Kind: "Deployment", Namespace: d.Namespace, Name: d.Name}
+	}
 	for k := range i.Health.Findings {
 		f := &i.Health.Findings[k]
-		if !v.shown(f) {
+		if scope != nil && (f.Resource == nil || *f.Resource != ctrl && !explore.InScope(scope, f.Resource.Namespace)) || !v.shown(f) {
 			continue
 		}
 		if f.Resource != nil && f.Code == health.CodeSelfManagedProxy {
@@ -362,6 +367,8 @@ func (ps *procSummary) row(l linker, g *gatewayProc) GatewayProcesses {
 
 // processesQuery is a parsed GET …/processes query.
 type processesQuery struct {
+	// scope is the namespace scope of the proxy rows (D-100 item 8); nil is every namespace.
+	scope          []string
 	health         []health.State
 	q              string // lower case
 	skew, restarts *bool
@@ -382,6 +389,9 @@ func parseProcessesQuery(r *http.Request) (processesQuery, error) {
 		if len(vals[name]) > 1 && slices.Contains(processesSingle, name) {
 			return q, badParam("parameter %q given more than once", name)
 		}
+	}
+	if q.scope, err = parseScope(vals); err != nil {
+		return q, err
 	}
 	for _, v := range vals["health"] {
 		s := health.State(v)
@@ -435,13 +445,16 @@ func (h *handler) processes(w http.ResponseWriter, r *http.Request) {
 	}
 	v := h.view(r)
 	l := h.linker(v, p, i, nil, nil)
-	ps := newProcSummary(v, i)
+	ps := newProcSummary(v, i, q.scope)
 	gws := ps.gateways()
 	byRef := make(map[objects.Ref]*gatewayProc, len(gws))
 	var refs []objects.Ref
 	denied := 0
 	for k := range gws {
 		g := &gws[k]
+		if !explore.InScope(q.scope, g.ref.Namespace) {
+			continue
+		}
 		if !v.can(g.ref) {
 			denied++
 			continue

@@ -531,6 +531,25 @@ type sarHeapRun struct {
 	Accounted, Evicted       float64
 }
 
+// TestScopedFewerColdChecksLarge: at Large, a viewer allowed 10 of 100
+// namespaces asks fewer cold SARs on a list scoped to one of them than unscoped.
+func TestScopedFewerColdChecksLarge(t *testing.T) {
+	build, m := api.LargeHandlers(t)
+	base := "/api/v1/installs/" + m.Installs[0].Resolved.ID()
+	cold := func(path string) result {
+		c, clk := &fakeChecker{allow: nsGrants}, clocktesting.NewFakeClock(t0)
+		h := build(newAuthz(c, clk, nil, lifted), api.WithSecureMode(true), api.WithCommitClock(clk.Now))
+		return get(h, c, "u", path)
+	}
+	for _, p := range []string{"/routes", "/gateways", "/listenersets", "/paths", "/backends", "/findings", "/processes"} {
+		all, scoped := cold(base+p), cold(base+p+"?namespaces=ns-000")
+		t.Logf("%-14s cold SARs unscoped %d → %d, scoped to ns-000 %d → %d", p, all.sars, all.code, scoped.sars, scoped.code)
+		if p == "/routes" && (scoped.code != 200 || scoped.sars >= all.sars) {
+			t.Errorf("/routes scoped asked %d SARs (%d), unscoped %d", scoped.sars, scoped.code, all.sars)
+		}
+	}
+}
+
 // TestBudgetSARIntegratedHeap reports D-057's retained heap with the permission
 // cache at its budget and session.DefaultMax sessions on the worst gated case. Report-only.
 func TestBudgetSARIntegratedHeap(t *testing.T) {

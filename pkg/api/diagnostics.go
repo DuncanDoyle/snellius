@@ -406,7 +406,7 @@ func (h *handler) diagnostics(w http.ResponseWriter, r *http.Request) {
 			out.Groups = append(out.Groups, h.groupRow(v, l, g, rep.Findings, d.Rank[top], in))
 		}
 	}
-	ps := newProcSummary(v, i)
+	ps := newProcSummary(v, i, nil)
 	out.Processes = ProcessSummaries{Controller: ps.controllerSummary(), Proxies: ps.proxySummary()}
 	out.DataPlane = dataPlane(v, i)
 	writeJSON(w, out)
