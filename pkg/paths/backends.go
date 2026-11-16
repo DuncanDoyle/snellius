@@ -30,6 +30,9 @@ type BackendsInput struct {
 	Can     func(objects.Ref) bool
 	// Only, when set, lists that backend alone, if it is listed.
 	Only *objects.Ref
+	// Scope, when not nil, lists only the backends in these namespaces,
+	// asking nothing of the others (D-100 item 8).
+	Scope []string
 	// Subject, when set, is a backend the caller admitted by name: Can is not
 	// asked about it, and it is still listed only for a visible reason (D-100).
 	Subject *objects.Ref
@@ -93,7 +96,7 @@ type backends struct {
 	listed []bool
 	// accepted memoises per attachment whether its status accepts it: 1 yes, -1 no.
 	accepted []int8
-	found    map[objects.Ref][]*health.Finding
+	found    *foundIndex
 }
 
 // Backends lists the backends of design §8.1 from t, projected by p: every
@@ -194,7 +197,9 @@ func collect(t *Topology, p *Projection, in BackendsInput) *backends {
 
 func (b *backends) can(ref objects.Ref) bool { return b.in.Can == nil || b.in.Can(ref) }
 
-func (b *backends) wanted(ref objects.Ref) bool { return b.in.Only == nil || *b.in.Only == ref }
+func (b *backends) wanted(ref objects.Ref) bool {
+	return (b.in.Only == nil || *b.in.Only == ref) && explore.InScope(b.in.Scope, ref.Namespace)
+}
 
 // add returns ref's item, adding it on first sight; nil when the viewer may not see it.
 func (b *backends) add(ref objects.Ref) *Backend {
@@ -345,7 +350,9 @@ func (b *backends) written() {
 		return
 	}
 	for ref, uses := range ix.ByBackend {
-		each(ref, uses)
+		if b.wanted(ref) {
+			each(ref, uses)
+		}
 	}
 }
 
@@ -454,7 +461,7 @@ func (b *backends) finish() {
 		switch {
 		case isService(it.Ref):
 			for _, port := range it.Ports {
-				ph := portHealthOf(b.in.ProjectInput, f, portKey{it.Ref.Namespace, it.Ref.Name, port}, b.found[it.Ref], b.p.filter.permits(it.Ref.Namespace))
+				ph := portHealthOf(b.in.ProjectInput, f, portKey{it.Ref.Namespace, it.Ref.Name, port}, b.found.of(it.Ref), b.p.filter.permits(it.Ref.Namespace))
 				if ph.ep != nil {
 					it.Endpoints = append(it.Endpoints, ph.ep)
 				}
@@ -471,7 +478,7 @@ func (b *backends) finish() {
 			it.Endpoints = []*Endpoints{{Complete: EndpointsNotApplicable}}
 			// KGWUI-002 exists only for a Backend a route uses; with no visible route
 			// the judge alone decides, so a hidden route's use shows nothing (D-077).
-			found := b.found[it.Ref]
+			found := b.found.of(it.Ref)
 			if len(it.Routes) == 0 {
 				found = nil
 			}
@@ -566,7 +573,9 @@ type BackendQuery struct {
 	// Kind is the backend's kind, such as Service or Backend.
 	Kind      string
 	Namespace string
-	States    []health.State
+	// Scope, when not nil, keeps only the backends in these namespaces (D-100 item 8).
+	Scope  []string
+	States []health.State
 	// Used is yes for a backend a visible route or consumer uses, no for one none does.
 	Used string
 	// Gateways match a backend with a visible path through one of them, by namespace and name.
@@ -643,6 +652,9 @@ func RunBackends(set BackendSet, q BackendQuery) (BackendPage, error) {
 	gws, nss := map[objects.Ref]int{}, map[string]int{}
 	for i := range set.Items {
 		b := &set.Items[i]
+		if !explore.InScope(q.Scope, b.Ref.Namespace) {
+			continue
+		}
 		if q.matches(b, qs, facetNone) {
 			es = append(es, i)
 		}

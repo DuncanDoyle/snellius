@@ -445,6 +445,9 @@ func (t *Topology) chain(r Row) []int32 {
 	return t.hops[p.off : p.off+uint32(p.n)]
 }
 
+// RootNamespace is the namespace of the row's root route, which scopes a path row.
+func (t *Topology) RootNamespace(r Row) string { return t.Refs[t.routes[t.chain(r)[0]].ref].Namespace }
+
 // Chain is the row's route chain, root first.
 func (t *Topology) Chain(r Row) []objects.Ref {
 	c := t.chain(r)

@@ -46,7 +46,10 @@ type Query struct {
 	Backends []objects.Ref
 	// Namespace matches the namespace of any route of the chain.
 	Namespace string
-	States    []health.State
+	// Scope, when not nil, keeps only the rows whose root route is in these
+	// namespaces, before visible runs (D-100 item 8).
+	Scope  []string
+	States []health.State
 	// Kind is the root route's kind, such as GRPCRoute.
 	Kind   string
 	Mirror string
@@ -169,6 +172,9 @@ func Run(t *Topology, p *Projection, q Query, visible func(explore.DepSet) bool)
 	fc := facetCounts{gateways: map[int32]int{}, namespaces: map[string]int{}}
 	var es []int32
 	for _, i := range p.Order {
+		if !explore.InScope(qq.Scope, t.RootNamespace(t.Rows[i])) {
+			continue
+		}
 		if visible != nil && !visible(t.Deps(t.Rows[i])) {
 			tl.s.Hidden = true
 			continue

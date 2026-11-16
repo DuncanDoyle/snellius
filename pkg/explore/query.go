@@ -51,6 +51,9 @@ const ListenerUnknown = "_unknown"
 // routes only; Parent on ListenerSets is a Gateway.
 type Query struct {
 	Namespaces []string
+	// Scope limits rows to these namespaces before any viewer check (D-100
+	// item 8); it intersects Namespaces. Nil is every namespace.
+	Scope      []string
 	Kinds      []objects.GroupKind
 	Parent     *objects.Ref
 	Attachment Attachment
@@ -179,6 +182,11 @@ func prepare(q Query, keys ...string) (query, error) {
 		p.cur = &c
 	}
 	return p, nil
+}
+
+// InScope reports whether namespace is in scope; a nil scope holds every namespace.
+func InScope(scope []string, namespace string) bool {
+	return scope == nil || slices.Contains(scope, namespace)
 }
 
 // common tests the filters every list has.
@@ -313,10 +321,17 @@ func (ix *Index) queryRoutes(in Query, vw Viewer) (Page, int, error) {
 			cands = append(cands, id)
 		}
 		slices.Sort(cands)
-	case len(q.Namespaces) > 0:
-		lists := make([][]RowID, len(q.Namespaces))
-		for i, ns := range q.Namespaces {
-			lists[i] = ix.ByNamespace[ns]
+	case len(q.Namespaces) > 0 || q.Scope != nil:
+		var lists [][]RowID
+		for _, ns := range q.Namespaces {
+			if InScope(q.Scope, ns) {
+				lists = append(lists, ix.ByNamespace[ns])
+			}
+		}
+		if len(q.Namespaces) == 0 {
+			for _, ns := range q.Scope {
+				lists = append(lists, ix.ByNamespace[ns])
+			}
 		}
 		cands = union(lists...)
 	default:
@@ -332,6 +347,10 @@ func (ix *Index) queryRoutes(in Query, vw Viewer) (Page, int, error) {
 	}()
 	for _, id := range cands {
 		r := &ix.Routes[id]
+		// Out of scope before any check: no root bucket outside the scope is asked.
+		if !InScope(q.Scope, r.Ref.Namespace) {
+			continue
+		}
 		gk := objects.GroupKind{Group: r.Ref.Group, Kind: r.Ref.Kind}
 		st, shown := r.State, vw.Shown != nil
 		var f Flag
@@ -598,7 +617,7 @@ func (ix *Index) QueryGatewaysAs(in Query, vw Viewer) (Page, error) {
 	es := make([]entry, 0, len(ix.Gateways))
 	for i := range ix.Gateways {
 		g := &ix.Gateways[i]
-		if visible != nil && !visible(g.Ref) {
+		if !InScope(q.Scope, g.Ref.Namespace) || visible != nil && !visible(g.Ref) {
 			continue
 		}
 		st := ix.StateOf(g.Ref, vw)
@@ -688,7 +707,7 @@ func (ix *Index) QueryListenerSetsAs(in Query, vw Viewer) (Page, error) {
 	es := make([]entry, 0, len(cands))
 	for _, id := range cands {
 		l := &ix.ListenerSets[id]
-		if q.Parent != nil && l.Parent != *q.Parent || visible != nil && !visible(l.Ref) {
+		if q.Parent != nil && l.Parent != *q.Parent || !InScope(q.Scope, l.Ref.Namespace) || visible != nil && !visible(l.Ref) {
 			continue
 		}
 		st := ix.ListenerSetStateOf(id, vw)
