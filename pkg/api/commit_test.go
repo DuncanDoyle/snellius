@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -301,8 +302,8 @@ func TestCommitExtMount(t *testing.T) {
 	}
 }
 
-// A commit check answering false replaces the handler's response, also over
-// a recorded authorisation error; true lets the response through.
+// A commit check answering nil replaces the handler's response, also over a
+// recorded authorisation error; answering the request lets the response through.
 func TestCommitCheckReplacesBody(t *testing.T) {
 	var a Authorizer
 	// The handler asks a population, so a failing full read records its error.
@@ -313,13 +314,14 @@ func TestCommitCheckReplacesBody(t *testing.T) {
 		_, _ = w.Write([]byte("handler body"))
 	})}
 	signedIn := true
-	check := func(w http.ResponseWriter, _ *http.Request) bool {
+	check := func(w http.ResponseWriter, r *http.Request) (*http.Request, error) {
 		if !signedIn {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"session-ended"}`))
+			return nil, nil
 		}
-		return signedIn
+		return r, nil
 	}
 	for _, a = range []Authorizer{&errAuthz{}, &fullAuthz{errAuthz: &errAuthz{}, err: errOutage}} {
 		srv := secureServer(t, staticModel{}, a, WithExtMounts(ext), WithCommitCheck(check))
@@ -364,12 +366,41 @@ func TestCommitAuditReasons(t *testing.T) {
 	// An ended session is not an authorisation outage.
 	reasons = nil
 	srv := secureServer(t, staticModel{}, &errAuthz{failAt: 1}, WithExtMounts(refsExt(&errAuthz{failAt: 1}, 1)), audit,
-		WithCommitCheck(func(w http.ResponseWriter, _ *http.Request) bool {
+		WithCommitCheck(func(w http.ResponseWriter, _ *http.Request) (*http.Request, error) {
 			w.WriteHeader(http.StatusUnauthorized)
-			return false
+			return nil, nil
 		}))
 	if code, _, _ := fetchRaw(t, srv, "/api/ext/refs/n"); code != http.StatusUnauthorized || reasons != nil {
 		t.Errorf("ended session: %d, audit %v", code, reasons)
+	}
+}
+
+// A commit check that answers a stale identity, or replaces the identity on
+// every build, ends in 503 authz-unavailable after at most two builds.
+func TestCommitIdentityChecks(t *testing.T) {
+	type key struct{}
+	cases := map[string]struct {
+		check  func(http.ResponseWriter, *http.Request) (*http.Request, error)
+		builds int
+	}{
+		"stale": {func(_ http.ResponseWriter, r *http.Request) (*http.Request, error) { return r, errors.New("stale") }, 1},
+		"replaced": {func(_ http.ResponseWriter, r *http.Request) (*http.Request, error) {
+			return r.WithContext(context.WithValue(r.Context(), key{}, 1)), nil
+		}, 2},
+	}
+	for name, c := range cases {
+		var reasons []string
+		builds := 0
+		ext := ExtMount{Name: "probe", Pattern: "GET /data", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			builds++
+			WriteJSON(w, "data")
+		})}
+		srv := secureServer(t, staticModel{}, &errAuthz{}, WithExtMounts(ext), WithCommitCheck(c.check),
+			WithAuthzAudit(func(_ *http.Request, why string) { reasons = append(reasons, why) }))
+		if code, _, body := fetchRaw(t, srv, "/api/ext/probe/data"); code != http.StatusServiceUnavailable || body != authzUnavailableBody ||
+			builds != c.builds || !slices.Equal(reasons, []string{AuditIdentity}) {
+			t.Errorf("%s: %d %q after %d builds, audit %v", name, code, body, builds, reasons)
+		}
 	}
 }
 
@@ -377,9 +408,9 @@ func TestCommitAuditReasons(t *testing.T) {
 func TestGateStillAuthoritative(t *testing.T) {
 	a := &fullAuthz{errAuthz: &errAuthz{}, all: true}
 	srv := httptest.NewServer(NewHandler(staticModel{}, fstest.MapFS{"index.html": {Data: []byte("spa")}}, a,
-		WithExtMounts(refsExt(a, 3)), WithSecureMode(false), WithCommitCheck(func(http.ResponseWriter, *http.Request) bool {
+		WithExtMounts(refsExt(a, 3)), WithSecureMode(false), WithCommitCheck(func(_ http.ResponseWriter, r *http.Request) (*http.Request, error) {
 			t.Error("commit check ran behind the gate")
-			return true
+			return r, nil
 		})))
 	t.Cleanup(srv.Close)
 	for _, p := range append(slices.Clone(gatePaths), "/api/ext/refs/n") {
@@ -614,7 +645,7 @@ func TestLogoutDuringRebuild(t *testing.T) {
 			mu.Unlock()
 		}
 	}}
-	check := WithCommitCheck(func(w http.ResponseWriter, _ *http.Request) bool {
+	check := WithCommitCheck(func(w http.ResponseWriter, r *http.Request) (*http.Request, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		checked++
@@ -622,8 +653,9 @@ func TestLogoutDuringRebuild(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"sign-in-required"}`))
+			return nil, nil
 		}
-		return signedIn
+		return r, nil
 	})
 	srv, b, l := expiringServer(t, a, clk, 3, check)
 	if code, _, body := fetchRaw(t, srv, "/api/ext/b/n"); code != http.StatusUnauthorized || body != `{"error":"sign-in-required"}` {

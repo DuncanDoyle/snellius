@@ -15,6 +15,7 @@ const (
 	AuditCheckLimit     = "check-limit"
 	AuditFullReadFailed = "full-read-failed"
 	AuditExpired        = "expired"
+	AuditIdentity       = "identity-stale"
 )
 
 // commitAttempts is how many times commit builds a response whose allows expired (D-100).
@@ -23,15 +24,17 @@ const commitAttempts = 2
 // authzUnavailable is the error body of a request whose authorisation failed (design §6.3).
 const authzUnavailable = "authz-unavailable"
 
-// WithCommitCheck runs check on every secure /api/ request after its handler
-// and before its response is written. A false answer means check wrote its own
-// response, which replaces the handler's.
-func WithCommitCheck(check func(w http.ResponseWriter, r *http.Request) bool) HandlerOption {
+// WithCommitCheck runs check on every secure /api/ request r after its handler
+// and before its response is written. Answering r commits; nil means check wrote
+// its own response, which replaces the handler's; another request rebuilds the
+// response with it; an error answers 503 authz-unavailable.
+func WithCommitCheck(check func(w http.ResponseWriter, r *http.Request) (*http.Request, error)) HandlerOption {
 	return func(c *handlerConfig) { c.commitCheck = check }
 }
 
 // WithAuthzAudit calls audit once for each secure /api/ request answered 503
-// authz-unavailable, with AuditCheckFailed, AuditCheckLimit, AuditFullReadFailed or AuditExpired.
+// authz-unavailable, with AuditCheckFailed, AuditCheckLimit, AuditFullReadFailed,
+// AuditExpired or AuditIdentity.
 func WithAuthzAudit(audit func(r *http.Request, reason string)) HandlerOption {
 	return func(c *handlerConfig) { c.authzAudit = audit }
 }
@@ -44,9 +47,10 @@ func WithCommitClock(now func() time.Time) HandlerOption {
 // commit is the response-commit protocol of secure mode (design §6.3, D-100):
 // every /api/ response is built in a buffer, then the session, a recorded
 // authorisation error and the earliest allow expiry are checked, in that order,
-// after every build. A response whose allows expired is built once more from
-// fresh request state, keeping only the check count. Other paths pass through.
-func commit(next http.Handler, check func(http.ResponseWriter, *http.Request) bool, audit func(*http.Request, string), now func() time.Time) http.Handler {
+// after every build. A response whose allows expired, or whose identity a refresh
+// replaced, is built once more from fresh request state, keeping only the check
+// count. Other paths pass through.
+func commit(next http.Handler, check func(http.ResponseWriter, *http.Request) (*http.Request, error), audit func(*http.Request, string), now func() time.Time) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
@@ -68,8 +72,22 @@ func commit(next http.Handler, check func(http.ResponseWriter, *http.Request) bo
 			buf := &bufferedResponse{header: http.Header{}}
 			next.ServeHTTP(buf, r)
 			// An ended session answers 401 even when an authorisation error was recorded.
-			if check != nil && !check(w, r) {
-				return
+			if check != nil {
+				cur, err := check(w, r)
+				switch {
+				case err != nil:
+					unavailable(w, r, AuditIdentity)
+					return
+				case cur == nil:
+					return
+				case cur != r:
+					if attempt == commitAttempts {
+						unavailable(w, r, AuditIdentity)
+						return
+					}
+					base, checks = cur, st.spent()
+					continue
+				}
 			}
 			if err := st.failed(); err != nil {
 				unavailable(w, r, auditReason(err, st.fullReadFailed()))

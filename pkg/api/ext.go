@@ -50,7 +50,7 @@ type handlerConfig struct {
 	// secure marks secure mode; complete says its identity and authorisation are fully wired.
 	secure, complete bool
 	// commitCheck and authzAudit are the commit wrapper's hooks (commit.go); nil means none.
-	commitCheck func(http.ResponseWriter, *http.Request) bool
+	commitCheck func(http.ResponseWriter, *http.Request) (*http.Request, error)
 	authzAudit  func(*http.Request, string)
 	// commitClock is the commit wrapper's clock; nil means time.Now.
 	commitClock func() time.Time

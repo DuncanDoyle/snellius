@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 )
@@ -14,6 +16,7 @@ const (
 	stateNone  state = iota // no session: sign-in required
 	stateEnded              // the session ended and its end notice is still held
 	stateOK
+	stateStale // the identity awaits its refresh; only the commit check answers it
 )
 
 // lookup resolves a cookie value to a fresh identity. A stale identity waits
@@ -109,6 +112,9 @@ func (s *Store) refresh(sess *session, refreshToken string, done chan struct{}) 
 		s.endRefresh(sess, "subject-changed")
 		return
 	}
+	if !sameIdentity(sess.info.Identity, res.Identity) {
+		sess.info.gen++
+	}
 	sess.info.Identity = res.Identity
 	sess.expiry, sess.reviewed = res.Expiry, now
 	if res.RefreshToken != "" {
@@ -117,6 +123,13 @@ func (s *Store) refresh(sess *session, refreshToken string, done chan struct{}) 
 	if !now.Before(freshUntil(sess)) {
 		s.endRefresh(sess, "token-expired")
 	}
+}
+
+// sameIdentity reports whether a and b hold the same username, UID, groups and extra, in any order.
+func sameIdentity(a, b oidc.Identity) bool {
+	sorted := func(ss []string) []string { return slices.Sorted(slices.Values(ss)) }
+	return a.Username == b.Username && a.UID == b.UID && slices.Equal(sorted(a.Groups), sorted(b.Groups)) &&
+		maps.EqualFunc(a.Extra, b.Extra, func(x, y []string) bool { return slices.Equal(sorted(x), sorted(y)) })
 }
 
 // endRefresh ends sess after a failed refresh, logging only a fixed category. s.mu is held.

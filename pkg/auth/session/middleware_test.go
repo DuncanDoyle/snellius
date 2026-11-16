@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/pkg/api"
+	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/engine"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/platform"
@@ -339,4 +341,95 @@ func TestSessionEndsInFlight(t *testing.T) {
 			})
 		}
 	}
+}
+
+// commitRun sends one /api/ request with c through Middleware and the commit
+// wrapper. Its handler shows "admin" only to the oidc:admin group; the first
+// build calls mid before it writes. It answers the response and the build count.
+func (f *fixture) commitRun(c *http.Cookie, mid func()) (*httptest.ResponseRecorder, int) {
+	f.t.Helper()
+	builds := 0
+	ext := api.ExtMount{Name: "probe", Pattern: "GET /data", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if builds++; builds == 1 {
+			mid()
+		}
+		id, _ := IdentityFrom(r.Context())
+		data := "public"
+		if slices.Contains(id.Groups, "oidc:admin") {
+			data = "admin"
+		}
+		api.WriteJSON(w, data)
+	})}
+	h := f.store.Middleware(api.NewHandler(noModel{}, fstest.MapFS{}, api.AllowAll{}, api.WithSecureMode(true), api.WithExtMounts(ext),
+		api.WithCommitCheck(f.store.StillSignedIn)))
+	req := httptest.NewRequest("GET", "/api/ext/probe/data", nil)
+	req.AddCookie(c)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec, builds
+}
+
+// refreshDone waits until the refresh the request started has replaced the identity.
+func (f *fixture) refreshDone() {
+	f.t.Helper()
+	waitFor(f.t, "the refresh to finish", func() bool {
+		f.store.mu.Lock()
+		defer f.store.mu.Unlock()
+		for _, sess := range f.store.sessions {
+			if sess.refreshing != nil || !sess.reviewed.Equal(f.clk.Now()) {
+				return false
+			}
+		}
+		return f.refresh.count() == 1
+	})
+}
+
+// A refresh that drops a group while a request runs: the response is rebuilt
+// with the current identity, never served from the dropped group.
+func TestCommitRebuildsAfterRefreshDropsGroup(t *testing.T) {
+	f := newFixture(t, nil)
+	f.refresh.gate = make(chan struct{})
+	f.refresh.result = func() oidc.Result { return f.result("oidc:dev") }
+	c := f.signIn(f.result("oidc:dev", "oidc:admin"))
+	// Within refreshAhead of staleness, the request starts a background refresh.
+	f.clk.Step(14 * time.Minute)
+	rec, builds := f.commitRun(c, func() {
+		close(f.refresh.gate)
+		f.refreshDone()
+	})
+	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != `"public"` || builds != 2 {
+		t.Fatalf("got %d %s after %d builds; want 200 \"public\" after 2", rec.Code, got, builds)
+	}
+}
+
+// A refresh that returns the same identity does not rebuild the response.
+func TestCommitKeepsUnchangedRefresh(t *testing.T) {
+	f := newFixture(t, nil)
+	f.refresh.gate = make(chan struct{})
+	f.refresh.result = func() oidc.Result { return f.result("oidc:admin", "oidc:dev") }
+	c := f.signIn(f.result("oidc:dev", "oidc:admin"))
+	f.clk.Step(14 * time.Minute)
+	rec, builds := f.commitRun(c, func() {
+		close(f.refresh.gate)
+		f.refreshDone()
+	})
+	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != `"admin"` || builds != 1 {
+		t.Fatalf("got %d %s after %d builds; want 200 \"admin\" after 1", rec.Code, got, builds)
+	}
+}
+
+// A request that commits after its identity went stale, with a refresh
+// possible, answers 503 authz-unavailable; the session lives on and the next
+// request waits for the refresh.
+func TestCommitStaleIdentity(t *testing.T) {
+	f := newFixture(t, nil)
+	c := f.signIn(f.result("oidc:dev", "oidc:admin"))
+	rec, builds := f.commitRun(c, func() { f.clk.Step(16 * time.Minute) })
+	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusServiceUnavailable || got != `{"error":"authz-unavailable"}` || builds != 1 {
+		t.Fatalf("got %d %s after %d builds; want 503 authz-unavailable after 1", rec.Code, got, builds)
+	}
+	if n := f.refresh.count(); n != 0 {
+		t.Fatalf("the commit check refreshed %d times", n)
+	}
+	f.wantMe(c, 200, `{"username":"oidc:alice","groups":["oidc:ops"]}`)
 }

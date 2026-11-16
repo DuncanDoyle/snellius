@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,7 +16,12 @@ type Info struct {
 	Identity oidc.Identity
 	// Issuer and Subject name the person; AuditID is the session's opaque audit ID.
 	Issuer, Subject, AuditID string
+	// gen counts the refreshes that changed Identity; the commit check compares it.
+	gen uint64
 }
+
+// ErrStale is the commit check's answer while the session's identity awaits its refresh.
+var ErrStale = errors.New("session identity awaits its refresh")
 
 type ctxKey struct{}
 
@@ -51,44 +57,55 @@ func (s *Store) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// StillSignedIn reports whether the session r passed Middleware with is still
-// signed in, for the API's commit check. Otherwise it writes the 401 a new
-// request with the cookie would get and reports false. It never refreshes or waits.
-func (s *Store) StillSignedIn(w http.ResponseWriter, r *http.Request) bool {
+// StillSignedIn is the API's commit check for r, a request that passed Middleware.
+// It answers r while the session holds r's identity and that identity is fresh,
+// a request carrying the current identity when a refresh replaced it, and
+// ErrStale while the identity awaits a refresh. When the session ended it writes
+// the 401 a new request with the cookie would get and answers nil. It never refreshes or waits.
+func (s *Store) StillSignedIn(w http.ResponseWriter, r *http.Request) (*http.Request, error) {
 	info, ok := FromContext(r.Context())
 	c, err := r.Cookie(CookieName)
 	if !ok || err != nil {
 		s.writeUnauthorized(w, r, stateNone, nil)
-		return false
+		return nil, nil
 	}
 	key := hashKey(c.Value)
 	s.mu.Lock()
-	st := s.current(r.Context(), key, info.AuditID)
+	cur, st := s.current(r.Context(), key, info.AuditID)
 	s.mu.Unlock()
-	if st == stateOK {
-		return true
+	switch {
+	case st == stateStale:
+		return r, ErrStale
+	case st == stateOK && cur.gen == info.gen:
+		return r, nil
+	case st == stateOK:
+		return r.WithContext(withInfo(r.Context(), cur)), nil
 	}
 	s.writeUnauthorized(w, r, st, c)
-	return false
+	return nil, nil
 }
 
-// current resolves key without refreshing: OK while the session with auditID
-// is held and unexpired, else the cookie's end notice. s.mu is held.
-func (s *Store) current(ctx context.Context, key, auditID string) state {
+// current resolves key without refreshing: the identity while the session with
+// auditID is held, unexpired and fresh; stateStale while it awaits a refresh;
+// else the cookie's end notice. s.mu is held.
+func (s *Store) current(ctx context.Context, key, auditID string) (Info, state) {
 	sess := s.sessions[key]
 	if sess == nil || sess.auditID != auditID {
-		return s.notice(key)
+		return Info{}, s.notice(key)
 	}
 	now := s.clk.Now()
 	why := s.expired(sess, now)
-	if why == "" && !now.Before(freshUntil(sess)) && !s.canRefresh(sess) {
+	if why == "" && !now.Before(freshUntil(sess)) {
+		if s.canRefresh(sess) {
+			return Info{}, stateStale
+		}
 		why = reasonRefresh
 	}
 	if why == "" {
-		return stateOK
+		return sess.info, stateOK
 	}
 	s.end(ctx, sess, why)
-	return s.notice(key)
+	return Info{}, s.notice(key)
 }
 
 // Me serves GET /auth/me: the session's username and groups.
