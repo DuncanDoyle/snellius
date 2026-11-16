@@ -23,8 +23,8 @@ Issues: none | Plan steps: implementation-plan.md, Sub-phase 7.4, items 1–10; 
 | Health verdict, header tint, finding counts, groups, search | Computed over the findings the viewer is shown |
 | Check failed for collection or access (watch denied, cache not synced) | Shown to every viewer, as code and state |
 | Object-derived check result (grace hold, pending count, deadline) | Shown only when its whole basis is readable; install-wide unknown is raised for a restricted viewer only by collection or access failures |
-| Install the viewer can reach through any readable object | Listed; GatewayClass names, controller readiness and version, and scope details only when the viewer can read their source objects; otherwise a neutral name and "Details not visible to you" (design §7.4) |
-| Install with no object the viewer can read | Absent |
+| Any install, for every signed-in viewer (D-103) | Listed with its ID (D-102); GatewayClass names, controller readiness and version, and scope details only when the viewer can read their source objects; otherwise a neutral name and "Details not visible to you" (design §7.4) |
+| Install with no object the viewer can read | Its pages answer 200 with no rows, never 404; no permission checks decide whether it is listed |
 | `/meta` in secure mode | Capabilities that describe cluster objects are per viewer or dropped (decided per capability in the plan tasks); local mode unchanged |
 | Extension handler | Its `Deps` carry the viewer and a helper that applies the rule; the extension docs make using it a requirement |
 | Backend endpoint counts and KGWUI-023 for a Service | Need `list` on EndpointSlices in the Service's namespace; without it, unknown, never derived from hidden slices |
