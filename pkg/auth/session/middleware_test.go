@@ -346,12 +346,12 @@ func TestSessionEndsInFlight(t *testing.T) {
 // commitRun sends one /api/ request with c through Middleware and the commit
 // wrapper. Its handler shows "admin" only to the oidc:admin group; the first
 // build calls mid before it writes. It answers the response and the build count.
-func (f *fixture) commitRun(c *http.Cookie, mid func()) (*httptest.ResponseRecorder, int) {
+func (f *fixture) commitRun(c *http.Cookie, mid func(*http.Request), opts ...api.HandlerOption) (*httptest.ResponseRecorder, int) {
 	f.t.Helper()
 	builds := 0
 	ext := api.ExtMount{Name: "probe", Pattern: "GET /data", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if builds++; builds == 1 {
-			mid()
+			mid(r)
 		}
 		id, _ := IdentityFrom(r.Context())
 		data := "public"
@@ -360,8 +360,8 @@ func (f *fixture) commitRun(c *http.Cookie, mid func()) (*httptest.ResponseRecor
 		}
 		api.WriteJSON(w, data)
 	})}
-	h := f.store.Middleware(api.NewHandler(noModel{}, fstest.MapFS{}, api.AllowAll{}, api.WithSecureMode(true), api.WithExtMounts(ext),
-		api.WithCommitCheck(f.store.StillSignedIn)))
+	opts = append([]api.HandlerOption{api.WithSecureMode(true), api.WithExtMounts(ext), api.WithCommitCheck(f.store.StillSignedIn)}, opts...)
+	h := f.store.Middleware(api.NewHandler(noModel{}, fstest.MapFS{}, api.AllowAll{}, opts...))
 	req := httptest.NewRequest("GET", "/api/ext/probe/data", nil)
 	req.AddCookie(c)
 	rec := httptest.NewRecorder()
@@ -393,12 +393,34 @@ func TestCommitRebuildsAfterRefreshDropsGroup(t *testing.T) {
 	c := f.signIn(f.result("oidc:dev", "oidc:admin"))
 	// Within refreshAhead of staleness, the request starts a background refresh.
 	f.clk.Step(14 * time.Minute)
-	rec, builds := f.commitRun(c, func() {
+	rec, builds := f.commitRun(c, func(*http.Request) {
 		close(f.refresh.gate)
 		f.refreshDone()
 	})
 	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusOK || got != `"public"` || builds != 2 {
 		t.Fatalf("got %d %s after %d builds; want 200 \"public\" after 2", rec.Code, got, builds)
+	}
+}
+
+// A check that failed during the build answers 503 and its audit record even
+// when a refresh replaced the identity meanwhile: no rebuild hides the error.
+func TestCommitFailedCheckBeforeRebuild(t *testing.T) {
+	f := newFixture(t, nil)
+	f.refresh.gate = make(chan struct{})
+	f.refresh.result = func() oidc.Result { return f.result("oidc:dev") }
+	c := f.signIn(f.result("oidc:dev", "oidc:admin"))
+	f.clk.Step(14 * time.Minute)
+	var reasons []string
+	rec, builds := f.commitRun(c, func(r *http.Request) {
+		api.ReportAuthzError(r, errors.New("SAR failed"))
+		close(f.refresh.gate)
+		f.refreshDone()
+	}, api.WithAuthzAudit(func(_ *http.Request, why string) { reasons = append(reasons, why) }))
+	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusServiceUnavailable || got != `{"error":"authz-unavailable"}` || builds != 1 {
+		t.Fatalf("got %d %s after %d builds; want 503 authz-unavailable after 1", rec.Code, got, builds)
+	}
+	if !slices.Equal(reasons, []string{api.AuditCheckFailed}) {
+		t.Fatalf("audit %v, want [%s]", reasons, api.AuditCheckFailed)
 	}
 }
 
@@ -409,7 +431,7 @@ func TestCommitKeepsUnchangedRefresh(t *testing.T) {
 	f.refresh.result = func() oidc.Result { return f.result("oidc:admin", "oidc:dev") }
 	c := f.signIn(f.result("oidc:dev", "oidc:admin"))
 	f.clk.Step(14 * time.Minute)
-	rec, builds := f.commitRun(c, func() {
+	rec, builds := f.commitRun(c, func(*http.Request) {
 		close(f.refresh.gate)
 		f.refreshDone()
 	})
@@ -424,7 +446,7 @@ func TestCommitKeepsUnchangedRefresh(t *testing.T) {
 func TestCommitStaleIdentity(t *testing.T) {
 	f := newFixture(t, nil)
 	c := f.signIn(f.result("oidc:dev", "oidc:admin"))
-	rec, builds := f.commitRun(c, func() { f.clk.Step(16 * time.Minute) })
+	rec, builds := f.commitRun(c, func(*http.Request) { f.clk.Step(16 * time.Minute) })
 	if got := strings.TrimSpace(rec.Body.String()); rec.Code != http.StatusServiceUnavailable || got != `{"error":"authz-unavailable"}` || builds != 1 {
 		t.Fatalf("got %d %s after %d builds; want 503 authz-unavailable after 1", rec.Code, got, builds)
 	}

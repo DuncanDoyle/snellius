@@ -173,6 +173,8 @@ Response-commit protocol (Codex #7): in secure mode the identity's decisions for
 
 Validity at commit (D-100): a response carries the earliest expiry of the allows it used. If that time has passed when the response would be written, it is rebuilt once with fresh checks; if it expires again, the answer is `503 authz-unavailable`.
 
+Identity at commit: an ended session answers 401, then a recorded authorisation error answers 503. Only after that is the identity checked. An identity past its freshness answers 503. If a refresh replaced the identity during the request, the response is rebuilt once with the new identity, within the same rebuild budget. Each 503 writes a `security` audit record `authz-unavailable` with its reason: `check-failed`, `check-limit`, `full-read-failed`, `expired` or `identity-stale`.
+
 SAR outcomes: `allowed: true` is allow; `allowed: false` (with or without `denied`) is deny; an HTTP error, a timeout or a non-empty `evaluationError` is an error, never a deny. A `list` check that errors is not followed by a `get` check: the request fails.
 
 ### 6.4 Cost

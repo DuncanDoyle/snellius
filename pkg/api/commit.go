@@ -71,27 +71,29 @@ func commit(next http.Handler, check func(http.ResponseWriter, *http.Request) (*
 			r, st := withAuthzStateFrom(base, checks)
 			buf := &bufferedResponse{header: http.Header{}}
 			next.ServeHTTP(buf, r)
-			// An ended session answers 401 even when an authorisation error was recorded.
+			// An ended session answers 401 even when an authorisation error was recorded;
+			// that error answers 503 before a stale or replaced identity is looked at.
+			cur, stale := r, error(nil)
 			if check != nil {
-				cur, err := check(w, r)
-				switch {
-				case err != nil:
-					unavailable(w, r, AuditIdentity)
+				if cur, stale = check(w, r); cur == nil && stale == nil {
 					return
-				case cur == nil:
-					return
-				case cur != r:
-					if attempt == commitAttempts {
-						unavailable(w, r, AuditIdentity)
-						return
-					}
-					base, checks = cur, st.spent()
-					continue
 				}
 			}
 			if err := st.failed(); err != nil {
 				unavailable(w, r, auditReason(err, st.fullReadFailed()))
 				return
+			}
+			switch {
+			case stale != nil:
+				unavailable(w, r, AuditIdentity)
+				return
+			case cur != r:
+				if attempt == commitAttempts {
+					unavailable(w, r, AuditIdentity)
+					return
+				}
+				base, checks = cur, st.spent()
+				continue
 			}
 			if exp := st.allowExpiry(); exp.IsZero() || exp.After(now()) {
 				buf.writeTo(w)
