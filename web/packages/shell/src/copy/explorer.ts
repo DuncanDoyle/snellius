@@ -534,6 +534,8 @@ export const diagnosticsCopy = {
   viewProcesses: "View processes", // S387
   whatWasChecked: "What was checked", // S385
   notAvailable: "Not available", // S358
+  notChecked: "Not checked", // S840
+  notCheckedReason: "Needs read access to the whole cluster", // S841
   deciding: "Deciding",
   decidingOn: (n: number, when: string) => `Deciding on ${plural(n, ["object", "objects"])}, ${when}`,
   unavailableReason: {

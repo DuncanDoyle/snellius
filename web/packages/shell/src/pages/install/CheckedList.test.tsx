@@ -1,5 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import type { CheckResult } from "../../api/types";
+import { diagnosticsCopy } from "../../copy/explorer";
 import { renderWithTheme } from "../../test/render";
 import { CheckedList } from "./CheckedList";
 
@@ -45,4 +46,19 @@ it("stale data shows a held check as unknown", () => {
   expect(item()).toHaveTextContent(/^Unknown: backend endpoints$/);
   expect(within(item()).getByTestId("health-icon-unknown")).toBeInTheDocument();
   expect(within(item()).queryByTestId("check-deciding")).toBeNull();
+});
+
+it("a check a restricted viewer may not see is Not checked, not healthy", () => {
+  renderWithTheme(<CheckedList checks={[check({ notAssessed: true })]} />);
+  expect(item()).toHaveTextContent(/^backend endpoints\s*Not checked$/);
+  expect(within(item()).getByTestId("check-not-assessed")).toBeInTheDocument();
+  expect(within(item()).getByText("Not checked")).toHaveAttribute("title", diagnosticsCopy.notCheckedReason);
+  expect(within(item()).queryByTestId("health-icon-healthy")).toBeNull();
+  expect(within(item()).queryByTestId("health-icon-unknown")).toBeNull();
+});
+
+it("stale data leaves a Not checked check as it is", () => {
+  renderWithTheme(<CheckedList checks={[check({ notAssessed: true })]} stale />);
+  expect(within(item()).getByTestId("check-not-assessed")).toBeInTheDocument();
+  expect(within(item()).queryByTestId("health-icon-unknown")).toBeNull();
 });

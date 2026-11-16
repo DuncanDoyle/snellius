@@ -458,6 +458,7 @@ const check = shape<CheckResult>(
     pending: "?",
     unavailable: "?",
     hold: "?",
+    notAssessed: "?",
   },
   { hold: shape<CheckHold>({ until: "!", count: "!", reason: "!" }) },
   { unavailable: { off: 1, denied: 1, failing: 1, "not-on-version": 1, "not-observed": 1 } },

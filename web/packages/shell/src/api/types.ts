@@ -57,6 +57,8 @@ export interface CheckResult {
   unavailable?: "off" | "denied" | "failing" | "not-on-version" | "not-observed";
   /** The check is still deciding on count items, first at until; reason names no object (D-068). */
   hold?: CheckHold;
+  /** Shown as "Not checked" to a viewer without the full read; neutral in rollups (D-106). */
+  notAssessed?: boolean;
 }
 export interface CheckHold {
   until: string;
