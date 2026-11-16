@@ -1598,8 +1598,8 @@ Measured on the reference machine, 5 runs per world:
 **Context:** Keeping today's own-object findings unchanged needed inputs the plan did not list, and the review asked where they sit against D-085.
 
 **Decision:**
-1. The served and experimental kinds and the rule set's target-not-found flag are controller settings (D-106 item 1).
-2. Whether Snellius collected a kind in a namespace comes from its own access and configured namespaces, not from any cluster object. It is not a D-085 exception.
+1. The served and experimental kinds (from API discovery and Snellius's configuration) and the rule set's target-not-found flag are install context (D-106 item 1).
+2. Whether Snellius collected a kind in a namespace comes from Snellius's own RBAC and configured namespaces. A change to Snellius's Roles or RoleBindings may change it, and so switch a 013 explanation on a visible route. This is the same exposure already accepted for collection failures (D-106 item 3).
 3. The endpoints result for a partial read lists namespaces that routes reference, so it is a derived result (D-106 item 3), not a collection failure.
 4. The basis is recorded per resource and analyzer, not per finding. A viewer who can read parent A but not parent B does not see the 002 about A. This is stricter than D-106 item 2, never looser.
 
