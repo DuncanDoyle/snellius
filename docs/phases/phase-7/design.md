@@ -211,6 +211,8 @@ D-085: with the viewer's readable objects and permissions unchanged, a change to
 | `/meta` | capabilities of the ServiceAccount | unchanged for local mode; in secure mode, capabilities that describe cluster objects are reported per viewer or dropped (plan decides per capability) |
 | `/api/ext/…` | up to each extension | the extension `Deps` gain the viewer and a helper that enforces the rule; the docs make it a requirement |
 
+The list endpoints (`/routes`, `/gateways`, `/listenersets`, `/paths`, `/backends`, `/findings`, `/processes`) take a namespace scope, `namespaces=A,B`, in both modes (our call, D-100 item 8). Rows, counts and facets come only from those namespaces, and no root bucket outside them is checked. A new `/installs/{id}/namespaces` lists the namespaces of rows the viewer can see, under the same rule.
+
 ### 7.3 Findings and their basis (our call; Codex #2)
 
 `Finding.Evidence` lists the objects a finding quotes, not everything that decided it. Phase 7 adds a separate **basis** to every finding: the dependency set that decided its existence and severity, covering positive inputs, absence checks (the Service a KGWUI-013 looked for) and aggregate populations (the stuck objects behind a freshness finding, `freshness.go:183-207`). Every analyzer declares its basis; a finding whose analyzer declares none has unknown basis.
@@ -313,6 +315,7 @@ kgwctl reads with the user's kubeconfig. Phase 7 changes nothing in kgwctl; the 
 - Polling pauses while the tab is hidden, so an idle tab doesn't keep a session alive (our call).
 - Header: the signed-in user with a menu (Who am I, Sign out) in secure mode; the local-mode banner in local mode (`Shell.tsx:118-125`).
 - The header health tint uses visible findings only (`Header.tsx:8`, through `/installs`).
+- A namespace selector in the header, in both modes (our call): choices from `/namespaces` plus typed entry, default all, kept per browser. It scopes every list page; overview, health, diagnostics and the map stay install-wide.
 - Sign-in states: "Signing in", "Sign-in is not configured", "Your sign-in is not accepted by this cluster", "Your session has ended".
 
 ## 12. Chart and RBAC

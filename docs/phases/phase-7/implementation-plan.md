@@ -455,16 +455,189 @@ Install surface: **new flags** (secure mode only) `--authz-max-in-flight` (defau
 
 ## Sub-phase 7.4 — Visibility everywhere (data still gated)
 
-1. `pkg/health`: `Finding.Basis` and check-result basis; every analyzer declares it (inputs, absence checks, populations); a table test fails for any analyzer without a declaration.
-2. `pkg/api` endpoints per design §7.2: remove restricted placeholders, `DeniedInInstall`, `hidden` flags in secure mode; counts over visible objects; ancestors and per-listener counts visible only; findings by basis; install context per §7.4; `/meta` per viewer; extension `Deps` viewer helper.
-3. EndpointSlices and Pods join the backend dependency set.
-4. Permissions note per viewer (design §7.5) from the full-read check.
-5. Path incompleteness from readable refs and permissions (design §8.1), shared with 7.5.
-6. The D-085 rule test per surface: two viewers, fixed clock, named masks, the change list of design §13.
-7. Namespace scope selector (D-100 item 8): a persistent selector in the web and an API parameter that limit rows, counts and facets to the chosen namespaces, so population checks run only there; the scope is applied before the Task 26 prefetch rounds. Cross-namespace dependencies keep their own checks; restricted ones stay unknown or incomplete.
-8. Secure mode drops the exact hidden counts `deniedInInstall` (D-085): creating a hidden object changes them today.
-9. `visibleHealth` counts only findings the viewer may see; hidden findings no longer reach health aggregates.
-10. EndpointSlices join the full-read set (`pkg/app/kinds_sar.go`, `fullRead: true`) once they are an authorised population (item 3); test: a full reader denied EndpointSlices takes the per-object path.
+The gate stays closed: `app.Build` keeps `WithSecureMode(false)`. Every test reaches the projection below it with `WithSecureMode(true)`, as in 7.3. Brief: `phase-7.4-brief.md`. Item map (the former item list): 1 → Task 31; 2 → Tasks 32–34; 3, 10 → Task 35; 4 → Task 34; 5 → Task 36; 6 → the rule cases in Tasks 32–35 and 37; 7 → Task 37; 8 → Task 33; 9 → Task 32.
+
+**Secure-mode switch.** "Secure mode" below means a handler built with `WithSecureMode` (`handler.secure`); `view` gains `secure bool` from it. A local handler with a registry authoriser keeps D-013's placeholders. A full-read viewer and local mode under `AllowAll` see every existing field unchanged: `TestGoldenChangesAreAdditive` (`additive_test.go:58`) and `TestFullReaderMatchesAllowAll` (`pkg/auth/sar/handler_test.go:381`) stay green in every task.
+
+**The D-085 rule harness** (Task 32 builds it; Tasks 33–35 and 37 add cases). New `pkg/auth/sar/rule_test.go` (package `sar_test`), on the 7.3 helpers `worldOf`, `serve`, `bodies` (`handler_test.go:63`, `:134`, `:717`):
+- Two viewers over one model: `full` (every `list` allowed) and `restricted` (`inNamespaces(10)`, `handler_test.go:634`). The hidden namespace is `testutil.ScaleNamespace(11)`.
+- Each world is computed once by a fresh engine at `testutil.Now` with a fixed publication sequence; the commit clock is `t0`. Masks are named per surface (`ruleCase.masks`, JSON paths); the default is none. A masked field must not depend on hidden objects.
+- Changes (design §13), all in the hidden namespace: `created` (a Gateway, an HTTPRoute, a Service with its EndpointSlice, a kgateway Backend); `deleted` (one of each); `faulty` (a route condition False, a Backend not accepted, a Service with no ready endpoints); `pending` (a route without status inside the grace period); `threshold` (enough stuck routes to raise KGWUI-018, and enough unready proxies to change the proxy summary); `rejecting` (a hidden Gateway with a KGWUI-001 through the controller metrics fixture).
+- `TestRuleUnchangedForRestricted` (table: surface × change): the restricted viewer's response is byte-equal before and after, after masks.
+- Mutation check, `TestRuleChangesReachFullReader`: the same table for `full` must differ, so each change reaches the surface. A pair a change cannot reach is listed in `ruleNotApplicable` with a one-line reason; the test fails on an unlisted pair that does not differ.
+
+### Task 31: Basis for findings and check results (`pkg/health`)
+
+**Files:** new `pkg/health/basis.go`; `finding.go`, `store.go` (`RunContext.Hold` at `:290`), `rollup.go` (`Evaluate` at `:62`, `RollUp` at `:31`), every check file (`checks.go`, `backend.go`, `computed.go`, `endpoints.go`, `freshness.go`, `process.go`, `proxystats.go`, `skew.go`, `withheld.go`, `xds.go`); tests new `pkg/health/basis_test.go`, `hold_test.go`, `rollup_test.go`.
+
+**Interfaces:**
+- `health.Basis{Collection bool; Refs []objects.Ref; Lists []ListBasis; Unknown bool}` and `health.ListBasis{Kind objects.GroupKind; Namespace string}`. A finding's whole basis is its `Resource`, its `Evidence` and `Basis`. `Collection` marks a result decided only by Snellius's own collection and access state (design §7.6). `Unknown` is set by `Evaluate`, never by a check.
+- `Finding.Basis Basis` (`json:"-"`). Absence checks put the looked-for ref in `Refs`, whether the object exists or not; populations go in `Lists` (kind and namespace).
+- `health.BasisDeclarer` (optional, so extension checks keep compiling): `Basis() BasisSpec`, with `BasisSpec{Collection bool; Inputs, Absences, Populations []objects.GroupKind}`. `Evaluate` sets `Basis.Unknown` on every finding of a check without it.
+- Holds carry their items: `Hold.Items []HeldItem` (`json:"-"`), `HeldItem{Until time.Time; Reason string; Basis Basis}`. New `RunContext.HoldOn(until time.Time, reason string, basis Basis)` counts one item. `Hold(until, count, reason)` stays and records `count` items with unknown basis. The core call sites move to `HoldOn`: `checks.go:550` (the resource in grace), `:752` (the Gateway and its proxy Deployment), `endpoints.go:144` (the Service and `Lists` EndpointSlices in its namespace), `freshness.go:202` (the stuck objects and the controller Deployment), `proxystats.go:125` and `xds.go:195` (the Gateway and the controller Deployment).
+- `health.Readable` interface: `Ref(objects.Ref) bool`, `List(gk objects.GroupKind, namespace string) bool`.
+- `func (f *Finding) ShownTo(rd Readable) bool`: false for `Basis.Unknown`; else `Resource` (when set), every `Evidence` and `Basis.Refs` ref, and every `Basis.Lists` bucket readable. `Collection` findings still need a readable `Resource` when they have one.
+- `func Project(rep Report, rd Readable) Report`: findings filtered by `ShownTo` (order kept), `Counts` recounted, checks projected, `State = RollUp(shown, projected)`. Check projection: `Hold` recomputed over the items whose basis is readable (`Count`, earliest `Until`, distinct reasons in order); `Pending` and its `Error` kept only while a readable item is held, else the result is `OK`. A result that is not OK and not `Pending` (collection or access) is unchanged. So install-wide unknown comes only from collection or access failures or readable pending items (design §7.6). `rd == nil` returns `rep` unchanged.
+
+Basis declarations (`BasisSpec`; every finding sets matching `Basis`):
+
+| Check | Codes | Basis |
+|---|---|---|
+| cluster access, served kinds, `unavailable()` | 008 | `Collection` |
+| controller scope, scope matches controller | 007 | controller Deployment; `Lists` Namespaces (`""`) |
+| controller pods | 005 | controller Deployment; `Lists` Pods in its namespace |
+| resource status | 002, 003, 011, 013, 014, 015, 016, 017 | resource; 003, 011: the parent named in the route; 013: the absent target; 014: `Lists` ReferenceGrants in the target namespace; 016: the policy target; 017: the Gateway and its ListenerSets |
+| gateway proxies | 006, 010 | Gateway; proxy Deployment; `Lists` Pods in its namespace |
+| xDS rejects, withheld config | 001, 024 | Gateway; controller Deployment |
+| watched namespaces | 004 | resource; its Namespace |
+| gateway ownership | 009 | Gateway; every claiming GatewayClass |
+| backend status, computed views | 002, 012 | resource and evidence only |
+| restarts, probes, rollouts, skew | 019–022 | the Deployment; `Lists` Pods in its namespace |
+| proxy stats | 025, 026 | Gateway; `Lists` Pods in its namespace |
+| status progress | 018 | every stuck object; controller Deployment; `Lists` over every kind and namespace counted by `withStatus()` (the threshold's population) |
+| backend endpoints | 023 | Service; `Lists` EndpointSlices in its namespace |
+
+- [ ] Tests: `TestEveryAnalyzerDeclaresBasis` (table over `Upstream()`: fails naming any check without `BasisDeclarer`); `TestBasisWithinDeclaration` (on the scale fixture with faults injected, every finding's `Basis` kinds are within its check's `BasisSpec` plus its resource kind, and every non-`Collection` finding has a non-empty basis); `TestUndeclaredCheckBasisUnknown` (a test check without the method: `Basis.Unknown` on its findings; `ShownTo` false with every ref readable); `TestShownToTable` (resource, evidence, refs and lists each unreadable in turn → false; all readable → true; `Collection` with no resource → true); `TestProjectCountsAndState` (a hidden error finding: state and counts as if absent); `TestProjectHoldOverReadable` (three held items, one readable: `Count` 1, its `Until`; none readable: `OK`, no hold, no unknown); `TestProjectCollectionFailureStays` (a denied watch: unknown for every `Readable`); `TestProjectNilIsIdentity`; `TestHoldWithoutBasisUnknown` (`Hold(…, 2, …)` items are hidden from any `Readable`).
+- [ ] `go test ./pkg/health/... ./pkg/engine/...`; commit.
+
+### Task 32: Health, findings and diagnostics over shown findings (+ rule harness)
+
+**Files:** `pkg/api/handlers.go` (`visibleHealth` `:215`, `healthResponse` `:360`), `findings.go` (`match` `:138`, `findingRow` `:172`, `findings`, `findingGroups`, `findingDetail`), `diagnostics.go` (`shownSince` `:274`, `verdict` `:286`, `groupRow` `:311`, `diagnostics`, `dataPlane` `:415`), `visible.go`; `pkg/diagnose/group.go` (`Input`, `Build` `:117`); tests new `pkg/auth/sar/rule_test.go`, `pkg/api/findings_test.go`, `diagnostics_test.go`, `pkg/diagnose/group_test.go`.
+
+**Interfaces:**
+- `view` implements `health.Readable`: `Ref` is `can`, `List` is `canList`. `func (v *view) shown(f *health.Finding) bool`: true under a full read; in secure mode `f.ShownTo(v)`; outside secure mode `true` (D-013's restricted rows stay).
+- `func (v *view) report(i *engine.InstallModel) health.Report` replaces `visibleHealth`: `i.Health` under a full read or outside secure mode, else `health.Project(i.Health, v)`, memoised per request. Before projecting, a two-round prefetch (`view.prefetch`, then `prefetchLists` for `Lists`): the findings' resources, then the evidence and basis of findings whose resource was admitted.
+- `diagnose.Input.Readable func(objects.Ref) bool` (nil admits all). `Build` rejects a claim whose cause is not readable (the finding falls to the next family, then "Other"), and filters `Affected` by it. `func (v *view) diagnosis(p, i) *diagnose.Diagnosis`: the engine's under a full read; else `diagnose.Build` over `v.report(i)` with `Readable: v.can`, memoised per request.
+- `/health`: findings and checks of `v.report(i)`; no `Restricted` or `EvidenceRestricted` in secure mode (a shown finding's whole basis is readable).
+- `/findings`: rows, `Total`, cursors and `q` over shown findings only (`match` runs on the projected report); groups view and `GroupRow` over `v.diagnosis`, so a group never has a hidden cause or `hiddenTitle`. `findingDetail`: a finding not shown answers the same `404` as an absent ID; the subject's resource is checked with `canNamed`, its basis as a population.
+- `/diagnostics`: `verdict` over the projected report (state, counts, `OldestSince`, `Reason` from projected checks); `Groups` and `GroupTotal` from `v.diagnosis`; `Checks` projected; `dataPlane` counts rejecting and withheld Gateways from shown 001 and 024 findings, and only Gateways the viewer can read.
+
+- [ ] Regression first: `TestRuleUnchangedForRestricted` with the `/health`, `/findings`, `/findings?view=groups`, `/diagnostics` cases fails on `faulty`, `rejecting` and `threshold`; see it fail.
+- [ ] Rule cases: `/health`, `/diagnostics`, `/findings` (with `q` matching a hidden finding's text), `/findings?view=groups`, and a finding detail by ID (the hidden finding's ID answers 404 before and after).
+- [ ] Handler tests (`WithSecureMode(true)`, fake authoriser): `TestFindingBasisHidesFinding` (a visible route's 013 on a Service in a hidden namespace: absent from `/findings`, `/health`, counts and verdict; a full reader sees it); `TestUndeclaredBasisHiddenFromRestricted` (an extension check without `BasisDeclarer`: hidden for restricted, shown for full read); `TestVerdictOverShownFindings`; `TestPendingHoldHiddenUnlessReadable` (a hidden route in grace: no unknown, no hold for restricted; full reader unknown); `TestCollectionFailureShownToAll` (a denied Pod watch: the check and its 008 for both viewers); `TestGroupsOverShownFindings` (a hidden cause: members ungrouped, `GroupTotal` recounted); `TestDataPlaneShownOnly`; `TestFindingDetailHidden404`; `TestLocalRegistryAuthorizerKeepsRestrictedRows` (no secure mode: D-013 rows unchanged).
+- [ ] `pkg/diagnose`: `TestBuildRejectsUnreadableCause`, `TestBuildNilReadableUnchanged`.
+- [ ] Commit.
+
+### Task 33: Lists and details: visible rows, counts, ancestors, no placeholders
+
+**Files:** `pkg/explore/explore.go`, `rows.go` (`findings` `:111`, the flags at `:330`, `:554`), `query.go` (`QueryRoutes` `:260`, `QueryGateways` `:549`, `QueryListenerSets` `:612`, `RowFlags` `:369`, `GatewayMemberCount` `:579`, `ListenerSetMemberCount` `:588`), `ancestors.go`; `pkg/api/lists.go`, `details.go`, `explain.go` (`listener` `:242`), `processes.go`, `visible.go` (`deniedInInstall` `:378`), `explore_types.go`, `diag_types.go`; web `explore/ObjectTable.tsx` (`:274`); tests `pkg/explore/query_test.go`, `ancestors_test.go`, `pkg/api/lists_test.go`, `details_test.go`, `process_test.go`, `pkg/auth/sar/rule_test.go`.
+
+**Interfaces:**
+- `explore.Viewer{Visible func(objects.Ref) bool; Shown func(*health.Finding) bool; Unknown bool}`. A nil `Shown` means the precomputed states, flags and reasons; the existing query methods are the nil-`Shown` form.
+- `Index` keeps `findingsOf map[objects.Ref][]int32` (indexes into the report's findings, built in `findings()`). New `func (ix *Index) StateOf(ref objects.Ref, vw Viewer) health.State` and `RouteStateOf(id RowID, vw Viewer) (health.State, Flag, *health.RowReason)`: worst shown finding on the row; `FlagGatewayRejecting` only from a shown 001 on a parent Gateway; `FlagBackendProblem` and the backend reason only from a shown finding on a non-mirror backend (D-082 lift as `lifted()`, `rows.go:142`); unknown from `vw.Unknown`. With every finding shown these equal today's `State`, `Flags` and `RouteReason`.
+- `QueryRoutesAs`, `QueryGatewaysAs`, `QueryListenerSetsAs` (`(q Query, vw Viewer) (Page, error)`): the `health` filter and sort use the viewer's state.
+- Counts over visible members: `GatewayMemberCountAs(id, visible)`, `ListenerSetMemberCountAs(id, visible)`, `ListenerCountAs(key ListenerKey, visible) int` (the `listenerRows` members, `query.go:344`). Secure mode uses them for list `routes`, Gateway and ListenerSet details and the per-listener `ComputedRoutes` (`explain.go:250`). Outside secure mode the counts stay rule 5's.
+- `Ancestors` in secure mode: a path with a `Hidden` or `Restricted` step is omitted (`details.go:755`); `truncated` counts visible visits only.
+- Secure mode removes these placeholders; the object or entry is absent: `Page.DeniedInInstall` (`lists.go:89`, `:252`, `:337`, `processes.go:421`; `deniedInInstall` returns 0); `ParentSummary.ViaRestricted` (Via is sent only when both are readable, else omitted); `AncestorStepDTO.Restricted`; `DelegationContext` and `EffectiveContext` `Restricted` entries and `DelegationRestricted` rows (`details.go:705`, `:922`, `:957`, `:1039`); `BackendStateDTO{Restricted}` (`details.go:721`, the state is omitted); `ProcessSetDTO.Restricted` and `ProcessSummary.Restricted` (the controller summary is absent when its Deployment is hidden; no counts from it); the Gateway data-plane `EvidenceRestricted` (`details.go:312`, the data-plane block is omitted when its evidence is not readable). The Go fields stay, documented as unset in secure mode, so the Go API stays additive.
+- A computed fact's `state: "restricted"` (`explain.go:104`) stays: it is decided by `list` permission over dependency buckets of refs written in readable objects (D-077), not by a hidden object's existence. The rule cases cover it.
+- Web: `ObjectTable` shows the denied line only outside secure mode (`isSecureMode()`).
+
+- [ ] Regression first: remove `deniedInInstall` from `masked` (`handler_test.go:737`); `TestHiddenCreateDeleteUnchanged` fails; see it fail.
+- [ ] Rule cases: `/routes`, `/gateways`, `/listenersets`, `/processes`, route detail and delegation, Gateway detail, ListenerSet detail, on visible objects whose neighbours change (a hidden route attached to a visible Gateway; a hidden parent route of a visible route; a hidden Gateway a visible route names).
+- [ ] Handler tests (`WithSecureMode(true)`): `TestMemberCountsVisibleOnly` (Gateway and ListenerSet `routes` and per-listener `computedRoutes` count only visible routes; a full reader's counts unchanged); `TestAncestorHiddenOmitted`; `TestNoPlaceholdersInSecureMode` (table: every field above absent for restricted; present outside secure mode with a registry authoriser); `TestRowStateFromShownFindings` (a hidden Gateway rejecting: the visible route's `health`, `reason` and flags unchanged for restricted, lifted for full read); `TestHealthFilterUsesViewerState`; `TestControllerSummaryHiddenDeployment`.
+- [ ] `pkg/explore`: `TestStateOfAllShownEqualsPrecomputed` (scale fixture: every row equal); `TestMemberCountAsVisible`.
+- [ ] Web: `ObjectTable` denied line absent in secure mode, shown in local mode.
+- [ ] Commit.
+
+### Task 34: Installs, `/meta`, the permissions note and the extension `Deps`
+
+**Files:** `pkg/api/handlers.go` (`installs` `:261`, `find` `:286`, `overview` `:301`, `visibleOverview` `:232`, `meta` `:181`), `types.go` (`InstallSummary`, `MetaResponse` `:55`), `ext.go` (`Visible` `:157`), new `pkg/api/viewer.go`; `pkg/app/app.go` (`CoreCapabilities` `:126`, `Deps` `:364`); `pkg/extension/deps.go`; web `api/types.ts`, the `metaShape` and installs shapes in `types.golden.test.ts`, `shell/Header.tsx`, `shell/InstallName.tsx`, new `shell/PermissionsNote.tsx`, `pages/install/` overview header, `copy/shell.ts`; tests `pkg/api/api_test.go`, new `pkg/api/installs_test.go`, `pkg/api/ext_test.go`, `pkg/app/app_test.go`, web alongside.
+
+**Installs (design §7.4):**
+- `func (v *view) reachable(i *engine.InstallModel) bool`: true under a full read; else true when the viewer may `list` some (kind, namespace) bucket holding an object of `i.Owned` or the controller Deployment. Buckets are asked in rounds of up to 64 through `prefetchLists` (route and Gateway kinds first) and it stops after the first round with an allow. Memoised per request.
+- `/installs` lists only reachable installs. Every install-scoped route answers an unreachable install with the same `404` as an unknown ID (`find`).
+- Metadata per readable source (population checks): `Namespace`, `Name`, `Version`, `Edition`, `Readiness` need the controller Deployment; `ControllerNames` needs cluster-wide `list` on GatewayClasses; `Scope` needs cluster-wide `list` on Namespaces. Otherwise `Version`, `Edition` and `DisplayName` are `""`, `ControllerNames` is `[]`, `Readiness` is `{state: "unknown"}`, `Scope` is omitted, and new `InstallSummary.DetailsHidden bool` (`json:"detailsHidden,omitempty"`) is true. `ID` is unchanged: it is the route key.
+- `Health` from `v.report(i)`, `GroupRows` from `v.diagnosis` (Task 32), so the header tint follows shown findings (design §11).
+- `/overview`: built from `v.report(i)`; `Unattached` keeps visible routes only; the header as above; gateway rows' `State` and `Reason` from `StateOf` (Task 33); `DataPlane` from shown 001 and 024 findings.
+
+**`/meta` in secure mode (design §7.2; local mode unchanged):**
+- `version`, `pinned`, `synced`, `packs`, `filters`, `authMode`, `views`: unchanged; they describe Snellius's build, configuration or cache.
+- `platform` and its capabilities (`scope`, `workloads`): unchanged; they describe the platform type, not objects.
+- `kinds`: unchanged; it is API discovery, which every signed-in user can read, and no hidden object changes it.
+- `processes`, `events`, `crds`, `endpoints`: unchanged; they are Snellius's own watch access, the collection state every viewer sees (design §7.6).
+- `proxyStats`: unchanged; it is the collector's running state, and per-Gateway results are read only after the Gateway is authorised.
+- `controllerLogs`: dropped for a viewer without a full read unless `off`; its other states come from the controller Pods' log content.
+- Extension `capabilityStates`: unchanged; the extension docs require a source to report only the extension's own state (Task 38).
+- New `MetaResponse.LimitedView bool` (`json:"limitedView,omitempty"`): true in secure mode when the full read is false. It is decided only by the viewer's own `list` rights (design §7.5); hidden objects never change it.
+
+**Permissions note (design §7.5):** `PermissionsNote` shows "You see what your Kubernetes permissions allow." when `meta.limitedView`. Its slot in the header is reserved in secure mode from first paint, as `UserMenu` is, so nothing shifts. Below `COMPACT` the text is a tooltip on an icon. Info style with icon, not colour alone; hover and focus styles; light and dark checked. The install name shows the neutral copy and "Details not visible to you" when `detailsHidden`. Copy through the wording picker (controller supplies it).
+
+**Extension `Deps` (design §7.2):**
+- `pkg/api` (additive): `type Viewer interface { Secure() bool; ReadsAll() bool; Can(objects.Ref) bool; CanNamed(objects.Ref) bool; CanList(gk objects.GroupKind, namespace string) bool; Shown(*health.Finding) bool }`; `func ViewerOf(r *http.Request, a Authorizer) Viewer` (secure when `r` carries the commit wrapper's state); `func VisibleTo[T any](v Viewer, items []T, ref func(T) objects.Ref) []T`, with no hidden count.
+- `Visible` (`ext.go:157`) keeps its signature; in secure mode its `hidden` is always 0.
+- `extension.Deps.View func(r *http.Request) api.Viewer`, set in `app.Build` from the same authoriser as the handler (`app.go:364`). Its doc comment says a handler that serves cluster objects must use it.
+
+- [ ] Rule cases: `/installs` (header tint input) and `/overview`, plus an install whose only hidden objects change: `/installs` byte-equal for a viewer who cannot reach it (absent before and after).
+- [ ] Handler tests: `TestInstallReachableThroughAnyObject` (one readable route makes it listed); `TestInstallUnreachableAbsent` (`/installs` omits it; `/overview`, `/routes`, `/health` of it answer the unknown-ID 404); `TestInstallMetadataPerSource` (table: Deployment, GatewayClasses, Namespaces each readable or not → the fields above); `TestInstallHealthOverShownFindings`; `TestMetaLimitedView` (full read: absent; restricted: true; local: absent; golden `meta` unchanged); `TestMetaControllerLogsDropped`; `TestMetaUnchangedFields` (every other field byte-equal between the two viewers); `TestViewerOfMatchesView` and `TestVisibleToNoHiddenCount` (an extension mount through `Deps.View`, `WithSecureMode(true)`, two viewers); `TestVisibleHiddenZeroInSecureMode`; `app`: `TestDepsViewSharesAuthorizer`.
+- [ ] Web: the note shows for `limitedView: true` in secure mode only; its slot is present before `/meta` answers (no layout shift); `detailsHidden` shows the neutral name and note text; the exhaustive shape tests gain `limitedView` and `detailsHidden`; axe scan clean in light and dark.
+- [ ] Commit.
+
+### Task 35: Paths and backends: shown signals, EndpointSlices and Pods
+
+**Files:** `pkg/api/paths.go` (`pathsPage` `:132`, `pathSummary`), `backends.go` (`backendList`, `backendDetail`, `serviceDetail` `:258`), `paths_types.go`, `backends_types.go`; `pkg/paths/project.go` (`EndpointsNotPermitted`); `pkg/app/kinds_sar.go` (`coreKinds` `:23`); web `pages/traffic/PathSummary.tsx` (`:98`), `pages/backends/BackendsPage.tsx` (`:151`), `pages/backends/ExposureSection.tsx` (`:86`), endpoint cells; tests `pkg/api/paths_test.go`, `backends_test.go`, `endpoints_test.go`, `pkg/app/app_test.go`, `pkg/auth/sar/handler_test.go`, `rule_test.go`, web alongside.
+
+**Interfaces:**
+- Problem signals: a `paths.SignalFinding` signal shows only when its finding is shown (`v.shown`, matched by code and resource). Row and backend `Problem.State` are recomputed in the API as the worst remaining signal; `findingTitles` reads shown findings only.
+- EndpointSlices (design §7.6): endpoint counts, endpoint sources and the endpoint signals of a Service need `v.canList(EndpointSlice, svc.Namespace)`. Without it the row's `EndpointsDTO` has `complete: "not-permitted"` (new `paths.EndpointsNotPermitted`), no `ready` or `total`; the endpoint signals are replaced by one `unknown` signal; KGWUI-023 is hidden by its basis (Task 31). Backend detail does not call the scoped reader at all then.
+- Pods: endpoint rows show the Pod name written in a readable EndpointSlice (D-085 item 3). A Pod links only through the named check (`linker`); Pod state is never read for it.
+- `PathSummaryDTO.Hidden` and `BackendsResponse.Hidden` are never set in secure mode (D-077 is replaced by the permissions note, design §7.5); the Go fields stay, documented.
+- Full read: `coreKinds` marks EndpointSlice `fullRead: true` (`kinds_sar.go:28`) and its comment changes: EndpointSlices are an authorised population. A viewer without cluster-wide `list` on EndpointSlices takes the per-object path.
+- Web: the three D-077 summaries render only outside secure mode; `not-permitted` endpoints render as unknown with the text "You don't have permission to read endpoints here" (wording picker).
+
+- [ ] Regression first: rule case `/backends` with change `faulty` (a hidden-namespace Service with no ready endpoints behind a visible route) fails today; see it fail.
+- [ ] Rule cases: `/paths`, `/backends`, backend detail of a visible Service whose EndpointSlices sit in a namespace the viewer may not list.
+- [ ] Handler tests: `TestEndpointsNeedSliceList` (namespace `list` on Services but not EndpointSlices: `not-permitted`, no counts, no 023, no scoped read; with it: counts as today); `TestEndpointsFullReadUnchanged`; `TestPathSignalsShownOnly`; `TestNoHiddenFlagInSecureMode` (paths and backends summaries); `TestPodLinkNamedOnly`.
+- [ ] Full read: `TestSARKindsFullReadIncludesEndpointSlices` (`pkg/app`); `TestFullReaderDeniedEndpointSlices` (`handler_test.go`: every kind allowed cluster-wide except EndpointSlices → `FullRead` false; `/routes` sends per-object SARs and matches the restricted projection, not `AllowAll`).
+- [ ] Web: summaries absent in secure mode; `not-permitted` cell text and state.
+- [ ] Commit.
+
+### Task 36: Path incompleteness in `pkg/explore`
+
+**Files:** new `pkg/explore/incomplete.go`; `explore.go` (`RouteRow`); tests new `pkg/explore/incomplete_test.go`, `pkg/api/incomplete_test.go`.
+
+Computed here, exposed in 7.5 (design §8.1). Nothing reaches the wire in 7.4.
+
+**Interfaces:**
+- `explore.Permissions` interface: `Get(objects.Ref) bool` (named `get`), `List(gk objects.GroupKind, namespace string) bool`.
+- `func (ix *Index) PathIncomplete(id RowID, p Permissions) bool`: true when any of these fails:
+  1. `Get` on each parentRef and backendRef written in the route (`WrittenRefs`, the rules' backendRefs) and in the readable routes of its chain (`ParentRoutes`, walked only through routes `Get` admits), whether or not the target exists;
+  2. `List` on Gateways in each parentRef's namespace, EndpointSlices in each backendRef's namespace, HTTPRoutes in each delegation target namespace.
+- It never reads `Parents`' attachment, findings, path rows or any object a ref names. Every input is in the readable route or the viewer's permissions.
+- `pkg/api` adapter (unexported, for 7.5): `Get` is `canNamed`, `List` is `canList`.
+
+- [ ] Tests at the `pkg/explore` boundary (fake `Permissions`): the design §8.1 matrix, each with the target present and absent: `absent` (a readable ref to a missing Service with `get` allowed → complete); `unreadable` (`get` denied → incomplete, present or absent, same answer); `unattached` (no parent accepted, refs readable → complete); `zero-row` (no path rows, no unreadable refs → complete). Plus `TestIncompleteFromListPermission` (EndpointSlices not listable in the backend namespace), `TestIncompleteThroughReadableChain` (a readable parent route's unreadable parentRef), `TestHiddenChainStops` (an unreadable parent route adds its own `Get` failure only), `TestIncompleteIgnoresHiddenObjects` (creating, deleting and faulting the hidden targets never changes the answer).
+- [ ] `pkg/api`: `TestIncompleteAdapterUsesNamedAndList` (a `resourceNames` get grant makes the ref readable).
+- [ ] Commit.
+
+### Task 37: Namespace scope: API parameter and header selector
+
+**Files:** `pkg/api/params.go`, `lists.go`, `paths.go`, `backends.go`, `findings.go`, `processes.go`, `types.go` (`addedFilters` `:85`), new `pkg/api/namespaces.go`; `pkg/explore/query.go` (`Query`), `pkg/paths/query.go` (`Query`), `pkg/paths/backends.go` (`BackendQuery` `:570`); web new `shell/NamespaceScope.tsx`, new `shell/namespaceScope.ts`, `shell/Header.tsx`, `explore/listQuery.ts` (`useListPage` `:112`), `api/hooks.ts`, `api/types.ts`, `copy/shell.ts`; `docs/phases/phase-7/design.md` (§7.2, §11); tests `pkg/api/params_test.go`, new `pkg/api/scope_test.go`, `pkg/auth/sar/rule_test.go`, web alongside.
+
+**Interfaces (D-100 item 8; our call, design §11):**
+- Query parameter `namespaces=A,B` on `/routes`, `/gateways`, `/listenersets`, `/paths`, `/backends`, `/findings` (list and groups view) and `/processes`, in both modes; given at most once; each name a DNS-1123 label; at most 100 names; empty or bad → `400`. Listed in `/meta` `filters` for each of these lists.
+- Scope is the row's namespace: route, Gateway, ListenerSet, the root route of a path, the backend, the finding's resource (a finding without a namespaced resource is outside every scope), the Gateway of a proxy row. It intersects the existing `namespace` filter.
+- Applied before the Task 26 prefetch round 1: no root bucket outside the scope is asked. Counts, facets, `Total` and member counts come only from rows in scope. A dependency outside the scope (a route's Gateway in another namespace) keeps its own check; one the viewer may not read stays unknown, restricted or incomplete as without scope.
+- `explore.Query.Scope []string`, `paths.Query.Scope []string`, `paths.BackendQuery.Scope []string`; a nil scope is all namespaces, as today.
+- A scope naming a namespace with no visible rows returns an empty page (`200`), the same whether hidden objects exist there or not.
+- New `GET /api/v1/installs/{id}/namespaces` → `NamespacesResponse{Install string; Namespaces []string; CollectedAt time.Time}`: the sorted distinct namespaces of the install's route, Gateway and ListenerSet rows the viewer can see. Its prefetch shares the list pages' root buckets. A D-085 surface like the others.
+- Web: `NamespaceScope` in the header on install pages, in both modes. Choices from `/namespaces` plus typed entry; multi-select; "All namespaces" is the default and clears it. The choice is stored per browser in `localStorage` key `snellius.namespaceScope` (reads and writes in try/catch; without storage it lives for the page load). `useListPage` sends `namespaces` when set and `useListFilter(list, "namespaces")` is true, and a scope change drops the cursor. Overview, health, diagnostics and the map stay install-wide. Fixed width so the header does not shift; hover, active and focus styles; light and dark checked; copy through the wording picker.
+
+- [ ] Rule cases: `/routes?namespaces=<visible>` and `?namespaces=<hidden>` (empty page before and after), and `/namespaces`.
+- [ ] Handler tests: `TestScopeParamValidation` (table: empty, repeated, bad label, 101 names → 400); `TestScopeLimitsRowsCountsFacets` (`/routes`, `/paths`, `/backends`, `/findings`: every row, count and facet in scope; equal to filtering the unscoped response for a full reader); `TestScopeAsksNoOutsideRootBucket` (real authoriser, recording checker: no `list` SAR for a root kind in a namespace outside the scope); `TestScopeCrossNamespaceDependency` (a scoped route's Gateway elsewhere is still checked; unreadable → as unscoped); `TestScopeEmptyNamespace` (no rows, hidden or absent: identical `200` bodies); `TestNoScopeUnchanged` (byte-equal to today); `TestScopedFewerColdChecks` (Large, viewer allowed 10 of 100, scoped to one allowed namespace: fewer cold SARs on `/routes` than unscoped); `TestNamespacesVisibleOnly`.
+- [ ] Web tests: the choice survives a reload (stored), applies to each list page's request (`namespaces=` sent), the default is all (no parameter), typed entry adds a namespace, a scope change resets the page, storage throwing keeps the choice for the page load; axe scan clean in light and dark.
+- [ ] Design: one bullet in §11 and one line under the §7.2 table (done with this plan).
+- [ ] Commit.
+
+### Task 38: Bench and docs
+
+**Files:** `pkg/api/sar_bench_test.go`, `export_bench_test.go`; `README.md` (§ Secure mode `:44`, § Extension seams `:589`), `pkg/extension/deps.go` doc comments, `docs/documentation-notes.md`.
+
+- `TestBudgetSARDeniedList` gains, report-only, on Large with a viewer allowed 10 of 100 namespaces: `/routes` cold SARs unscoped and with `namespaces=<one allowed namespace>`, both reported, with the D-100 targets next to them; cold and warm SARs and p50/p95 for `/installs`, `/diagnostics` and `/findings`, now that they project and rebuild the diagnosis per viewer; `/installs` cold SARs for a viewer allowed nothing (reachability worst case) against the cap of 1,000.
+- Memory: the retained-heap D-057 figure with the new `findingsOf` index, against 64 MiB.
+- README, secure mode: what a restricted viewer sees (only what their RBAC lets them read; no counts or placeholders for hidden objects; findings only when their whole basis is readable; installs and their details), the permissions note, the namespace selector and `namespaces=` parameter, and the EndpointSlice `list` requirement for endpoint counts. Upgrade note: in secure mode, `deniedInInstall`, `hidden` and `restricted` entries are no longer sent.
+- README, extension seams: a handler that serves cluster objects must use `Deps.View` (`VisibleTo`, `Can`, `CanNamed`, `CanList`, `Shown`); a check should implement `BasisDeclarer`, or a restricted viewer never sees its findings; a capability source reports only the extension's own state.
+- `docs/documentation-notes.md`: topics for the selector, the note and the basis rule.
+- [ ] Run; paste the numbers into the 7.4 complete record; a scoped count not below the unscoped one goes to the user before 7.4 closes; commit.
 
 ## Sub-phase 7.5 — Two signals (the gate opens)
 
