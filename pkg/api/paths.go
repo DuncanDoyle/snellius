@@ -61,7 +61,7 @@ func (h *handler) pathList(w http.ResponseWriter, r *http.Request) {
 	t, proj, kept := h.pathModel(p, i)
 	v := h.view(r)
 	prefetchPaths(v, i.Index, t)
-	proj = proj.For(t, v.projectionFilter(p, i))
+	proj = proj.For(t, v.projectInput(p, i), v.projectionFilter(p, i))
 	resp, err := pathsPage(h.linker(v, p, i, t, proj), p, i, v, t, proj, kept, q)
 	if err != nil {
 		fail(w, err)

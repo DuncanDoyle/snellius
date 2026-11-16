@@ -43,10 +43,8 @@ const (
 // EndpointsOn is the endpoints capability state in which counts are read.
 const EndpointsOn = "on"
 
-// ProjectionFilter is what one viewer may see of a projection (D-106, design
-// §7.6). Input is what the projection read, so For can project it again.
+// ProjectionFilter is what one viewer may see of a projection (D-106, design §7.6).
 type ProjectionFilter struct {
-	Input ProjectInput
 	// Signal keeps a signal; a finding signal is asked before its finding is used.
 	Signal func(Signal) bool
 	// Endpoints reports whether the viewer may list EndpointSlices in namespace.
@@ -54,13 +52,14 @@ type ProjectionFilter struct {
 }
 
 // For is p as the viewer of f sees it: a per-request copy whose row
-// problems, endpoint summaries, order and digests are projected again over f.
-// A nil f returns p. The copy is never memoised.
-func (p *Projection) For(t *Topology, f *ProjectionFilter) *Projection {
+// problems, endpoint summaries, order and digests are projected again from
+// in, the input p was projected from, over f. A nil f returns p. The copy is
+// never memoised.
+func (p *Projection) For(t *Topology, in ProjectInput, f *ProjectionFilter) *Projection {
 	if f == nil {
 		return p
 	}
-	return project(t, f.Input, f)
+	return project(t, in, f)
 }
 
 // keeps reports whether f keeps s; a nil f or Signal keeps every signal.
@@ -107,6 +106,17 @@ type ProjectInput struct {
 	Now      time.Time
 	// EndpointsCap is the endpoints capability state: on, off, denied or failing.
 	EndpointsCap string
+	// ReadAt, when set, is the read time endpoint summaries carry instead of
+	// the snapshot's: a viewer without the full read gets the confirmation time (D-109).
+	ReadAt time.Time
+}
+
+// readAt is the read time of in's endpoint summaries: ReadAt, else the snapshot's.
+func (in ProjectInput) readAt() time.Time {
+	if !in.ReadAt.IsZero() || in.Snapshot == nil {
+		return in.ReadAt
+	}
+	return in.Snapshot.TakenAt
 }
 
 // Projection is the health of a topology's rows for one model publication.
@@ -810,9 +820,7 @@ func portHealthOf(in ProjectInput, f *facts, k portKey, found []*health.Finding,
 	coverage := func(complete, code string) *portHealth {
 		ph.ep = &Endpoints{Complete: complete, Port: k.port}
 		ph.sig = &Signal{Kind: SignalCoverage, Code: code, Ref: ref, State: health.StateUnknown}
-		if snap != nil {
-			ph.ep.ReadAt = snap.TakenAt
-		}
+		ph.ep.ReadAt = in.readAt()
 		return ph
 	}
 	switch {
@@ -827,12 +835,12 @@ func portHealthOf(in ProjectInput, f *facts, k portKey, found []*health.Finding,
 	}
 	svc, slices := f.service(k.ns, k.name)
 	if svc != nil && svc.Type == "ExternalName" {
-		ph.ep = &Endpoints{Complete: EndpointsNotApplicable, Port: k.port, ReadAt: snap.TakenAt}
+		ph.ep = &Endpoints{Complete: EndpointsNotApplicable, Port: k.port, ReadAt: in.readAt()}
 		return ph
 	}
-	// The Service's own port decides this; no slice is passed.
+	// The Service's own port decides this; no slice is passed, and nothing was read, so no read time.
 	if ev, _ := health.PortEndpoints(svc, nil, k.port); !permitted && ev != nil {
-		ph.ep = &Endpoints{Complete: EndpointsNotPermitted, Port: k.port, PortName: ev.PortName, ReadAt: snap.TakenAt}
+		ph.ep = &Endpoints{Complete: EndpointsNotPermitted, Port: k.port, PortName: ev.PortName}
 		ph.sig = &Signal{Kind: SignalCoverage, Code: EndpointsNotPermitted, Ref: ref, State: health.StateUnknown}
 		return ph
 	}
@@ -842,7 +850,7 @@ func portHealthOf(in ProjectInput, f *facts, k portKey, found []*health.Finding,
 		ph.sig = &Signal{Kind: SignalWaiting, Code: "missing", Ref: ref, State: health.StateUnknown}
 		return ph
 	}
-	ph.ep = &Endpoints{Complete: EndpointsComplete, Ready: &ev.Ready, Total: &ev.Total, ReadAt: snap.TakenAt, Port: k.port, PortName: ev.PortName}
+	ph.ep = &Endpoints{Complete: EndpointsComplete, Ready: &ev.Ready, Total: &ev.Total, ReadAt: in.readAt(), Port: k.port, PortName: ev.PortName}
 	// The severity of an empty port is KGWUI-023's; while 023 holds or skips the ref it is unknown.
 	for _, f := range found {
 		if e, ok := f.Facts.(*health.EndpointsEvidence); ok && f.Code == health.CodeBackendNoReadyEndpoints && e.Port == k.port {

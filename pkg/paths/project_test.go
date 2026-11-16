@@ -581,11 +581,11 @@ func TestProjectionFor(t *testing.T) {
 	reject := health.Finding{Code: health.CodeXDSRejected, Severity: health.SeverityError, Resource: &edgeRef, Message: "rejected"}
 	top, p, m := projectAt(t, endpointsSnap(t, svcs, eps, edge("http"), accepted("r", svc("cart"))), "on", matured, reject)
 	in := paths.ProjectInput{Model: &m.Installs[0], Next: m.Next, Snapshot: m.Snapshot, Now: testutil.Now, EndpointsCap: "on"}
-	if p.For(top, nil) != p {
+	if p.For(top, in, nil) != p {
 		t.Fatal("For(nil) must return the shared projection")
 	}
 	noFindings := func(s paths.Signal) bool { return s.Kind != paths.SignalFinding }
-	got := p.For(top, &paths.ProjectionFilter{Input: in, Signal: noFindings})
+	got := p.For(top, in, &paths.ProjectionFilter{Signal: noFindings})
 	if pr := got.Problems[0]; pr.State != health.StateUnknown || hasSignal(pr, paths.SignalFinding, health.StateError) ||
 		!slices.ContainsFunc(pr.Signals, func(s paths.Signal) bool {
 			return s.Kind == paths.SignalWaiting && s.Code == health.CodeBackendNoReadyEndpoints
@@ -598,8 +598,8 @@ func TestProjectionFor(t *testing.T) {
 	if p.Problems[0].State != health.StateError {
 		t.Errorf("the shared projection changed: %+v", p.Problems[0])
 	}
-	denied := p.For(top, &paths.ProjectionFilter{Input: in, Signal: noFindings, Endpoints: func(string) bool { return false }})
-	if ep := denied.Endpoints[0]; ep.Complete != paths.EndpointsNotPermitted || ep.Ready != nil || ep.Total != nil || ep.PortName != "http" {
+	denied := p.For(top, in, &paths.ProjectionFilter{Signal: noFindings, Endpoints: func(string) bool { return false }})
+	if ep := denied.Endpoints[0]; ep.Complete != paths.EndpointsNotPermitted || ep.Ready != nil || ep.Total != nil || ep.PortName != "http" || !ep.ReadAt.IsZero() {
 		t.Errorf("not permitted: endpoints %+v", ep)
 	}
 	if pr := denied.Problems[0]; pr.State != health.StateUnknown || len(pr.Signals) != 1 || pr.Signals[0].Code != paths.EndpointsNotPermitted {

@@ -449,6 +449,17 @@ func (v *view) viewer(i *engine.InstallModel) explore.Viewer {
 // endpointSlices is the kind whose list permission endpoint counts need (design §7.6).
 var endpointSlices = objects.GroupKind{Group: "discovery.k8s.io", Kind: "EndpointSlice"}
 
+// projectInput is what the caller of v's path projection of install i in p
+// reads: for a viewer without the full read, endpoint summaries carry the
+// confirmation time, never the time of the last recompute (D-109).
+func (v *view) projectInput(p *engine.Published, i *engine.InstallModel) paths.ProjectInput {
+	in := projectInput(p, i)
+	if v.projects() {
+		in.ReadAt = p.ConfirmedAt
+	}
+	return in
+}
+
 // projectionFilter is what the caller of v may see of install i's path
 // projection in p: finding signals of shown findings only, and endpoint counts
 // only where it may list EndpointSlices. Nil when v does not project.
@@ -472,8 +483,7 @@ func (v *view) projectionFilter(p *engine.Published, i *engine.InstallModel) *pa
 		}
 		return shown[titleKey{s.Code, s.Ref}]
 	}
-	return &paths.ProjectionFilter{Input: projectInput(p, i), Signal: signal,
-		Endpoints: func(ns string) bool { return v.canList(endpointSlices, ns) }}
+	return &paths.ProjectionFilter{Signal: signal, Endpoints: func(ns string) bool { return v.canList(endpointSlices, ns) }}
 }
 
 // requiredNotOK reports whether a required check of cs is not OK.

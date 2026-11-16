@@ -95,8 +95,8 @@ func hasCode(p api.ProblemDTO, kind, code string) bool {
 // notPermitted fails unless e is a not-permitted summary without counts.
 func notPermitted(t *testing.T, where string, e api.EndpointsDTO) {
 	t.Helper()
-	if e.Complete != paths.EndpointsNotPermitted || e.Ready != nil || e.Total != nil || len(e.Items) > 0 {
-		t.Errorf("%s: endpoints %+v, want not-permitted with no counts", where, e)
+	if e.Complete != paths.EndpointsNotPermitted || e.Ready != nil || e.Total != nil || len(e.Items) > 0 || !e.ReadAt.IsZero() {
+		t.Errorf("%s: endpoints %+v, want not-permitted with no counts or read time", where, e)
 	}
 }
 

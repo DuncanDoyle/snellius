@@ -939,14 +939,15 @@ func abs(p string) func(*testing.T, *httptest.Server, *httptest.Server) string {
 
 // ruleMasks are, per surface and change, the JSON paths (dot-separated) a
 // change may alter, each with its reason. "@name" drops the array elements
-// whose ref is named name; "" masks the whole response, status included.
+// whose ref is named name, or with a path after it only that field of them;
+// "" masks the whole response, status included.
 var ruleMasks = map[[2]string][]string{
 	// Deleting hidden-gw takes hidden-parent's child out of the install (D-107); nothing else moves.
 	{"/routes", "deleted"}:                      {"items.@child", "total"},
 	{"route detail (hidden parent)", "deleted"}: {""},
 	// The same move takes child out of the overview's HTTPRoute count and be-0000's routes.
 	{"/overview", "deleted"}: {"counts"},
-	{"/backends", "deleted"}: {"rows.@be-0000"},
+	{"/backends", "deleted"}: {"rows.@be-0000.routes"},
 }
 
 // ruleNotApplicable are the pairs a change cannot reach for the full viewer either.
@@ -1020,11 +1021,20 @@ func drop(v any, path []string) {
 			return
 		}
 		if arr, ok := x[path[0]].([]any); ok && strings.HasPrefix(path[1], "@") {
-			x[path[0]] = slices.DeleteFunc(arr, func(e any) bool {
+			named := func(e any) bool {
 				m, _ := e.(map[string]any)
 				ref, _ := m["ref"].(map[string]any)
 				return ref != nil && "@"+fmt.Sprint(ref["name"]) == path[1]
-			})
+			}
+			if len(path) == 2 {
+				x[path[0]] = slices.DeleteFunc(arr, named)
+				return
+			}
+			for _, e := range arr {
+				if named(e) {
+					drop(e, path[2:])
+				}
+			}
 			return
 		}
 		drop(x[path[0]], path[1:])
@@ -1463,6 +1473,8 @@ func TestRuleHiddenRecomputeLeavesNoTime(t *testing.T) {
 			}
 			cur := r.e.Current()
 			before := ruleServe(t, confirmed{e: r.e, p: &engine.Published{Model: cur.Model, Source: cur.Source, ConfirmedAt: testutil.Now}})
+			// The recompute reads its own copy of the world, so before keeps the snapshot it was computed from.
+			r.s = ruleSnapshot(t)
 			c.apply(r.s)
 			r.compute(0)
 			after := ruleServe(t, r.e)

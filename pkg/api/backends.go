@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/endpoints"
@@ -27,7 +28,7 @@ func WithBackendConsumers(f func(install.Install, *install.Owned) []objects.Cons
 
 // backendsInput is what the backends of install i read for the caller of v, over t.
 func (h *handler) backendsInput(p *engine.Published, i *engine.InstallModel, v *view, t *paths.Topology) paths.BackendsInput {
-	in := paths.BackendsInput{ProjectInput: projectInput(p, i), Served: p.Model.Served}
+	in := paths.BackendsInput{ProjectInput: v.projectInput(p, i), Served: p.Model.Served}
 	if h.consumersFor != nil {
 		in.Consumers = h.consumersFor(i.Resolved.Install, i.Owned)
 	}
@@ -128,7 +129,7 @@ func (h *handler) backendList(w http.ResponseWriter, r *http.Request) {
 	t, proj, _ := h.pathModel(p, i)
 	in := h.backendsInput(p, i, v, t)
 	h.prefetchBackends(p, i, v, t, in)
-	set := paths.Backends(t, proj.For(t, v.projectionFilter(p, i)), in)
+	set := paths.Backends(t, proj.For(t, in.ProjectInput, v.projectionFilter(p, i)), in)
 	pg, err := paths.RunBackends(set, q)
 	if err != nil {
 		fail(w, err)
@@ -205,7 +206,7 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	t, proj, kept := h.pathModel(p, i)
 	f := v.projectionFilter(p, i)
-	proj = proj.For(t, f)
+	proj = proj.For(t, v.projectInput(p, i), f)
 	in := withSubject(h.backendsInput(p, i, v, t), v, t, ref)
 	in.Only = &ref
 	set := paths.Backends(t, proj, in)
@@ -234,7 +235,7 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case ref.Group == "" && ref.Kind == "Service":
-		if h.serviceDetail(r.Context(), &out, p.Model, i.Resolved.ID(), b, f == nil || f.Endpoints(ref.Namespace)) {
+		if h.serviceDetail(r.Context(), &out, p.Model, i.Resolved.ID(), b, f == nil || f.Endpoints(ref.Namespace), v.projectInput(p, i).ReadAt) {
 			// The read contradicts the cache the problem comes from: unknown at best, never its green.
 			w := paths.Signal{Kind: paths.SignalWaiting, Code: health.CodeBackendNoReadyEndpoints, Ref: ref, State: health.StateUnknown}
 			pr := paths.Problem{State: b.Problem.State, Signals: append(slices.Clip(b.Problem.Signals), w)}
@@ -259,8 +260,13 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 // and its port chain (design §9). The caller has authorised the Service. It
 // reports whether a complete read found no ready endpoint on a port the cache
 // // counts ready. A caller who may not list EndpointSlices (listSlices false)
-// gets not-permitted sources and no slice ports; the scoped reader is not called.
-func (h *handler) serviceDetail(ctx context.Context, out *BackendDetail, m *engine.Model, install string, b *paths.Backend, listSlices bool) (disagree bool) {
+// gets not-permitted sources with no read time and no slice ports; the scoped
+// reader is not called. readAt, when set, replaces the snapshot's time (D-109).
+func (h *handler) serviceDetail(ctx context.Context, out *BackendDetail, m *engine.Model, install string, b *paths.Backend, listSlices bool,
+	readAt time.Time) (disagree bool) {
+	if readAt.IsZero() {
+		readAt = m.Snapshot.TakenAt
+	}
 	svc, ss := serviceFacts(m.Snapshot, b.Ref)
 	if !listSlices {
 		ss = nil
@@ -275,7 +281,7 @@ func (h *handler) serviceDetail(ctx context.Context, out *BackendDetail, m *engi
 	var res endpoints.Result
 	switch {
 	case !listSlices:
-		res = endpoints.Result{Complete: paths.EndpointsNotPermitted, ReadAt: m.Snapshot.TakenAt}
+		res = endpoints.Result{Complete: paths.EndpointsNotPermitted}
 	case !external && len(b.Ports) > 0:
 		var err error
 		if res, err = h.scoped.Endpoints(ctx, install, b.Ref); err != nil || res.Complete == "" {
@@ -297,7 +303,7 @@ func (h *handler) serviceDetail(ctx context.Context, out *BackendDetail, m *engi
 		c := cached[port]
 		switch {
 		case external:
-			src.Complete, src.ReadAt = paths.EndpointsNotApplicable, wireTime(m.Snapshot.TakenAt)
+			src.Complete, src.ReadAt = paths.EndpointsNotApplicable, wireTime(readAt)
 		case read && sp == nil:
 			// Without the Service port's name the read cannot be split, so this port has no endpoints to show.
 			src.Complete = endpoints.Unavailable

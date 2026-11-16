@@ -35,8 +35,8 @@ type routeTrace struct {
 // rows on route's own rules, as the caller may see them.
 func (d *detail) trace(route objects.Ref) routeTrace {
 	t, proj, _ := d.h.pathModel(d.p, d.i)
-	f := d.v.projectionFilter(d.p, d.i)
-	proj = proj.For(t, f)
+	in, f := d.v.projectInput(d.p, d.i), d.v.projectionFilter(d.p, d.i)
+	proj = proj.For(t, in, f)
 	var rows []int32
 	for _, k := range proj.Order {
 		if r := t.Rows[k]; t.Route(r) == route && d.v.allowTableNamed(t, t.Deps(r), writtenTarget(t, r)) {
@@ -58,7 +58,7 @@ func (d *detail) trace(route objects.Ref) routeTrace {
 			firsts = append(firsts, k)
 		}
 	}
-	own := paths.AttachmentProblems(t, projectInput(d.p, d.i), firsts, f)
+	own := paths.AttachmentProblems(t, in, firsts, f)
 	out := routeTrace{serves: make([]TraceAttachmentDTO, 0, len(firsts)), refs: map[refKey]*refTrace{}}
 	entry := make([]int, len(firsts))
 	type look struct {
