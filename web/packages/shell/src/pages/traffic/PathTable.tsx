@@ -76,11 +76,12 @@ function columns(installId: string): ObjectColumn<PathRow>[] {
       secondary: true,
       cell: (r) => {
         const t = endpointText(r);
-        return t ? (
-          <OneLine text={t} />
-        ) : (
-          <OneLine text={endpointCopy.notApplicable}>
-            <Muted>{endpointCopy.notApplicable}</Muted>
+        // Not permitted reads as unknown: muted, like a cell with nothing to count.
+        if (t && r.endpoints?.complete !== "not-permitted") return <OneLine text={t} />;
+        const shown = t ?? endpointCopy.notApplicable;
+        return (
+          <OneLine text={shown}>
+            <Muted data-complete={r.endpoints?.complete}>{shown}</Muted>
           </OneLine>
         );
       },

@@ -87,6 +87,7 @@ export const endpointCopy = {
   unknown: "Unknown", // S647
   timedOut: "Read timed out", // S672
   busy: "Busy, try again", // S673
+  notPermitted: "You can't read the EndpointSlices in this namespace", // S843
 };
 
 /** View C notes on delegated rows (design §4.2). */
@@ -110,6 +111,7 @@ export function signalText(s: PathSignal): string {
     case "delegation":
       return `Delegation ${s.code}${on}`; // S654
     case "coverage":
+      if (s.code === "not-permitted") return `${endpointCopy.notPermitted}${on}`; // S843
       return `Endpoints not read: ${s.code}${on}`; // S655
     case "waiting":
       if (s.code === "missing") return `Not seen in the cluster yet${on}`; // S656

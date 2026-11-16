@@ -828,6 +828,7 @@ const endpoints = shape<Endpoints>(
       unavailable: 1,
       stale: 1,
       "not-applicable": 1,
+      "not-permitted": 1,
       "timed-out": 1,
       busy: 1,
     },

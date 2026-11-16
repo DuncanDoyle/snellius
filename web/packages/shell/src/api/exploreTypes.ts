@@ -491,10 +491,22 @@ export interface Endpoints {
   source: string;
   port?: BackendPort;
   runtime?: EndpointsRuntime;
-  /** Meaningless when complete is "not-applicable": nothing was read. */
+  /** Meaningless when complete is "not-applicable" or "not-permitted": nothing was read. */
   readAt: string;
-  /** A backend detail's scoped read may also be "timed-out" or "busy". */
-  complete: "complete" | "partial" | "failed" | "unavailable" | "stale" | "not-applicable" | "timed-out" | "busy";
+  /**
+   * "not-permitted": the viewer may not list the Service's EndpointSlices.
+   * A backend detail's scoped read may also be "timed-out" or "busy".
+   */
+  complete:
+    | "complete"
+    | "partial"
+    | "failed"
+    | "unavailable"
+    | "stale"
+    | "not-applicable"
+    | "not-permitted"
+    | "timed-out"
+    | "busy";
   ready?: number;
   total?: number;
   items?: Endpoint[];

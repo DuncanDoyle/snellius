@@ -3,6 +3,7 @@ import { EyeOff } from "lucide-react";
 import { useMemo } from "react";
 import { useBackends } from "../../api/exploreHooks";
 import type { BackendRow, BackendsResponse, Page } from "../../api/types";
+import { isSecureMode } from "../../auth/mode";
 import { backendsCopy } from "../../copy/backends";
 import { listCopy } from "../../copy/explorer";
 import { trafficCopy } from "../../copy/traffic";
@@ -148,7 +149,7 @@ export function BackendsPage({ stylesOverride }: BackendsPageProps = {}) {
           selected={namespace}
           onChange={(v) => l.setFilter({ namespace: single(namespace, v) })}
         />
-        {l.data?.hidden ? (
+        {l.data?.hidden && !isSecureMode() ? (
           <span className="label" data-testid="backends-hidden">
             <EyeOff size={14} aria-hidden="true" /> {backendsCopy.hidden}
           </span>

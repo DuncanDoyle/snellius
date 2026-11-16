@@ -143,6 +143,66 @@ it("rows show kind, endpoints per port, users and the problem; a row opens backe
   expect(link.getAttribute("href")?.split("?")[0]).toBe(`/i/${ID}/backends/-/Service/shop/cart-svc`);
 });
 
+it("a Service whose EndpointSlices the viewer may not list says so, with no count", async () => {
+  const body = list();
+  const cart = body.rows.find((r) => r.ref.name === "cart-svc") as BackendsResponse["rows"][number];
+  cart.endpoints = [{ source: "kubernetes", port: { port: 80 }, readAt: now(), complete: "not-permitted" }];
+  serve({ [`${API}/backends`]: () => body });
+  mount(`/i/${ID}/backends`);
+  const table = await screen.findByRole("table", { name: "Backends" });
+  await within(table).findAllByLabelText("shop/cart-svc");
+  const row = within(table)
+    .getAllByRole("row")
+    .find((r) => within(r).queryByLabelText("shop/cart-svc")) as HTMLElement;
+  expect(row).toHaveTextContent("Port 80: You can't read the EndpointSlices in this namespace");
+  expect(row.textContent).not.toMatch(/ready/);
+});
+
+it.each([
+  ["secure", false],
+  ["local", true],
+])("in %s mode the list's hidden note shows: %s", async (mode, shown) => {
+  document.documentElement.dataset.authMode = mode;
+  try {
+    serve({ [`${API}/backends`]: () => ({ ...list(), hidden: true }) });
+    mount(`/i/${ID}/backends`);
+    await screen.findByRole("table", { name: "Backends" });
+    expect(!!screen.queryByTestId("backends-hidden")).toBe(shown);
+  } finally {
+    delete document.documentElement.dataset.authMode;
+  }
+});
+
+it("in secure mode the exposure section never says paths are hidden", async () => {
+  document.documentElement.dataset.authMode = "secure";
+  try {
+    const d = detail(explainedGolden);
+    d.exposure.summary = { ...d.exposure.summary, hidden: true };
+    serveDetail(d, `${API}/backends/-/Service/store/cart`);
+    mount(`/i/${ID}/backends/-/Service/store/cart`);
+    await statusLine();
+    expect(screen.queryByText("Some paths are hidden from you.")).toBeNull();
+  } finally {
+    delete document.documentElement.dataset.authMode;
+  }
+});
+
+it("a not-permitted source says so, with no count, table or read time", async () => {
+  const d = detail(serviceGolden);
+  d.sources = [
+    { ...(d.sources[0] as Endpoints), complete: "not-permitted", ready: undefined, total: undefined, items: undefined },
+  ];
+  serveDetail(d);
+  mount(`/i/${ID}/backends/-/Service/shop/named-svc`);
+  await statusLine();
+  const src = screen.getByTestId("endpoints-source");
+  expect(within(src).getByTestId("endpoints-summary")).toHaveTextContent(
+    /^You can't read the EndpointSlices in this namespace$/,
+  );
+  expect(within(src).queryByRole("table")).toBeNull();
+  expect(src).not.toHaveTextContent(/Read /);
+});
+
 it("the chips come from the server's facets, and the Problems chip takes its states in any order", async () => {
   const body = list();
   body.facets = {

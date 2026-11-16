@@ -33,7 +33,10 @@ export function endpointsCellText(r: BackendRow): { text: string; muted: boolean
     return { text: missing ? endpointCopy.unknown : noPortCopy, muted: true };
   }
   const parts = r.endpoints.map((e) => (e.port ? portEndpoints(e.port.port, endpointsText(e)) : endpointsText(e)));
-  return { text: parts.join(" · "), muted: r.endpoints.every((e) => e.complete === "not-applicable") };
+  return {
+    text: parts.join(" · "),
+    muted: r.endpoints.every((e) => e.complete === "not-applicable" || e.complete === "not-permitted"),
+  };
 }
 
 function columns(installId: string): ObjectColumn<BackendRow>[] {
