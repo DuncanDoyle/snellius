@@ -175,13 +175,17 @@ func TestDeniedAllSeesEveryInstall(t *testing.T) {
 			k := testutil.ServedUpstream()[slices.IndexFunc(testutil.ServedUpstream(), func(k kinds.Served) bool { return k.Kind == "Gateway" })]
 			s.Objects[k.GVR()] = append(s.Objects[k.GVR()], testutil.Gateway("quiet", "gw", scale.Class, nil))
 		}
-		// sars is the set of SARs /installs asks for nobody, through a fresh SAR cache.
+		// sars is the set of namespaced SARs /installs asks for nobody, through a
+		// fresh SAR cache. Cluster-wide lists are the full read and the header
+		// sources; how many the parallel full read sends before its first denial varies.
 		sars := func(e *engine.Engine) map[string]bool {
 			rec := &recorder{}
 			decode[[]api.InstallSummary](t, ruleServeWith(t, e, rec), nobodyUser, "/api/v1/installs")
 			out := map[string]bool{}
 			for _, a := range rec.take() {
-				out[sarBucket(a.Verb, a.Resource, a.Namespace)] = true
+				if a.Verb != "list" || a.Namespace != "" {
+					out[sarBucket(a.Verb, a.Resource, a.Namespace)] = true
+				}
 			}
 			return out
 		}
