@@ -219,6 +219,8 @@ The list endpoints (`/routes`, `/gateways`, `/listenersets`, `/paths`, `/backend
 
 A restricted viewer sees a finding only when they can read its resource and its whole basis. Otherwise it is left out and does not raise any state. Unknown basis counts as unreadable. Full-read viewers (§6.4) see every finding.
 
+Amended by D-106: only own-object findings, from analyzers behind a typed boundary (the resource, the objects it names, the install context), are shown per finding; every other finding needs the full read.
+
 ### 7.4 Installs (our call; Codex #8)
 
 No permission beyond the viewer's object RBAC is required. An install is reachable when the viewer can read any object Snellius attributes to it. Install metadata shows only what the viewer can read: its GatewayClasses' names when they can read them, controller readiness and version when they can read the controller Deployment, scope details when they can read Namespaces. Otherwise the install shows a neutral name and "Details not visible to you".
@@ -234,6 +236,7 @@ Per viewer, not per hidden object: in secure mode, a viewer who cannot `list` ev
 - EndpointSlices and Pods behind a Service's endpoint state join the dependency set: endpoint counts and KGWUI-023 need `list` on EndpointSlices in the Service's namespace.
 - Checks mix two things (Codex #1). Collection and access failures (a watch denied, the cache not synced) are Snellius's own state and stay visible, as code and state. Object-derived results (grace holds, pending counts and deadlines, `checks.go:549`, `finding.go:139`) carry a basis like findings (§7.3) and follow the same rule; a restricted viewer sees a hold only when they can read its whole basis.
 - Install-wide unknown (`requiredNotOK`, `explore.go:481`) is raised for a restricted viewer only by collection and access failures, never by an object-derived pending result they cannot fully read.
+- Amended by D-106: a check result other than a collection failure is shown only to a full-read viewer, and is "Not checked" for everyone else; KGWUI-023 is derived, while endpoint counts keep the EndpointSlice rule above.
 
 ## 8. Two signals per route (D-087)
 

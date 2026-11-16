@@ -17,17 +17,19 @@ Issues: none | Plan steps: implementation-plan.md, Sub-phase 7.4, items 1–10; 
 | Local mode, or a full-read viewer | Every existing field unchanged; golden-v1 byte-equal |
 | Gateway or ListenerSet with hidden member routes | Member and per-listener counts count visible routes only |
 | Route whose ancestor the viewer cannot read | The ancestor is omitted |
-| Finding whose resource and whole basis the viewer can read | Shown |
-| Finding with an unreadable object anywhere in its basis, or an analyzer with no basis declaration | Not shown to a restricted viewer, and raises no state; a full-read viewer sees it |
-| Any analyzer without a basis declaration | A table test fails |
+| Own-object finding (from an analyzer behind the typed boundary, D-106) whose resource and every object it named the viewer can read | Shown |
+| Own-object finding with an unreadable resource or named object; any other finding (derived, extensions included) | Not shown to a viewer without the full read, and raises no state; a full-read viewer sees it |
+| Own-object analyzer that reaches anything beyond its resource, the objects it names and the install context | A test fails (the boundary test) |
+| Controller settings change (scope, ownership, version, rule set) | May change what every viewer sees: install context, a stated exception (D-106 item 1); the rule test names exactly what may change |
 | Health verdict, header tint, finding counts, groups, search | Computed over the findings the viewer is shown |
 | Check failed for collection or access (watch denied, cache not synced) | Shown to every viewer, as code and state |
-| Object-derived check result (grace hold, pending count, deadline) | Shown only when its whole basis is readable; install-wide unknown is raised for a restricted viewer only by collection or access failures |
+| Any other check result (grace hold, pending count, deadline, text) | The original for a full-read viewer; "Not checked" for everyone else (D-106). Install-wide unknown is raised for a restricted viewer only by collection or access failures and shown error findings |
 | Any install, for every signed-in viewer (D-103) | Listed with its ID (D-102); GatewayClass names, controller readiness and version, and scope details only when the viewer can read their source objects; otherwise a neutral name and "Details not visible to you" (design §7.4) |
 | Install with no object the viewer can read | Its pages answer 200 with no rows, never 404; no permission checks decide whether it is listed |
 | `/meta` in secure mode | Capabilities that describe cluster objects are per viewer or dropped (decided per capability in the plan tasks); local mode unchanged |
 | Extension handler | Its `Deps` carry the viewer and a helper that applies the rule; the extension docs make using it a requirement |
-| Backend endpoint counts and KGWUI-023 for a Service | Need `list` on EndpointSlices in the Service's namespace; without it, unknown, never derived from hidden slices |
+| Backend endpoint counts for a Service (not findings) | Need `list` on EndpointSlices in the Service's namespace; without it, unknown, never derived from hidden slices |
+| KGWUI-023 | Derived: full-read viewers only (D-106) |
 | Full-read viewer denied EndpointSlices | Takes the per-object path, not the fast path |
 | Viewer who cannot `list` every served kind in every namespace | One note in the header area: "You see what your Kubernetes permissions allow." Decided by checks of the viewer's own rights; the presence of hidden objects never changes it |
 | Full-read viewer, or local mode | No note |
@@ -44,7 +46,7 @@ Planned work. The leaks are listed in design §7.2 with their current file:line 
 
 ## Acceptance tests
 - The D-085 rule test per surface in design §7.2: two viewers over one model, a fixed clock and publication sequence, named masks, and the change list of design §13; each mutation check fails when the surface reads a hidden object.
-- The basis declaration table test over every analyzer.
+- The own-object boundary test (no own-object analyzer reaches beyond its resource, named objects and install context) and the classification test over every finding code (D-106).
 - Handler tests for counts, ancestors, installs, `/meta`, the permissions note, the EndpointSlice rule and the namespace scope, at the HTTP boundary.
 - Path incompleteness at the `pkg/explore` boundary, over the four cases in design §8.1.
 - Web tests for the selector (persists, applies to list pages, default all) and the permissions note.
