@@ -112,6 +112,8 @@ export interface InstallHeader {
   readiness: Readiness;
   /** Absent where the platform has no namespace scope. */
   scope?: ScopeSummary;
+  /** Secure mode: the viewer cannot read every metadata source, so those fields are empty (design §7.4). */
+  detailsHidden?: boolean;
 }
 /**
  * computedAt: when the backend computed this health. confirmedAt: when the backend last
@@ -195,6 +197,8 @@ export interface MetaResponse {
   capabilityStates?: Capability[];
   /** "local" runs without sign-in; "secure" requires it. */
   authMode: "local" | "secure";
+  /** Secure mode: the viewer cannot list every served kind everywhere; absent otherwise (design §7.5). */
+  limitedView?: boolean;
 }
 /** One extension capability; reason says why it is not on. Only "on" ones are also in MetaResponse.capabilities. */
 export interface Capability {

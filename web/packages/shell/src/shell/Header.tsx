@@ -22,6 +22,7 @@ import { InstallName } from "./InstallName";
 import { InstallNav } from "./InstallNav";
 import { InstallSwitcher } from "./InstallSwitcher";
 import { MenuButton } from "./menu";
+import { PermissionsNote } from "./PermissionsNote";
 import { ABOUT_PATH, installPath } from "./paths";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { Tooltip } from "./Tooltip";
@@ -73,6 +74,16 @@ const Identity = styled.div`
   white-space: nowrap;
   /* The install nav gives way first on narrow windows (it scrolls). */
   @media (max-width: 899px) { flex: none; }
+  /* Below this width the hidden-details note stays for screen readers only; the permissions note still shows. */
+  @media (max-width: 1399px) {
+    [data-part="details-hidden"] {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
+  }
 `;
 const Chip = styled.span`
   padding: 2px 8px;
@@ -209,8 +220,9 @@ export function Header({ installPaths }: { installPaths: readonly string[] }) {
           {current.edition && current.edition !== brand.productName ? (
             <Tag data-testid="edition">{current.edition}</Tag>
           ) : null}
-          {/* A platform that cannot observe readiness shows none; that is not a failure (D-016). */}
-          {current.readiness.state !== "not-observed" ? (
+          {/* A platform that cannot observe readiness shows none (D-016); readiness the viewer may not read is the details note's. */}
+          {current.readiness.state !== "not-observed" &&
+          !(current.detailsHidden && current.readiness.state === "unknown") ? (
             <ReadyTip label={readinessText(current.readiness)} compact={compact}>
               <Ready data-testid="controller-readiness" tabIndex={compact ? 0 : undefined}>
                 <HealthIcon
@@ -226,6 +238,8 @@ export function Header({ installPaths }: { installPaths: readonly string[] }) {
       ) : null}
       {/* The navs sit right of the spacer, so the identity loading in never moves them sideways. */}
       <Spacer />
+      {/* Right of the spacer, so the note appearing only narrows the spacer. */}
+      <PermissionsNote compact={compact} />
       {id ? <InstallNav installId={id} paths={installPaths} /> : null}
       {nav.length > 0 ? (
         <Nav aria-label="Extensions">

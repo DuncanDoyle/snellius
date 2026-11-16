@@ -498,6 +498,7 @@ const headerKeys = {
   controllerNames: "!",
   readiness: "!",
   scope: "?",
+  detailsHidden: "?",
 } as const;
 const header = shape<InstallHeader>(headerKeys, { readiness, scope });
 const summary = shape<InstallSummary>(
@@ -608,6 +609,7 @@ const metaShape = shape<MetaResponse>(
     packs: "?",
     capabilityStates: "?",
     authMode: "!",
+    limitedView: "?",
   },
   { kinds: kind, views: groupKind, capabilityStates: capability },
   { authMode: { local: 1, secure: 1 } },
