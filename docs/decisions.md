@@ -1526,3 +1526,12 @@ Measured on the reference machine, 5 runs per world:
 3. `auth.session.idle` (30 min) and `auth.session.absolute` (8 h) stay as they are. The README and site docs say that the IdP's refresh-token lifetime can end a session sooner.
 
 **Consequences:** About 2 KiB per session, about 2 MiB at the default bound. An install with more concurrent browsers raises `auth.session.max` and accepts the memory.
+
+## D-102 — Install IDs keep the controller's namespace and name in secure mode (2026-11-16, Phase 7, exception to design §7.4)
+**Status:** accepted by the user (2026-11-16), after the 7.4 plan review (`reviews/plan-7.4-codex.md` #1).
+
+**Context:** An install's ID is `<namespace>.<name>` of its controller Deployment. It is the key in every install URL (`/i/{id}/…`, `/api/v1/installs/{id}/…`) and in `--install`, and the first release froze it as part of API v1. A restricted viewer who reaches an install through one readable object sees the ID even when they cannot read the Deployment. A hash of the Deployment's UID would hide the name, but changes on every reinstall or delete-and-recreate, which breaks bookmarks and shared links, and gives one install two URL schemes depending on the mode.
+
+**Decision:** The install ID stays `<namespace>.<name>` in every mode, for every viewer. Anyone who can see any object of an install learns its controller's namespace and name, and nothing more: edition, version, readiness, GatewayClass names and scope stay hidden per design §7.4.
+
+**Consequences:** The ID is a known disclosure, recorded here, not a D-085 leak: it never changes with hidden objects (`helm upgrade` patches the Deployment in place). A restricted viewer's responses contain no other field from the controller Deployment, and a test checks that.
