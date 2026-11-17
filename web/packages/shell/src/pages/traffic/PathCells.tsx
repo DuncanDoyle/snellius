@@ -1,8 +1,9 @@
 import styled from "@emotion/styled";
 import { useContext } from "react";
 import type { LinkedRef, PathRow } from "../../api/types";
-import { columnCopy, routeCopy } from "../../copy/explorer";
+import { columnCopy, diagnosticsCopy, routeCopy } from "../../copy/explorer";
 import { actionCopy, cellCopy, noteCopy, shareCopy } from "../../copy/traffic";
+import { useDelegationChecked } from "../../explore/DelegationNotChecked";
 import { backendPath, linkTarget } from "../../explore/objectPath";
 import { HealthIcon } from "../../health/HealthIcon";
 import { StaleView, useShownState } from "../../health/staleView";
@@ -164,13 +165,19 @@ export function ShareCell({ r }: { r: PathRow }) {
   );
 }
 
-/** The signals behind the state in plain words, codes in the tooltip; blank under a stale view, as the state is. */
-export function WhyCell({ r }: { r: Pick<PathRow, "problem" | "note"> }) {
+/**
+ * The signals behind the state in plain words, codes in the tooltip; blank under a stale view, as the state is.
+ * A delegation row says Not checked to a viewer without delegation analysis (D-114).
+ */
+export function WhyCell({ r }: { r: Pick<PathRow, "problem" | "note"> & Partial<Pick<PathRow, "action">> }) {
+  const checked = useDelegationChecked();
   if (useContext(StaleView)) return null;
   const note = r.note ? [noteCopy[r.note]] : [];
-  const lines = [...signalLines(r), ...note];
+  const unchecked = !checked && r.action === "delegate";
+  const lines = [...signalLines(r), ...note, ...(unchecked ? [diagnosticsCopy.notChecked] : [])];
+  const details = [...signalDetails(r), ...note, ...(unchecked ? [diagnosticsCopy.notCheckedReason] : [])];
   return lines.length ? (
-    <OneLine text={[...signalDetails(r), ...note].join("\n")} placement="end">
+    <OneLine text={details.join("\n")} placement="end">
       {lines.join(" · ")}
     </OneLine>
   ) : null;

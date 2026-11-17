@@ -3,6 +3,7 @@ import styled from "@emotion/styled";
 import type { TraceAttachment } from "../../../api/types";
 import { traceCopy } from "../../../copy/explorer";
 import { cellCopy } from "../../../copy/traffic";
+import { DelegationNotChecked } from "../../../explore/DelegationNotChecked";
 import { LinkedName } from "../../../explore/LinkedName";
 import { HealthBadge } from "../../../health/HealthBadge";
 import { Muted, refText } from "../listParts";
@@ -53,12 +54,23 @@ interface ServesProps {
   serves: TraceAttachment[];
   /** False for a TCPRoute, which matches no hostnames. */
   hostnames?: boolean;
+  /** Paths through parent routes are delegation analysis the viewer does not get (D-114). */
+  notChecked?: boolean;
   stylesOverride?: SerializedStyles;
 }
 
 /** The Gateways, listeners and effective hostnames a route serves through, each with its own state (design §7.1). */
-export function Serves({ installId, serves, hostnames = true, stylesOverride }: ServesProps) {
-  if (!serves.length) return <Muted>{traceCopy.servesNone}</Muted>;
+export function Serves(props: ServesProps) {
+  if (!props.serves.length) return props.notChecked ? <DelegationNotChecked /> : <Muted>{traceCopy.servesNone}</Muted>;
+  return (
+    <>
+      <ServesList {...props} />
+      {props.notChecked ? <DelegationNotChecked /> : null}
+    </>
+  );
+}
+
+function ServesList({ installId, serves, hostnames = true, stylesOverride }: ServesProps) {
   return (
     <List stylesOverride={stylesOverride}>
       {serves.map((a) => (

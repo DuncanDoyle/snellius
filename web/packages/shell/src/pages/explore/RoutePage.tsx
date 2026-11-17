@@ -7,6 +7,7 @@ import { useInstallFeature } from "../../api/hooks";
 import type { LinkedRef, ParentRef, RouteDetail } from "../../api/types";
 import { detailCopy, routeCopy, traceCopy } from "../../copy/explorer";
 import { trafficCopy } from "../../copy/traffic";
+import { useDelegationChecked } from "../../explore/DelegationNotChecked";
 import { firstFailing } from "../../explore/ProblemStrip";
 import { useInstallId } from "../../shell/extension";
 import { useTwoColumns } from "../../shell/layout";
@@ -31,11 +32,13 @@ const Cards = styled.div`
 `;
 
 // region Helpers
+/** Whether a parent route names d, in its spec or its status. */
+const isChild = (d: RouteDetail) => d.parentRefs.some(isRouteRef) || d.parents.some((p) => isRouteRef(p.target));
+
 /** A child takes its hostnames from a parent route; a route under a listener from the listener. */
 function hostnameText(d: RouteDetail) {
   if (d.hostnames.length) return d.hostnames.join(", ");
-  const child = d.parentRefs.some(isRouteRef) || d.parents.some((p) => isRouteRef(p.target));
-  return <Muted>{child ? routeCopy.inheritsParent : routeCopy.inheritsListener}</Muted>;
+  return <Muted>{isChild(d) ? routeCopy.inheritsParent : routeCopy.inheritsListener}</Muted>;
 }
 
 /** Which parent routes may delegate here, from the spec's parentRefs (computed-rules §5.3). */
@@ -80,6 +83,8 @@ export function RoutePage({ stylesOverride }: RoutePageProps = {}) {
   const hasDelegation = !!data?.rules.some((r) => r.backendRefs.some((b) => b.delegation));
   // Delegation copy and blocks need a rule set that computes it and an HTTPRoute; the tab is the kgateway web pack's.
   const delegation = useInstallFeature(id, "delegation") !== false && kind === "HTTPRoute";
+  // A child's paths and effective matches are delegation analysis, which a limited viewer does not get (D-114).
+  const notChecked = !useDelegationChecked() && delegation && !!data && isChild(data);
   const unlisted = useMemo(() => (data ? unlistedRefs(data) : []), [data]);
   // The parents and up-chain this page links decide the links of the same objects in the trail.
   const trailRefs = useMemo(() => (data ? linkedRefs(data) : undefined), [data]);
@@ -179,9 +184,10 @@ export function RoutePage({ stylesOverride }: RoutePageProps = {}) {
           {data.serves ? (
             <Section aria-labelledby="route-serves">
               <h2 id="route-serves">
-                {traceCopy.serves} <span className="note">{data.serves.length}</span>
+                {traceCopy.serves}{" "}
+                {notChecked && !data.serves.length ? null : <span className="note">{data.serves.length}</span>}
               </h2>
-              <Serves installId={id} serves={data.serves} hostnames={kind !== "TCPRoute"} />
+              <Serves installId={id} serves={data.serves} hostnames={kind !== "TCPRoute"} notChecked={notChecked} />
             </Section>
           ) : null}
           <Section aria-labelledby="route-rules">
@@ -194,8 +200,13 @@ export function RoutePage({ stylesOverride }: RoutePageProps = {}) {
               <RuleList installId={id} kind={kind} rules={data.rules} serves={data.serves} />
             )}
           </Section>
-          {delegation && data.effective?.length ? (
-            <EffectiveMatches installId={id} edges={data.effective} truncated={data.effectiveTruncated} />
+          {delegation && (data.effective?.length || notChecked) ? (
+            <EffectiveMatches
+              installId={id}
+              edges={data.effective ?? []}
+              truncated={data.effectiveTruncated}
+              notChecked={notChecked}
+            />
           ) : null}
           {delegation ? <ChildRoutes installId={id} route={data.ref} expected={data.childCount} /> : null}
         </>

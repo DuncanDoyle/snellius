@@ -17,10 +17,12 @@ import {
   computedCopy,
   delegationCopy,
   detailCopy,
+  diagnosticsCopy,
   effectiveCopy,
   listCopy,
   routeCopy,
   routeStateDelegationCopy,
+  traceCopy,
 } from "../../copy/explorer";
 import { hrefPath, pseudoRules, renderWithTheme, WithKgatewayPack } from "../../test/render";
 import { controlRoomDark, controlRoomLight } from "../../theme/themes";
@@ -711,4 +713,50 @@ it("rows are a table whose cells sit under named column headers", async () => {
   const cells = within(row as HTMLElement).getAllByRole("cell");
   expect(cells).toHaveLength(heads.length);
   expect(cells[2]).toHaveTextContent(delegationCopy.outcomes.dropped);
+});
+
+describe("a secure viewer without the full read (D-114)", () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.authMode;
+  });
+  /** mid as the server sends it to that viewer: no counts, checks, effective matches or paths through parents. */
+  const limited = () => {
+    const d = detail(routeGolden);
+    for (const r of d.rules)
+      for (const b of r.backendRefs)
+        if (b.delegation)
+          b.delegation = { ...b.delegation, computed: undefined, selected: undefined, attached: undefined };
+    d.parentRefs = [{ group: GW, kind: "HTTPRoute", namespace: "shop", name: "root" }];
+    return { ...d, effective: undefined, serves: [] };
+  };
+
+  it("says Not checked for refs, effective matches and serves, and fetches no rows", async () => {
+    document.documentElement.dataset.authMode = "secure";
+    serve(api({ name: "mid", d: limited(), meta: { ...meta, limitedView: true } }));
+    const first = mount(`${page("shop/mid")}?open=1`);
+    await loaded();
+    const declared = screen.getByTestId("backend-declared");
+    expect(await within(declared).findByText(diagnosticsCopy.notChecked)).toBeInTheDocument();
+    expect(within(declared).queryByTestId("ref-counts")).toBeNull();
+    expect(within(screen.getByRole("region", { name: effective })).getByTestId("not-checked")).toBeInTheDocument();
+    const serves = screen.getByRole("region", { name: new RegExp(`^${traceCopy.serves}`) });
+    expect(within(serves).getByTestId("not-checked")).toBeInTheDocument();
+    expect(serves).not.toHaveTextContent(traceCopy.servesNone);
+    first.unmount();
+
+    mount(`${page("shop/mid")}?tab=delegation`);
+    const [s] = await tabLoaded();
+    await within(s as HTMLElement).findByText(diagnosticsCopy.notChecked);
+    expect(within(s as HTMLElement).queryByRole("button", { name: delegationCopy.toggleRows(false) })).toBeNull();
+    expect(delegationCalls()).toHaveLength(0);
+  });
+
+  it("a full reader keeps the counts", async () => {
+    document.documentElement.dataset.authMode = "secure";
+    serve(api({ name: "mid", d: detail(routeGolden) }));
+    mount(`${page("shop/mid")}?open=1`);
+    await loaded();
+    expect(within(screen.getByTestId("backend-declared")).getByTestId("ref-counts")).toBeInTheDocument();
+    expect(screen.queryByTestId("not-checked")).toBeNull();
+  });
 });
