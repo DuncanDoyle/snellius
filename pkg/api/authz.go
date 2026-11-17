@@ -69,8 +69,21 @@ type ListScanner interface {
 	NamedGetScan() bool
 }
 
+// Admitter admits requests that need uncached checks a few at a time (D-116).
+// The commit wrapper first builds a request without admission; a build that
+// meets an uncached check is discarded, and the request waits in Admit, is
+// built afresh, and holds its admission until its response is committed.
+type Admitter interface {
+	// Admit waits under r's context for admission and returns its release, or why it could not admit.
+	Admit(r *http.Request) (release func(), err error)
+}
+
 // ErrCheckLimit is the error of a request that needs more uncached checks than CheckLimit.
 var ErrCheckLimit = errors.New("authorisation check limit reached")
+
+// ErrNotAdmitted is the error of an uncached check made before its request was
+// admitted; the commit wrapper admits the request and builds it again (D-116).
+var ErrNotAdmitted = errors.New("authorisation: request not admitted")
 
 // CheckLimit is the most uncached authorisation checks one request may make (design §6.4, R25).
 // The global limiter protects the API server; this bounds one request's spend.
@@ -89,6 +102,15 @@ type authzState struct {
 	full, fullFailed bool
 	// allowExp is the earliest expiry of an allow the request used; zero means none (D-100).
 	allowExp time.Time
+	// gated refuses uncached checks until the request is admitted; refused marks that one was (D-116).
+	gated, refused bool
+}
+
+// notAdmitted reports whether the build refused an uncached check for want of admission.
+func (s *authzState) notAdmitted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refused
 }
 
 // allowExpiry returns the earliest noted allow expiry, or zero.
@@ -227,12 +249,13 @@ type authzStateKey struct{}
 
 // withAuthzState returns r carrying fresh authorisation bookkeeping, and that bookkeeping.
 func withAuthzState(r *http.Request) (*http.Request, *authzState) {
-	return withAuthzStateFrom(r, 0)
+	return withAuthzStateFrom(r, 0, false)
 }
 
-// withAuthzStateFrom is withAuthzState with checks already counted, as a rebuild keeps them.
-func withAuthzStateFrom(r *http.Request, checks int) (*http.Request, *authzState) {
-	s := &authzState{checks: checks}
+// withAuthzStateFrom is withAuthzState with checks already counted, as a
+// rebuild keeps them; gated refuses uncached checks until admission.
+func withAuthzStateFrom(r *http.Request, checks int, gated bool) (*http.Request, *authzState) {
+	s := &authzState{checks: checks, gated: gated}
 	return r.WithContext(context.WithValue(r.Context(), authzStateKey{}, s)), s
 }
 
@@ -242,7 +265,8 @@ func authzStateOf(r *http.Request) *authzState {
 }
 
 // SpendCheck counts one uncached check for r's request and returns
-// ErrCheckLimit past the limit. It is nil outside a committed request.
+// ErrCheckLimit past the limit, or ErrNotAdmitted, counting nothing, before
+// the request is admitted. It is nil outside a committed request.
 func SpendCheck(r *http.Request) error {
 	s := authzStateOf(r)
 	if s == nil {
@@ -250,6 +274,10 @@ func SpendCheck(r *http.Request) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.gated {
+		s.refused = true
+		return ErrNotAdmitted
+	}
 	s.checks++
 	if s.checks > CheckLimit {
 		s.passed = s.passed || s.checks == CheckLimit+1

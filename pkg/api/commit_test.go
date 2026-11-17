@@ -602,6 +602,72 @@ func TestCommitValidResponseWritten(t *testing.T) {
 	}
 }
 
+// admitAuthz is expiringAuthz with admission: Admit answers err, else a
+// release; admits and releases count them. After admission every check fails
+// with fail, when set.
+type admitAuthz struct {
+	*expiringAuthz
+	err, fail        error
+	admits, releases atomic.Int32
+}
+
+func (a *admitAuthz) Admit(*http.Request) (func(), error) {
+	a.admits.Add(1)
+	if a.err != nil {
+		return nil, a.err
+	}
+	return sync.OnceFunc(func() { a.releases.Add(1) }), nil
+}
+
+func (a *admitAuthz) AuthorizeErr(r *http.Request, ref objects.Ref) (bool, error) {
+	if a.fail != nil && a.admits.Load() > 0 {
+		return false, a.fail
+	}
+	return a.expiringAuthz.AuthorizeErr(r, ref)
+}
+
+// A build that needs no uncached check is written without admission. One
+// that does is discarded; the request is admitted and built afresh, its place
+// given back once it is answered. A failed admission answers 503, and so does
+// ErrNotAdmitted in an admitted build; an ended session answers 401 without
+// waiting (D-116).
+func TestCommitAdmission(t *testing.T) {
+	ended := WithCommitCheck(func(w http.ResponseWriter, _ *http.Request) (*http.Request, error) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return nil, nil
+	})
+	cases := []struct {
+		name             string
+		spend            bool
+		err, fail        error
+		opts             []HandlerOption
+		code             int
+		body             string
+		builds, checks   int
+		admits, releases int32
+		audit            []string
+	}{
+		{"cached", false, nil, nil, nil, http.StatusOK, `{"build":1,"visible":3}` + "\n", 1, 3, 0, 0, nil},
+		{"uncached", true, nil, nil, nil, http.StatusOK, `{"build":2,"visible":3}` + "\n", 2, 4, 1, 1, nil},
+		{"overloaded", true, errOutage, nil, nil, http.StatusServiceUnavailable, authzUnavailableBody, 1, 1, 1, 0, []string{AuditCheckFailed}},
+		{"not admitted after admission", true, nil, ErrNotAdmitted, nil, http.StatusServiceUnavailable, authzUnavailableBody, 2, 1, 1, 1, []string{AuditCheckFailed}},
+		{"ended", true, nil, nil, []HandlerOption{ended}, http.StatusUnauthorized, "", 1, 1, 0, 0, nil},
+	}
+	for _, c := range cases {
+		clk := clocktesting.NewFakeClock(commitT0)
+		a := &admitAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: c.spend}, err: c.err, fail: c.fail}
+		srv, b, l := expiringServer(t, a, clk, 3, c.opts...)
+		code, _, body := fetchRaw(t, srv, "/api/ext/b/n")
+		calls, _ := a.counts()
+		if code != c.code || body != c.body || b.count() != c.builds || calls != c.checks {
+			t.Errorf("%s: %d %q after %d builds and %d checks, want %d %q, %d, %d", c.name, code, body, b.count(), calls, c.code, c.body, c.builds, c.checks)
+		}
+		if a.admits.Load() != c.admits || a.releases.Load() != c.releases || !slices.Equal(l.got(), c.audit) {
+			t.Errorf("%s: %d admits, %d releases, audit %v; want %d, %d, %v", c.name, a.admits.Load(), a.releases.Load(), l.got(), c.admits, c.releases, c.audit)
+		}
+	}
+}
+
 // An allow that expires during the build is rebuilt once; the second body is written.
 func TestCommitExpiredRebuilt(t *testing.T) {
 	clk := clocktesting.NewFakeClock(commitT0)

@@ -55,8 +55,10 @@ func WithCommitClock(now func() time.Time) HandlerOption {
 // authorisation error and the earliest allow expiry are checked, in that order,
 // after every build. A response whose allows expired, or whose identity a refresh
 // replaced, is built once more from fresh request state, keeping only the check
-// count. Other paths pass through.
-func commit(next http.Handler, check func(http.ResponseWriter, *http.Request) (*http.Request, error), audit func(*http.Request, string), capHit func(*http.Request), now func() time.Time) http.Handler {
+// count. With admit, a build that needs an uncached check before admission is
+// discarded; the request waits for admission, holds it until it is answered,
+// and is built afresh (D-116). Other paths pass through.
+func commit(next http.Handler, admit Admitter, check func(http.ResponseWriter, *http.Request) (*http.Request, error), audit func(*http.Request, string), capHit func(*http.Request), now func() time.Time) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
@@ -73,8 +75,14 @@ func commit(next http.Handler, check func(http.ResponseWriter, *http.Request) (*
 			return
 		}
 		checks := 0
+		var release func()
+		defer func() {
+			if release != nil {
+				release()
+			}
+		}()
 		for attempt := 1; ; attempt++ {
-			r, st := withAuthzStateFrom(base, checks)
+			r, st := withAuthzStateFrom(base, checks, admit != nil && release == nil)
 			buf := &bufferedResponse{header: http.Header{}}
 			next.ServeHTTP(buf, r)
 			if capHit != nil && st.capPassed() {
@@ -88,7 +96,18 @@ func commit(next http.Handler, check func(http.ResponseWriter, *http.Request) (*
 					return
 				}
 			}
-			if err := st.failed(); err != nil {
+			if st.notAdmitted() && stale == nil {
+				// Nothing of this build is kept: the admitted build asks afresh.
+				rel, err := admit.Admit(cur)
+				if err != nil {
+					unavailable(w, r, auditReason(err, false))
+					return
+				}
+				release, base, attempt = rel, cur, 0
+				continue
+			}
+			// This build's own refusal, with a stale identity, answers as that identity below.
+			if err := st.failed(); err != nil && (!st.notAdmitted() || !errors.Is(err, ErrNotAdmitted)) {
 				unavailable(w, r, auditReason(err, st.fullReadFailed()))
 				return
 			}
