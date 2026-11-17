@@ -7,7 +7,7 @@ Reviewed `412c0ab..60188b2`, the earlier findings and triage, D-019/D-020, and b
 
 1. **P1 — Computing delegation once per edge loses the matcher context that determines attachment.**
 
-   **Design:** [§5.2:410](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:410), §5.3:433.
+   **Design:** [§5.2:410](../../../../docs/phases/phase-2/design.md:410), §5.3:433.
 
    The design computes each `(parent, ref, child)` once and walks paths only for cycles. But delegation outcomes depend on the parent’s matches **after ancestor filtering or inheritance**.
 
@@ -19,7 +19,7 @@ Reviewed `412c0ab..60188b2`, the earlier findings and triage, D-019/D-020, and b
 
 2. **P1 — The cross-check expects stronger conditions than successful attachment establishes.**
 
-   **Design:** [§3.4:178](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:178), §5.4:441–446.
+   **Design:** [§3.4:178](../../../../docs/phases/phase-2/design.md:178), §5.4:441–446.
 
    An attached child is expected to have `Accepted=True`, `ResolvedRefs=True` and, on 2.4, `Programmed=True`. Attachment does not establish backend validity or successful rule translation. A correctly attached child with a missing Service legitimately has `ResolvedRefs=False`. Invalid matchers can legitimately produce `Programmed=False` on 2.4 or `Accepted=False` on 2.3. View A likewise cannot interpret every `Accepted=False` as an attachment disagreement.
 
@@ -29,7 +29,7 @@ Reviewed `412c0ab..60188b2`, the earlier findings and triage, D-019/D-020, and b
 
 3. **P1 — The 2.3 “port means no child status” claim is wrong, and the version exception is incomplete.**
 
-   **Design:** [§5.4:441](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:441), §5.4:442.
+   **Design:** [§5.4:441](../../../../docs/phases/phase-2/design.md:441), §5.4:442.
 
    With explicit group, kind and namespace, no sectionName, and a port, a 2.3 child can receive status. Its synthesized report ref omits port, but the report lookup key also omits port. The builder then emits the spec ref, including its port.
 
@@ -41,7 +41,7 @@ Reviewed `412c0ab..60188b2`, the earlier findings and triage, D-019/D-020, and b
 
 4. **P2 — Per-ref outcomes are compared with status that aggregates across refs and matches.**
 
-   **Design:** [§5.4:439–448](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:439).
+   **Design:** [§5.4:439–448](../../../../docs/phases/phase-2/design.md:439).
 
    Suppose P delegates to C from two rules: one drops C, the other attaches it. C correctly has a P status entry. The first row nevertheless expects “no entry from P.” Similarly, multiple backend failures write the same parent `ResolvedRefs` condition; separate refs cannot each demand their own final reason.
 
@@ -51,7 +51,7 @@ Reviewed `412c0ab..60188b2`, the earlier findings and triage, D-019/D-020, and b
 
 5. **P2 — “Agrees” overstates what the available cross-checks verify.**
 
-   **Design:** [§3.4:184](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:184), §5.3:433, §8.4:789–790.
+   **Design:** [§3.4:184](../../../../docs/phases/phase-2/design.md:184), §5.3:433, §8.4:789–790.
 
    Equal listener counts do not verify route membership or effective hostnames. Selecting the wrong route while preserving cardinality passes. Child status also contains no effective matcher, so a wrong inherited path or header merge can pass every proposed check.
 
@@ -61,7 +61,7 @@ Reviewed `412c0ab..60188b2`, the earlier findings and triage, D-019/D-020, and b
 
 6. **P2 — Requiring current status prevents KGWUI-012 from detecting missing child status.**
 
-   **Design:** [§6.2:522–525](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:522), §4.3:350, §9.1:877, Q12.
+   **Design:** [§6.2:522–525](../../../../docs/phases/phase-2/design.md:522), §4.3:350, §9.1:877, Q12.
 
    A computed-attached child with no controller entry has no `observedGeneration` to satisfy the current-status requirement. An implicit child with no other status therefore never raises the KGWUI-012 promised by Q12 and the acceptance test.
 
@@ -71,7 +71,7 @@ Reviewed `412c0ab..60188b2`, the earlier findings and triage, D-019/D-020, and b
 
 7. **P2 — The 30-second persistence state lacks a dependency and expiry contract.**
 
-   **Design:** [§6.2:523–526](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:523), §3.1:116, §9.3:898–906.
+   **Design:** [§6.2:523–526](../../../../docs/phases/phase-2/design.md:523), §3.1:116, §9.3:898–906.
 
    “Any input of that check” does not identify which fields reset persistence. Treating whole-object changes as inputs lets unrelated status or annotation updates indefinitely suppress a real discrepancy. The deadline list also omits KGWUI-012 maturation; idle discrepancies depend on an incidental safety recompute rather than a scheduled persistence deadline.
 
@@ -81,7 +81,7 @@ Reviewed `412c0ab..60188b2`, the earlier findings and triage, D-019/D-020, and b
 
 8. **P2 — D-019 does not cover the existing timestamp consumers.**
 
-   **Design:** [§3.1:124–129](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:124), §7.6:751–754.
+   **Design:** [§3.1:124–129](../../../../docs/phases/phase-2/design.md:124), §7.6:751–754.
 
    The confirmation scheme discusses `collectedAt`, but install summaries expose `computedAt`. Cluster landing cards, the install switcher and header use that field for staleness. With recomputes 30 seconds apart, they become unknown after 10 seconds even while confirmation advances.
 
@@ -91,7 +91,7 @@ Reviewed `412c0ab..60188b2`, the earlier findings and triage, D-019/D-020, and b
 
 9. **P2 — Confirmation needs an atomic publication protocol, not merely an empty trigger queue.**
 
-   **Design:** [§3.1:122–129](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:122), D-019:340,350.
+   **Design:** [§3.1:122–129](../../../../docs/phases/phase-2/design.md:122), D-019:340,350.
 
    No protocol binds a confirmation timestamp to the exact Model and source revisions it confirms. A recompute snapshots data, an event arrives during computation, and the old snapshot is published. Its completion must not clear that later event or allow the confirm tick to stamp the published model as current. Independently mutating a timestamp on the published Model also violates the stated immutability contract.
 
@@ -101,7 +101,7 @@ Reviewed `412c0ab..60188b2`, the earlier findings and triage, D-019/D-020, and b
 
 10. **P2 — Authorization covers quoted evidence more clearly than derived facts.**
 
-    **Design:** [§7.4:709–718](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:709), §7.3:680–681, §9.1:885.
+    **Design:** [§7.4:709–718](../../../../docs/phases/phase-2/design.md:709), §7.3:680–681, §9.1:885.
 
     Removing denied Namespace labels from an explanation still exposes their selector result through listener membership. An allowed child’s `effective.parentMatch` and inherited headers can expose a denied parent’s matcher. Filtering only denied child rows does not address these dependencies. The acceptance requirement that flags remain unchanged further conflicts with hiding derived facts.
 
@@ -111,7 +111,7 @@ Reviewed `412c0ab..60188b2`, the earlier findings and triage, D-019/D-020, and b
 
 11. **P2 — The rewrite drops the earlier KGWUI-011 pending-check behavior.**
 
-    **Design:** [§6.2:510–519](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:510), §6.3:548–556.
+    **Design:** [§6.2:510–519](../../../../docs/phases/phase-2/design.md:510), §6.3:548–556.
 
     The previous design explicitly made the resource-status check pending during a declared candidate’s grace period. The revision retains info severity but removes that requirement. A declared candidate is unowned, so existing owned-route evaluation does not supply it automatically; an info finding alone leaves the install and row healthy.
 
@@ -121,7 +121,7 @@ Reviewed `412c0ab..60188b2`, the earlier findings and triage, D-019/D-020, and b
 
 12. **P2 — The DTOs cannot express the promised per-listener route details.**
 
-    **Design:** [§7.3:645](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:645), §7.3:675–681, §8.5:807–808.
+    **Design:** [§7.3:645](../../../../docs/phases/phase-2/design.md:645), §7.3:675–681, §8.5:807–808.
 
     `RouteDetail` has no view-A attachment results: its `parents` contain conditions and target refs, but no computed listeners or effective hostnames. `ParentSummary` has one hostname array beside several listener names, losing which hostname belongs to which listener.
 
@@ -131,7 +131,7 @@ Reviewed `412c0ab..60188b2`, the earlier findings and triage, D-019/D-020, and b
 
 13. **P3 — Acceptance tests omit the cases most likely to invalidate the new guarantees.**
 
-    **Design:** [§9.1:864–869](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:864), §9.3:899–906, §9.5:935–939.
+    **Design:** [§9.1:864–869](../../../../docs/phases/phase-2/design.md:864), §9.3:899–906, §9.5:935–939.
 
     Add controller-backed cases for ancestor-pruned parent matches, the same child attached and dropped through different matches, attached children with backend failures, and a 2.3 port-only child ref. Add engine interleavings around snapshot, event arrival, publication and confirmation, plus persistence expiry without further events.
 
@@ -141,7 +141,7 @@ Reviewed `412c0ab..60188b2`, the earlier findings and triage, D-019/D-020, and b
 
 14. **P4 — The cost bound covers path visits, but not selected-edge cardinality.**
 
-    **Design:** [§5.2:410](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:410), §12:1034, §13:1046–1050.
+    **Design:** [§5.2:410](../../../../docs/phases/phase-2/design.md:410), §12:1034, §13:1046–1050.
 
     Many wildcard or label refs can each select many routes. Materializing every `(parent, ref, child)` produces quadratic output even if cycle traversal is bounded. Pagination limits responses, not index construction.
 
@@ -175,7 +175,7 @@ For **§15**, Q12 and Q13 need findings 4–7 resolved before their defaults are
 
 Reviewed `a35dc05..0c2dc5d`, the binding triage, both revised specifications, D-019/D-020, and relevant source at both kgateway tags. **10 findings resolved; 4 not resolved.** Found **1 new P1, 5 P2 and 1 P3**. No files edited.
 
-References below: **D** = [design.md](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md); **R** = [computed-rules.md](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/computed-rules.md). Line numbers refer to the reviewed HEAD.
+References below: **D** = [design.md](../../../../docs/phases/phase-2/design.md); **R** = [computed-rules.md](../../../../docs/phases/phase-2/computed-rules.md). Line numbers refer to the reviewed HEAD.
 
 **Findings 1–14**
 
@@ -302,7 +302,7 @@ The document split improves ownership of the contracts. The remaining authoritat
 
 Reviewed `f0ddf62..HEAD` across the three requested files, against the re-review and its triage. **N1–N7 are resolved as originally reported. Three new P2 findings remain.** No files edited.
 
-D = [design.md](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md), R = [computed-rules.md](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/computed-rules.md). Lines refer to HEAD.
+D = [design.md](../../../../docs/phases/phase-2/design.md), R = [computed-rules.md](../../../../docs/phases/phase-2/computed-rules.md). Lines refer to HEAD.
 
 | Finding | Result | Section/line evidence |
 |---|---|---|
@@ -318,7 +318,7 @@ New findings, ranked:
 
 1. **P2 — Incomplete parent aggregates can still demand an unjustified failure reason.**
 
-   **Location:** R §8.5, [lines 366–376](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/computed-rules.md:366), interacting with §8.2:333.
+   **Location:** R §8.5, [lines 366–376](../../../../docs/phases/phase-2/computed-rules.md:366), interacting with §8.2:333.
 
    The new table permits an incomplete aggregate with a known parent failure to be “compared as usual.” However, §8.2 also compares the reason when all failures share one reason. Finding one failure proves `ResolvedRefs=False`; it does not prove that omitted contexts cannot introduce another reason.
 
@@ -330,7 +330,7 @@ New findings, ranked:
 
 2. **P2 — Splitting the fingerprints removes a relevant annotation from the parent check.**
 
-   **Location:** R §9.2, [line 406](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/computed-rules.md:406), and the exclusion at line 409.
+   **Location:** R §9.2, [line 406](../../../../docs/phases/phase-2/computed-rules.md:406), and the exclusion at line 409.
 
    Before this diff, the shared fingerprint included the child’s inheritance annotation. The new `parent-resolvedrefs` definition omits it and explicitly excludes unlisted annotations. That annotation decides whether the selected child is dropped or attached, which can change the parent’s expected delegation failure.
 
@@ -342,7 +342,7 @@ New findings, ranked:
 
 3. **P2 — Effective-context truncation now has no defined wire representation.**
 
-   **Location:** R §5.7, [lines 243–247](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/computed-rules.md:243); D §7.3, [lines 494–497](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:494) and 516.
+   **Location:** R §5.7, [lines 243–247](../../../../docs/phases/phase-2/computed-rules.md:243); D §7.3, [lines 494–497](../../../../docs/phases/phase-2/design.md:494) and 516.
 
    The new retention policy truncates contexts per row and per install using `contextsTruncated`. But `EffectiveDTO` has no such field. Meanwhile, R now assigns `effectiveTruncated` specifically to exceeding 20 parent edges. D says effective details project the retained contexts and their truncation flags, without defining where that context flag goes.
 

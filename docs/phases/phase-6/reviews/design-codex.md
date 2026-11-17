@@ -5,7 +5,7 @@ Timing: on time
 
 I would revise the design before implementation. The main blockers are false-green health, delegated-path construction, visibility, and bounds that do not actually bound retained memory.
 
-Reviewed the untracked [Phase 6 design](/Users/ddoyle/Development/claude/snellius-claude/docs/phases/phase-6/design.md) against HEAD `22709b7`, the requested documents, and cited code. No files changed; no implementation tests run.
+Reviewed the untracked [Phase 6 design](../../../../docs/phases/phase-6/design.md) against HEAD `22709b7`, the requested documents, and cited code. No files changed; no implementation tests run.
 
 1. **P1 — Path health omits Gateway-scoped contradicting signals.**  
    **Location:** §4.5, lines 120–123.  

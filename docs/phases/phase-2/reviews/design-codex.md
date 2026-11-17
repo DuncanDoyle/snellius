@@ -12,32 +12,32 @@ I found **1 P1, 9 P2 and 3 P3 findings**. No files were edited. References to kg
 
 2. **P2 — The observed-edge fallback resurrects removed explicit parents.**  
    **Design:** §4.3, lines 193–198.  
-   “No spec parentRef to P” is broader than an implicit child with **no parentRefs**. If a child changes its parent from P to Q while old P status remains, this rule reclassifies P as an observed parent. kgateway allows implicit attachment only when the entire parentRefs list is empty: `v2.4.7:pkg/kgateway/utils/delegation/delegation.go:25–30`; `v2.3.11`, same file, lines 25–45. Its status builder likewise falls back to report refs only for an empty list: `v2.4.7:pkg/reports/status.go:489–496`. Phase 1 deliberately ignores removed refs: [checks.go:314](/Users/ddoyle/Development/claude/kgateway-ui-claude/pkg/health/checks.go:314).  
+   “No spec parentRef to P” is broader than an implicit child with **no parentRefs**. If a child changes its parent from P to Q while old P status remains, this rule reclassifies P as an observed parent. kgateway allows implicit attachment only when the entire parentRefs list is empty: `v2.4.7:pkg/kgateway/utils/delegation/delegation.go:25–30`; `v2.3.11`, same file, lines 25–45. Its status builder likewise falls back to report refs only for an empty list: `v2.4.7:pkg/reports/status.go:489–496`. Phase 1 deliberately ignores removed refs: [checks.go:314](../../../../pkg/health/checks.go:314).  
    **Why:** Old relationships can retain ownership, breadcrumbs and health findings in the former install. The fallback needs an explicit eligibility rule and transition tests.
 
 3. **P2 — New detail admission rules break promised navigation.**  
    **Design:** §4.3, line 204; §5.2, line 251; §7.2, line 365; §8.3, line 475.  
-   Details return 404 for unowned objects, but finding links are retargeted to details by kind. Unwatched routes and missing-parent routes are intentionally unowned; the existing resource endpoint serves them through finding references: [handlers.go:255](/Users/ddoyle/Development/claude/kgateway-ui-claude/pkg/api/handlers.go:255), especially lines 266–285. “No parent” routes have neither ownership nor findings, so their new list rows also cannot open either detail or YAML under the stated rules. ListenerSets with missing Gateways are never assigned: [assign.go:136](/Users/ddoyle/Development/claude/kgateway-ui-claude/pkg/install/assign.go:136).  
+   Details return 404 for unowned objects, but finding links are retargeted to details by kind. Unwatched routes and missing-parent routes are intentionally unowned; the existing resource endpoint serves them through finding references: [handlers.go:255](../../../../pkg/api/handlers.go:255), especially lines 266–285. “No parent” routes have neither ownership nor findings, so their new list rows also cannot open either detail or YAML under the stated rules. ListenerSets with missing Gateways are never assigned: [assign.go:136](../../../../pkg/install/assign.go:136).  
    **Why:** Several advertised debugging flows end in 404. Define access for diagnostic candidates and no-parent inventory, or provide a deliberate fallback.
 
 4. **P2 — Filtered `hidden` counts expose denied object data.**  
    **Design:** §7.3, lines 378–379; §7.4, line 416; §11, line 618.  
-   `hidden` counts denied rows **after filters**, including hostname substring and condition-state filters. A caller can query candidate hostname strings and observe whether the denied count changes. Phase 1 excludes denied objects from inventory counts; D-013 permits restricted finding identities, not arbitrary hostname or status probing: [handlers.go:130](/Users/ddoyle/Development/claude/kgateway-ui-claude/pkg/api/handlers.go:130), `docs/decisions.md:210–214`.  
+   `hidden` counts denied rows **after filters**, including hostname substring and condition-state filters. A caller can query candidate hostname strings and observe whether the denied count changes. Phase 1 excludes denied objects from inventory counts; D-013 permits restricted finding identities, not arbitrary hostname or status probing: [handlers.go:130](../../../../pkg/api/handlers.go:130), `docs/decisions.md:210–214`.  
    **Why:** “Never named” does not prevent disclosure through filtered counts. Omit denied-match counts or explicitly approve a broader disclosure contract.
 
 5. **P2 — Authorization does not cover all dereferenced data, and ancestor placeholders lack a wire shape.**  
    **Design:** §7.3, lines 399–405; §7.4, lines 415–418.  
-   An allowed route can include a denied Backend’s full `accepted: Condition`, including its message. Filtering route rows does not authorize that Backend lookup. D-013’s existing behavior removes denied finding messages and evidence: [handlers.go:115](/Users/ddoyle/Development/claude/kgateway-ui-claude/pkg/api/handlers.go:115). Meanwhile, `ancestors.path: Ref[]` cannot express “A parent you cannot view” without sending its identity or inventing a fake ref.  
+   An allowed route can include a denied Backend’s full `accepted: Condition`, including its message. Filtering route rows does not authorize that Backend lookup. D-013’s existing behavior removes denied finding messages and evidence: [handlers.go:115](../../../../pkg/api/handlers.go:115). Meanwhile, `ancestors.path: Ref[]` cannot express “A parent you cannot view” without sending its identity or inventing a fake ref.  
    **Why:** Specify authorization for fetched Backend status and derived existence/state fields, plus a typed restricted ancestor representation. References already present in an authorized object’s spec are a separate case.
 
 6. **P2 — Row health conflates finding severity with health state.**  
    **Design:** §3.3, line 114; §7.2, line 357; §7.3, line 383.  
-   The index stores “worst finding severity,” while DTOs promise `health: State` and filters accept `info` but omit `unknown`. Existing states are `error`, `unknown`, `warning`, `healthy`; `info` is a finding severity: [finding.go:20](/Users/ddoyle/Development/claude/kgateway-ui-claude/pkg/health/finding.go:20). Required unavailable checks take precedence over warnings: [rollup.go:22](/Users/ddoyle/Development/claude/kgateway-ui-claude/pkg/health/rollup.go:22).  
+   The index stores “worst finding severity,” while DTOs promise `health: State` and filters accept `info` but omit `unknown`. Existing states are `error`, `unknown`, `warning`, `healthy`; `info` is a finding severity: [finding.go:20](../../../../pkg/health/finding.go:20). Required unavailable checks take precedence over warnings: [rollup.go:22](../../../../pkg/health/rollup.go:22).  
    **Why:** A severity-only map cannot preserve pending/unavailable health semantics. Define row state computation and expose `unknown` consistently.
 
 7. **P2 — Gateway health propagation is promised but not designed.**  
    **Design:** §7.4, line 418; §6.2, line 326.  
-   The claim that a hidden child can turn Gateway health red “as in Phase 1” is incorrect. Phase 1’s Gateway row considers findings whose resource is that Gateway, plus required-check availability; it does not aggregate route findings: [overview.go:164](/Users/ddoyle/Development/claude/kgateway-ui-claude/pkg/overview/overview.go:164). The proposed map remains keyed by each finding’s object ref.  
+   The claim that a hidden child can turn Gateway health red “as in Phase 1” is incorrect. Phase 1’s Gateway row considers findings whose resource is that Gateway, plus required-check availability; it does not aggregate route findings: [overview.go:164](../../../../pkg/overview/overview.go:164). The proposed map remains keyed by each finding’s object ref.  
    **Why:** Q12 makes delegated failures affect install health, but does not establish their effect on ancestor Gateway badges. Specify propagation, including multiple parents, or narrow the claim.
 
 8. **P2 — Backend freshness defaults can produce green without current evidence.**  
@@ -47,7 +47,7 @@ I found **1 P1, 9 P2 and 3 P3 findings**. No files were edited. References to kg
 
 9. **P2 — Ancestor indexing has no bound compatible with the linear-cost claim.**  
    **Design:** §3.3, line 117; §5.2, line 260; §12, line 630.  
-   The immutable index stores up-chains, while the UI promises five paths and a count of the remainder. Repeated diamonds can have exponentially many paths despite linearly many objects and edges. They are valid kgateway inputs: `v2.4.7:pkg/kgateway/query/route.go:240–246`; `v2.3.11:pkg/kgateway/query/route.go:213–219`. Current computation rebuilds the model wholesale: [engine.go:143](/Users/ddoyle/Development/claude/kgateway-ui-claude/pkg/engine/engine.go:143).  
+   The immutable index stores up-chains, while the UI promises five paths and a count of the remainder. Repeated diamonds can have exponentially many paths despite linearly many objects and edges. They are valid kgateway inputs: `v2.4.7:pkg/kgateway/query/route.go:240–246`; `v2.3.11:pkg/kgateway/query/route.go:213–219`. Current computation rebuilds the model wholesale: [engine.go:143](../../../../pkg/engine/engine.go:143).  
    **Why:** Limiting rendered paths does not bound construction or exact remainder counting. Define bounded traversal/storage and truncation semantics; benchmark shared descendants, not just trees.
 
 10. **P2 — Two detail payloads bypass the stated pagination architecture.**  
@@ -57,7 +57,7 @@ I found **1 P1, 9 P2 and 3 P3 findings**. No files were edited. References to kg
 
 11. **P3 — Compatibility tests do not validate Q12’s actual behavioral change.**  
     **Design:** §4.3, line 189; §9.1, lines 531–538; §15 Q12.  
-    “No child route is owned” is too broad: a route with both Gateway and HTTPRoute parentRefs is already owned through its Gateway ref, though its delegated status is ignored: [assign.go:158](/Users/ddoyle/Development/claude/kgateway-ui-claude/pkg/install/assign.go:158). Unchanged Phase 1 goldens will not test changed counts and health on delegation fixtures.  
+    “No child route is owned” is too broad: a route with both Gateway and HTTPRoute parentRefs is already owned through its Gateway ref, though its delegated status is ignored: [assign.go:158](../../../../pkg/install/assign.go:158). Unchanged Phase 1 goldens will not test changed counts and health on delegation fixtures.  
     **Why:** Add before/after cases for mixed-role routes, deduplication across parents, shared-controller installs, removed refs, scope changes and stale observed edges. Assert counts, findings and roll-up together.
 
 12. **P3 — Version fixtures need to test status production, not merely normalized identity.**  
@@ -92,7 +92,7 @@ For §15, **Q12 needs the declared-versus-observed and health decisions above be
 
 The 13 original findings are addressed, but the revision introduces **3 new P2 findings**. §15 is substantially clearer; Q12 still depends on resolving the reported-edge contradiction below. No files were edited.
 
-All design line references below refer to [the revised design](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md). Tagged kgateway evidence was checked with `git show` in the supplied source repository.
+All design line references below refer to [the revised design](../../../../docs/phases/phase-2/design.md). Tagged kgateway evidence was checked with `git show` in the supplied source repository.
 
 | # | Result | Section / line evidence |
 |---|---|---|
@@ -161,11 +161,11 @@ Reviewed `a89c187..HEAD` (`04a5d8e`) for `docs/phases/phase-2/design.md`. No fil
 New findings, ranked:
 
 1. **P2 — Existing overview Gateway links lack the newly required metadata.**  
-   **Evidence:** §8.3 ([line 577](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:577)) directs the existing Gateway table row to use `objectPath` with the finding’s server-computed link. However, §7.3:501 explicitly keeps Phase 1’s overview `GatewayRow` unchanged, and §7.6:546 allows existing payload changes only to metadata and finding resources. A healthy Gateway row has no finding from which to obtain its link.  
+   **Evidence:** §8.3 ([line 577](../../../../docs/phases/phase-2/design.md:577)) directs the existing Gateway table row to use `objectPath` with the finding’s server-computed link. However, §7.3:501 explicitly keeps Phase 1’s overview `GatewayRow` unchanged, and §7.6:546 allows existing payload changes only to metadata and finding resources. A healthy Gateway row has no finding from which to obtain its link.  
    **Why:** The promised overview-to-detail navigation cannot follow the new server-only link contract. Specify additive link metadata for existing overview Gateway rows and update their golden exception.
 
 2. **P3 — Compatibility acceptance still forbids the required health golden change.**  
-   **Evidence:** §7.6 ([line 546](/Users/ddoyle/Development/claude/kgateway-ui-claude/docs/phases/phase-2/design.md:546)) now requires `health.json` to gain finding-resource links, but §9.1:653 still requires every Phase 1 golden except `meta.json` to pass unchanged.  
+   **Evidence:** §7.6 ([line 546](../../../../docs/phases/phase-2/design.md:546)) now requires `health.json` to gain finding-resource links, but §9.1:653 still requires every Phase 1 golden except `meta.json` to pass unchanged.  
    **Why:** These acceptance requirements conflict; implementing the new finding links violates the stated compatibility check. Add `health.json` to §9.1’s exceptions.
 | # | Finding | Source | Decision | Note |
 |---|---|---|---|---|
