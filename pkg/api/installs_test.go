@@ -110,7 +110,7 @@ func basisBuckets(m *engine.Model, ids ...string) map[string]bool {
 			add(objects.Ref{Group: "apps", Kind: "Deployment", Namespace: d.Namespace, Name: d.Name})
 		}
 		for _, f := range i.Health.Findings {
-			if f.Resource != nil && (f.Class() == health.ClassOwn || f.Basis.Collection) {
+			if f.Resource != nil && f.Basis != nil && (f.Class() == health.ClassOwn || f.Basis.Collection) {
 				add(*f.Resource)
 				for _, r := range f.Basis.Refs {
 					add(r)

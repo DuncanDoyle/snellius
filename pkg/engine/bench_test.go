@@ -280,8 +280,9 @@ func scopedChecks(tb testing.TB, e *Engine, in health.Input, col collect.Snapsho
 		o := rec.outs[c.Name()]
 		fs := make([]health.Finding, 0, len(o.Findings))
 		for _, f := range o.Findings {
+			// A replayed check is not trusted to mark visibility, so its findings replay derived.
 			f.ID, f.Group = "", ""
-			fs = append(fs, f)
+			fs = append(fs, f.Derived())
 		}
 		out = append(out, replayed{c, fs, o.Result})
 	}

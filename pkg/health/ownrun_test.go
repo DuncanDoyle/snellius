@@ -196,7 +196,7 @@ func TestOwnFindingsMatchToday(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	zr, err := gzip.NewReader(f)
 	if err != nil {
 		t.Fatal(err)
@@ -270,13 +270,13 @@ func TestEveryCodeClassified(t *testing.T) {
 		for _, f := range Evaluate(w.in, Upstream(), w.rt).Findings {
 			_, ownable := ownKindOf(w.in, f)
 			switch {
-			case f.class == ClassOwn && (!ownable || f.Basis.Collection):
+			case f.class == ClassOwn && (!ownable || f.Basis != nil && f.Basis.Collection):
 				t.Errorf("%s: %s on %v is own-object but not in the own-object set", name, f.Code, f.Resource)
 			case f.class == ClassOwn:
 				owned++
-			case f.class != ClassDerived || ownable || len(f.Basis.Refs) > 0:
+			case f.class != ClassDerived || ownable || len(f.Basis.refs()) > 0:
 				t.Errorf("%s: %s on %v is class %d, want derived", name, f.Code, f.Resource, f.class)
-			case f.Basis.Collection && f.Code != CodeSignalUnavailable:
+			case f.Basis != nil && f.Basis.Collection && f.Code != CodeSignalUnavailable:
 				t.Errorf("%s: %s marked collection", name, f.Code)
 			}
 		}
@@ -548,8 +548,8 @@ func TestOwnBasisIsWhatWasNamed(t *testing.T) {
 			continue
 		}
 		_, refs := ownFindings(in, k, objectByRef(in, *f.Resource))
-		if !slices.Equal(f.Basis.Refs, refs) {
-			t.Errorf("%s on %s: basis %v, named %v", f.Code, f.Resource, f.Basis.Refs, refs)
+		if !slices.Equal(f.Basis.refs(), refs) {
+			t.Errorf("%s on %s: basis %v, named %v", f.Code, f.Resource, f.Basis.refs(), refs)
 		}
 		for _, e := range f.Evidence {
 			if !slices.Contains(refs, e) {

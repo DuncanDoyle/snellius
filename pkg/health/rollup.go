@@ -57,13 +57,13 @@ func (f *Finding) ShownTo(rd Readable) bool {
 		if f.Resource == nil || !rd.Ref(*f.Resource) {
 			return false
 		}
-		for _, r := range f.Basis.Refs {
+		for _, r := range f.Basis.refs() {
 			if !rd.Ref(r) {
 				return false
 			}
 		}
 		return true
-	case f.Basis.Collection:
+	case f.Basis.collection():
 		return f.Resource == nil || rd.Ref(*f.Resource)
 	}
 	return false
@@ -85,7 +85,7 @@ func Project(rep Report, rd Readable) Report {
 		if f := rep.Findings[i]; f.ShownTo(rd) {
 			f.Group = "" // the viewer's grouping is set per viewer
 			if f.class != ClassOwn {
-				f.Detail = f.Basis.text // the API server's text may name objects or namespaces
+				f.Detail = f.Basis.fixedText() // the API server's text may name objects or namespaces
 			}
 			out.Findings = append(out.Findings, f)
 			out.Counts[f.Severity]++

@@ -3,9 +3,9 @@
 package health
 
 import (
+	"crypto/sha256"
 	"reflect"
 	"slices"
-	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -86,6 +86,13 @@ const (
 // Class is f's class: ClassOwn only for a finding from package own.
 func (f *Finding) Class() Class { return f.class }
 
+// Derived is f without its visibility marks: derived, with no basis. It only
+// hides f from more viewers, so any caller may use it.
+func (f Finding) Derived() Finding {
+	f.class, f.Basis = ClassDerived, nil
+	return f
+}
+
 // Basis is what decided a finding, for who may see it (D-106).
 type Basis struct {
 	// Collection marks a finding decided only by Snellius's own collection and access state.
@@ -94,6 +101,25 @@ type Basis struct {
 	Refs []objects.Ref
 	// text is a collection finding's fixed Detail, which names no object, for Project.
 	text string
+}
+
+// refs are b's Refs; nil for a nil b.
+func (b *Basis) refs() []objects.Ref {
+	if b == nil {
+		return nil
+	}
+	return b.Refs
+}
+
+// collection reports whether b marks a collection finding, by flag or fixed text.
+func (b *Basis) collection() bool { return b != nil && (b.Collection || b.text != "") }
+
+// fixedText is b's fixed collection Detail; "" for a nil b.
+func (b *Basis) fixedText() string {
+	if b == nil {
+		return ""
+	}
+	return b.text
 }
 
 // Only conditionsCheck (through runOwn) may mark a finding own-object, and only
@@ -111,36 +137,58 @@ func collectionTrusted(c Check) bool {
 // ownedSet is what runOwn produced in one check run, by content. confine
 // keeps ClassOwn only on a finding that matches one of them, once each, so
 // a copy changed or duplicated after runOwn is derived.
-type ownedSet struct{ prints map[string]int }
+type ownedSet struct {
+	// keys are the registered findings' keys, by the digest of the rest of their content.
+	keys map[[sha256.Size]byte][][]string
+	// scratch holds the last print, reused so a lookup does not allocate.
+	scratch []byte
+}
 
-// print is f's content as ownedSet compares it: every field, exported or
-// not, of f and all it points to (deepPrint); "" when it cannot be printed.
-func (o *ownedSet) print(f *Finding) string {
-	var b strings.Builder
-	if !deepPrint(&b, reflect.ValueOf(f).Elem(), 0) {
-		return ""
+// keyField is Finding.Key's index; ownedSet compares keys apart from the rest.
+var keyField = func() int {
+	f, _ := reflect.TypeFor[Finding]().FieldByName("Key")
+	return f.Index[0]
+}()
+
+// digest is f's content but its Key as ownedSet compares it: every field,
+// exported or not, of f and all it points to (deepPrint); false when it
+// cannot be printed.
+func (o *ownedSet) digest(f *Finding) ([sha256.Size]byte, bool) {
+	p, ok := printFields(o.scratch[:0], reflect.ValueOf(f).Elem(), keyField, 0)
+	o.scratch = p
+	if !ok {
+		return [sha256.Size]byte{}, false
 	}
-	return b.String()
+	return sha256.Sum256(p), true
+}
+
+// find is the index of f's key among those registered under d, or -1.
+func (o *ownedSet) find(d [sha256.Size]byte, f *Finding) int {
+	return slices.IndexFunc(o.keys[d], func(k []string) bool { return slices.Equal(k, f.Key) })
 }
 
 // rekey runs rewrite, which changes only f's Key; a registered own-object
 // finding stays registered under its new key. Only the key normalisers call it.
 func (o *ownedSet) rekey(f *Finding, rewrite func()) {
-	if f.class != ClassOwn || !o.take(f) {
+	if o == nil || f.class != ClassOwn {
 		rewrite()
 		return
 	}
+	d, ok := o.digest(f)
+	i := o.find(d, f)
 	rewrite()
-	o.add(*f)
+	if ok && i >= 0 {
+		o.keys[d][i] = slices.Clone(f.Key)
+	}
 }
 
 // add registers f.
 func (o *ownedSet) add(f Finding) {
-	if o.prints == nil {
-		o.prints = map[string]int{}
+	if o.keys == nil {
+		o.keys = map[[sha256.Size]byte][][]string{}
 	}
-	if p := o.print(&f); p != "" {
-		o.prints[p]++
+	if d, ok := o.digest(&f); ok {
+		o.keys[d] = append(o.keys[d], slices.Clone(f.Key))
 	}
 }
 
@@ -149,11 +197,17 @@ func (o *ownedSet) take(f *Finding) bool {
 	if o == nil {
 		return false
 	}
-	p := o.print(f)
-	if p == "" || o.prints[p] == 0 {
+	d, ok := o.digest(f)
+	if !ok {
 		return false
 	}
-	o.prints[p]--
+	i := o.find(d, f)
+	if i < 0 {
+		return false
+	}
+	ks := o.keys[d]
+	ks[i] = ks[len(ks)-1]
+	o.keys[d] = ks[:len(ks)-1]
 	return true
 }
 
@@ -175,7 +229,7 @@ func confine(c Check, fs []Finding, cr CheckResult, owned *ownedSet) ([]Finding,
 	}
 	marked := func(i int) bool {
 		f := &fs[i]
-		return !own && (f.class != ClassDerived || len(f.Basis.Refs) > 0) || own && forged[i] || !coll && (f.Basis.Collection || f.Basis.text != "")
+		return !own && (f.class != ClassDerived || len(f.Basis.refs()) > 0) || own && forged[i] || !coll && f.Basis.collection()
 	}
 	marks := false
 	for i := range fs {
@@ -184,13 +238,25 @@ func confine(c Check, fs []Finding, cr CheckResult, owned *ownedSet) ([]Finding,
 	if !marks {
 		return fs, cr
 	}
+	// The clone shares each Basis with fs, so a changed one is replaced, not edited.
 	fs = slices.Clone(fs)
 	for i := range fs {
 		if !own || forged[i] {
-			fs[i].class, fs[i].Basis.Refs = ClassDerived, nil
+			fs[i].class = ClassDerived
+		}
+		if fs[i].Basis == nil {
+			continue
+		}
+		b := *fs[i].Basis
+		if !own || forged[i] {
+			b.Refs = nil
 		}
 		if !coll {
-			fs[i].Basis.Collection, fs[i].Basis.text = false, ""
+			b.Collection, b.text = false, ""
+		}
+		fs[i].Basis = nil
+		if len(b.Refs) > 0 || b.Collection || b.text != "" {
+			fs[i].Basis = &b
 		}
 	}
 	return fs, cr
@@ -238,8 +304,9 @@ type Finding struct {
 	// class is ClassOwn for a finding from package own, else ClassDerived.
 	// Only fromOwn sets it; Class reads it. Never serialised.
 	class Class
-	// Basis is what decided the finding; runOwn sets its Refs. Never serialised.
-	Basis Basis `json:"-"`
+	// Basis is what decided the finding, nil when nothing did; runOwn sets its
+	// Refs. A pointer keeps the other findings small. Never serialised.
+	Basis *Basis `json:"-"`
 	// parent is the route parentRef a KGWUI-003 or KGWUI-011 finding is about;
 	// it orders findings. A pointer keeps the other findings small.
 	parent *objects.ParentRef

@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -32,7 +31,7 @@ func (readAll) Ref(objects.Ref) bool { return true }
 func TestShownToTable(t *testing.T) {
 	res, gw, svc := objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: "cart"}, testutil.GwRef("infra", "edge").Ref(),
 		objects.Ref{Kind: "Service", Namespace: "shop", Name: "cart"}
-	ownF := Finding{Resource: &res, class: ClassOwn, Basis: Basis{Refs: []objects.Ref{gw, svc}}}
+	ownF := Finding{Resource: &res, class: ClassOwn, Basis: &Basis{Refs: []objects.Ref{gw, svc}}}
 	all := readSet{res: true, gw: true, svc: true}
 	without := func(r objects.Ref) readSet {
 		s := readSet{res: true, gw: true, svc: true}
@@ -50,9 +49,9 @@ func TestShownToTable(t *testing.T) {
 		{"own, Gateway hidden", ownF, without(gw), false},
 		{"own, Service hidden", ownF, without(svc), false},
 		{"derived", Finding{Resource: &res}, readAll{}, false},
-		{"collection without resource", Finding{Basis: Basis{Collection: true}}, readSet{}, true},
-		{"collection, resource hidden", Finding{Resource: &res, Basis: Basis{Collection: true}}, readSet{}, false},
-		{"collection, resource readable", Finding{Resource: &res, Basis: Basis{Collection: true}}, all, true},
+		{"collection without resource", Finding{Basis: &Basis{Collection: true}}, readSet{}, true},
+		{"collection, resource hidden", Finding{Resource: &res, Basis: &Basis{Collection: true}}, readSet{}, false},
+		{"collection, resource readable", Finding{Resource: &res, Basis: &Basis{Collection: true}}, all, true},
 	}
 	for _, tc := range cases {
 		if got := tc.f.ShownTo(tc.rd); got != tc.want {
@@ -150,7 +149,7 @@ func TestCollectionFailureStays(t *testing.T) {
 	}
 	shown := false
 	for _, f := range got.Findings {
-		shown = shown || f.Code == CodeSignalUnavailable && f.Basis.Collection
+		shown = shown || f.Code == CodeSignalUnavailable && f.Basis != nil && f.Basis.Collection
 	}
 	if !shown {
 		t.Fatal("the collection KGWUI-008 must be shown to every viewer")
@@ -191,7 +190,7 @@ func TestCollectionTextObjectFree(t *testing.T) {
 			}
 		}
 		for _, f := range rep.Findings {
-			if f.Basis.Collection {
+			if f.Basis != nil && f.Basis.Collection {
 				texts = append(texts, f.Code+": "+f.Message+" "+f.Detail)
 			}
 		}
@@ -223,7 +222,7 @@ func httpRoutesGVR() schema.GroupVersionResource {
 func TestNonCoreCannotMarkVisible(t *testing.T) {
 	res := objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: "cart"}
 	c := markingCheck{f: Finding{Code: "ACME-002", Severity: SeverityError, Resource: &res, Message: "m", class: ClassOwn,
-		Basis: Basis{Collection: true, Refs: []objects.Ref{res}}}}
+		Basis: &Basis{Collection: true, Refs: []objects.Ref{res}}}}
 	rep := Evaluate(Input{}, []Check{c}, Runtime{})
 	got := Project(rep, readAll{})
 	if len(got.Findings) != 0 {
@@ -257,7 +256,7 @@ func TestProjectNilIsIdentity(t *testing.T) {
 func TestExtensionFindingsDerived(t *testing.T) {
 	res := objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: "cart"}
 	rep := Evaluate(Input{}, []Check{fixedCheck{{Code: "ACME-001", Severity: SeverityError, Resource: &res, Message: "m"}}}, Runtime{})
-	if f := rep.Findings[0]; f.class != ClassDerived || f.Basis.Collection || len(f.Basis.Refs) > 0 {
+	if f := rep.Findings[0]; f.class != ClassDerived || f.Basis != nil {
 		t.Fatalf("extension finding %+v, want derived", f)
 	}
 	if got := Project(rep, readAll{}); len(got.Findings) != 0 || got.State != StateHealthy {
@@ -334,9 +333,10 @@ func TestOwnCopyChangedIsDerived(t *testing.T) {
 	owned.add(f)
 	copied := f // a whole-struct copy, as *g = *f is
 	copied.Detail, copied.Message = "derived content", "derived"
-	var assigned Finding
-	assigned = f
-	assigned.Basis.Refs = append(slices.Clone(f.Basis.Refs), objects.Ref{Kind: "Secret", Namespace: "shop", Name: "s"})
+	assigned := f
+	b := *f.Basis
+	b.Refs = append(slices.Clone(f.Basis.Refs), objects.Ref{Kind: "Secret", Namespace: "shop", Name: "s"})
+	assigned.Basis = &b
 	rekeyed := f
 	rekeyed.Key = []string{"derived-from-hidden-input"}
 	got, _ := confine(conditionsCheck{}, []Finding{rekeyed, copied, assigned, f}, CheckResult{}, owned)
@@ -398,9 +398,8 @@ func TestDeepPrint(t *testing.T) {
 
 // deepString is deepPrint of v, and whether it printed.
 func deepString(v any) (string, bool) {
-	var b strings.Builder
-	ok := deepPrint(&b, reflect.ValueOf(v), 0)
-	return b.String(), ok
+	b, ok := deepPrint(nil, reflect.ValueOf(v), 0)
+	return string(b), ok
 }
 
 // Times print through their public API: one instant in two zones of one name

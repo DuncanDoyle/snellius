@@ -60,9 +60,10 @@ func ok(name string, required bool, at time.Time) CheckResult {
 // unavailable is a KGWUI-008 and a required result that is not OK. With
 // collection, why must be fixed text that names no object: every viewer sees both.
 func unavailable(in Input, name, why string, collection bool) ([]Finding, CheckResult) {
-	b, r := Basis{Collection: collection}, CheckResult{Name: name, Required: true, CollectedAt: in.Now, Error: why, Collection: collection}
+	var b *Basis
+	r := CheckResult{Name: name, Required: true, CollectedAt: in.Now, Error: why, Collection: collection}
 	if collection {
-		b.text, r.fixed = why, why
+		b, r.fixed = &Basis{Collection: true, text: why}, why
 	}
 	return []Finding{{Code: CodeSignalUnavailable, Slug: "signal-unavailable", Severity: SeverityInfo, Install: in.Install.ID(),
 		Message: "Could not check " + name, Detail: why, Key: []string{name}, Basis: b}}, r
@@ -109,7 +110,7 @@ func (c cacheCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 		if a, known := in.Snapshot.Access[gvr]; known && !a.OK {
 			fs = append(fs, Finding{Code: CodeSignalUnavailable, Slug: "signal-unavailable", Severity: SeverityInfo, Install: in.Install.ID(),
 				Message: "No access to " + resourceName(gvr), Detail: a.Err, Key: []string{c.Name(), resourceName(gvr)},
-				Basis: Basis{Collection: true, text: accessText(a)}})
+				Basis: &Basis{Collection: true, text: accessText(a)}})
 		}
 	}
 	if len(fs) > 0 {
@@ -157,7 +158,7 @@ func (c kindsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 	why := "served kinds changed: " + in.KindsChange.String()
 	return []Finding{{Code: CodeSignalUnavailable, Slug: "signal-unavailable", Severity: SeverityInfo, Install: in.Install.ID(),
 			Message: "Served kinds changed; restart the UI to watch them", Detail: in.KindsChange.String(), Key: []string{c.Name()},
-			Basis: Basis{Collection: true, text: in.KindsChange.String()}}}, // kind names come from API discovery
+			Basis: &Basis{Collection: true, text: in.KindsChange.String()}}}, // kind names come from API discovery
 		CheckResult{Name: c.Name(), Required: true, CollectedAt: in.Now, Error: why, Collection: true, fixed: why}
 }
 
