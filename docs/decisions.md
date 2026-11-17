@@ -1638,3 +1638,21 @@ Measured on the reference machine, 5 runs per world:
 4. With delegation off, an HTTPRoute backendRef is an ordinary target.
 
 **Consequences:** Incompleteness depends only on readable objects, install context and the viewer's permissions. `ix.ParentRoutes` must not feed it.
+
+## D-112 — Snellius's own size limits are install-wide state (2026-11-17, Phase 7, exception to D-085)
+**Status:** accepted by the user (2026-11-17), from the 7.4 Codex review (findings 3 and 5).
+
+**Context:** Snellius bounds work per install (computed delegation contexts and edges) and per request (at most 1,000 permission checks, D-100). Hidden objects count toward both. A hidden route can use up a shared compute bound, so a restricted viewer's delegation contexts are cut or read "too large". Enough hidden objects can push a cold request past the check cap, so a page answers `503` instead of `200`.
+
+**Decision:** These limits are install-wide state, like collection failures (D-108): a stated exception to D-085. Which limit was hit may change what a restricted viewer sees; what or where the hidden objects are never does.
+
+**Consequences:** 7.4 closes without per-viewer bounds. Making them viewer-independent stays possible later, at the cost of per-viewer recomputes and more checks per cold page.
+
+## D-113 — D-024 holds only outside secure mode (2026-11-17, Phase 7, amends D-024)
+**Status:** our call, from the 7.4 Codex review (finding 1).
+
+**Context:** D-024 lets computed delegation facts ignore which HTTPRoutes lie on the path. In secure mode a hidden route's matcher then reaches a readable route's delegation contexts, effective matches and dropped flag.
+
+**Decision:** In secure mode, for a viewer without the full read, delegation rows, contexts, effective matches and the dropped flag are omitted when they pass through a route the viewer cannot read. Outside secure mode D-024 is unchanged.
+
+**Consequences:** A restricted viewer can miss a context that a fully readable chain also reaches. Routes on a delegation path are authorised with `list`, while path incompleteness (D-111) walks parents with `get`.
