@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -85,16 +86,16 @@ type fakeChecker struct {
 	lists, gets    atomic.Int64
 	inFlight, peak atomic.Int64
 	// sent, when set, is called as each SAR starts.
-	sent func()
+	sent func(ctx context.Context, user string, a sar.Attributes)
 }
 
-func (c *fakeChecker) Check(_ context.Context, _ oidc.Identity, a sar.Attributes) (bool, error) {
+func (c *fakeChecker) Check(ctx context.Context, id oidc.Identity, a sar.Attributes) (bool, error) {
 	n := c.inFlight.Add(1)
 	defer c.inFlight.Add(-1)
 	for p := c.peak.Load(); n > p && !c.peak.CompareAndSwap(p, n); p = c.peak.Load() {
 	}
 	if c.sent != nil {
-		c.sent()
+		c.sent(ctx, id.Username, a)
 	}
 	if a.Verb == "list" {
 		c.lists.Add(1)
@@ -236,7 +237,8 @@ func (p page) mark(n int64) string {
 }
 
 // TestBudgetSARDeniedList reports the SAR cost of the permission checks at
-// Large against D-100 item 7. Report-only: it logs and never fails on a number.
+// Large against D-100 item 7. Report-only but for the load subtest, which
+// checks many viewers' cold pages against D-116.
 func TestBudgetSARDeniedList(t *testing.T) {
 	build, m := api.LargeHandlers(t)
 	base := "/api/v1/installs/" + m.Installs[0].Resolved.ID()
@@ -414,7 +416,11 @@ func TestBudgetSARDeniedList(t *testing.T) {
 		}
 	})
 
-	t.Run("load", func(t *testing.T) { loadTest(t, secure, pages[0]) })
+	t.Run("load", func(t *testing.T) {
+		for _, p := range []page{pages[0], pages[4], pages[3]} {
+			t.Run(strings.TrimPrefix(p.name, "/"), func(t *testing.T) { loadTest(t, secure, p) })
+		}
+	})
 
 	t.Run("memory", func(t *testing.T) {
 		// Namespace-grants viewers' cold /routes fill the cache past the 8 MiB budget.
@@ -451,38 +457,138 @@ func TestBudgetSARDeniedList(t *testing.T) {
 	})
 }
 
+// pollKey carries a poll's count of SARs sent, so the bench tells warm polls from cold ones.
+type pollKey struct{}
+
+// viewerLoad is one load viewer's polls: its first 200, and after it the
+// polls answered and those that answered 200; cut polls ran into the deadline.
+type viewerLoad struct {
+	ok             atomic.Bool
+	first          time.Duration
+	after, afterOK int
+	cut            int
+}
+
+// missTrace names why each SAR of the load was sent, before and after its
+// viewer's first 200: never asked, an expired allow or deny, or asked again
+// before its answer expired (evicted).
+type missTrace struct {
+	mu     sync.Mutex
+	last   map[string]missAt
+	causes [2]map[string]int
+}
+
+type missAt struct {
+	start   time.Time
+	allowed bool
+}
+
+func (m *missTrace) sent(now time.Time, user string, a sar.Attributes, allowed, after bool) {
+	k := user + " " + fmt.Sprint(a)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	prev, seen := m.last[k]
+	m.last[k] = missAt{now, allowed}
+	cause := "cold"
+	switch {
+	case !seen:
+	case prev.allowed && now.Sub(prev.start) >= sar.DefaultAllowTTL:
+		cause = "allow-expired"
+	case !prev.allowed && now.Sub(prev.start) >= sar.MinDenyTTL:
+		cause = "deny-expired"
+	default:
+		cause = "evicted"
+	}
+	phase := 0
+	if after {
+		phase = 1
+	}
+	m.causes[phase][cause]++
+}
+
 // loadTest runs 50 namespace-grants viewers polling p every 5 s at once with
-// the D-100 limits, on a clock 10× wall time, and reports the global SAR rate.
+// the D-100 limits, on a clock 10× wall time, for 6 minutes under a hard
+// deadline. Every viewer gets a first 200 within all viewers' cold SARs at the
+// default rate plus a minute, and then at least 95 % of its polls answer 200;
+// a poll the deadline cuts is not counted. No poll passes the check cap, a
+// warm poll answers within the poll interval, and the SARs keep the in-flight,
+// rate and burst limits (D-116). It logs why each SAR was sent.
 func loadTest(t *testing.T, secure func(api.Authorizer, func() time.Time, ...api.HandlerOption) http.Handler, p page) {
 	const viewers, scale, lat = 50, 10, 2 * time.Millisecond
 	const run = 6 * time.Minute
+	// One viewer's cold SARs without limits; every viewer asks the same.
+	cc, cclk := &fakeChecker{allow: nsGrants}, clocktesting.NewFakeClock(t0)
+	cold := get(secure(newAuthz(cc, cclk, nil, lifted), cclk.Now), cc, "u", p.path)
+	if cold.code != http.StatusOK {
+		t.Fatalf("one cold viewer: %d", cold.code)
+	}
+	bound := time.Duration(float64(viewers*cold.sars)/sar.DefaultRate*float64(time.Second)) + time.Minute
+
 	clk := fastClock{start: time.Now(), scale: scale}
+	ctx, cancel := context.WithDeadline(context.Background(), clk.start.Add(run/scale))
+	defer cancel()
+	load := map[string]*viewerLoad{}
+	for u := range viewers {
+		load[fmt.Sprintf("viewer-%02d", u)] = &viewerLoad{}
+	}
 	var mu sync.Mutex
 	var sends []time.Time
 	var reasons []string
-	c := &fakeChecker{lat: lat / scale, allow: nsGrants, sent: func() {
+	trace := &missTrace{last: map[string]missAt{}, causes: [2]map[string]int{{}, {}}}
+	c := &fakeChecker{lat: lat / scale, allow: nsGrants}
+	c.sent = func(ctx context.Context, user string, a sar.Attributes) {
 		now := clk.Now()
+		if n, ok := ctx.Value(pollKey{}).(*atomic.Int64); ok {
+			n.Add(1)
+		}
+		trace.sent(now, user, a, c.allow(a), load[user].ok.Load())
 		mu.Lock()
 		sends = append(sends, now)
 		mu.Unlock()
-	}}
-	audit := func(_ *http.Request, reason string) { mu.Lock(); reasons = append(reasons, reason); mu.Unlock() }
+	}
+	audit := func(r *http.Request, reason string) {
+		if r.Context().Err() != nil {
+			reason = "cut " + reason
+		}
+		mu.Lock()
+		reasons = append(reasons, reason)
+		mu.Unlock()
+	}
 	h := secure(newAuthz(c, clk, nil), clk.Now, api.WithAuthzAudit(audit))
 	codes := map[int]int{}
-	var firstOK []time.Duration
+	var warm []time.Duration
+	var maxPoll int64
 	var wg sync.WaitGroup
 	end := clk.Now().Add(run)
-	for u := range viewers {
+	for user, v := range load {
 		wg.Go(func() {
-			var first time.Duration
 			for next := clk.Now(); next.Before(end); {
+				n := &atomic.Int64{}
+				rctx := context.WithValue(context.WithValue(ctx, userKey{}, user), pollKey{}, n)
 				w := httptest.NewRecorder()
-				h.ServeHTTP(w, request(fmt.Sprintf("viewer-%02d", u), p.path))
+				start := clk.Now()
+				h.ServeHTTP(w, httptest.NewRequestWithContext(rctx, http.MethodGet, p.path, nil))
+				took := clk.Since(start)
+				if ctx.Err() != nil && w.Code != http.StatusOK {
+					v.cut++
+					break
+				}
 				mu.Lock()
 				codes[w.Code]++
+				maxPoll = max(maxPoll, n.Load())
+				if w.Code == http.StatusOK && n.Load() == 0 {
+					warm = append(warm, took)
+				}
 				mu.Unlock()
-				if first == 0 && w.Code == http.StatusOK {
-					first = clk.Since(t0)
+				switch {
+				case v.ok.Load():
+					v.after++
+					if w.Code == http.StatusOK {
+						v.afterOK++
+					}
+				case w.Code == http.StatusOK:
+					v.first = clk.Since(t0)
+					v.ok.Store(true)
 				}
 				// The next poll starts 5 s after this one started, or now if it took longer.
 				next = next.Add(5 * time.Second)
@@ -491,12 +597,15 @@ func loadTest(t *testing.T, secure func(api.Authorizer, func() time.Time, ...api
 				}
 				clk.Sleep(next.Sub(clk.Now()))
 			}
-			mu.Lock()
-			firstOK = append(firstOK, first)
-			mu.Unlock()
 		})
 	}
-	wg.Wait()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(run/scale + 30*time.Second):
+		t.Fatalf("load: polls still running 30 s after the %v deadline", run)
+	}
 	slices.SortFunc(sends, func(a, b time.Time) int { return a.Compare(b) })
 	// Peak in any 1 s window, and the most sent above the rate over any interval (the burst used).
 	peakSec, j := 0, 0
@@ -514,14 +623,65 @@ func loadTest(t *testing.T, secure func(api.Authorizer, func() time.Time, ...api
 		}
 		excess = max(excess, x-low+1)
 	}
-	total := 0
+	total, cut := 0, 0
 	for _, n := range codes {
 		total += n
 	}
+	var firstOK []time.Duration
+	worst, fewest := 100.0, -1
+	for _, user := range slices.Sorted(maps.Keys(load)) {
+		v := load[user]
+		cut += v.cut
+		if !v.ok.Load() {
+			t.Errorf("load %s: %s got no 200 in %v", p.name, user, run)
+			continue
+		}
+		firstOK = append(firstOK, v.first)
+		if v.first > bound {
+			t.Errorf("load %s: %s first 200 at %v, after %v (%d viewers × %d cold SARs at %d/s, plus 60 s)",
+				p.name, user, v.first.Round(time.Second), bound.Round(time.Second), viewers, cold.sars, sar.DefaultRate)
+		}
+		if v.after == 0 {
+			continue
+		}
+		share := 100 * float64(v.afterOK) / float64(v.after)
+		worst = min(worst, share)
+		if fewest < 0 || v.after < fewest {
+			fewest = v.after
+		}
+		if share < 95 {
+			t.Errorf("load %s: %s answered %d of %d polls 200 after its first (%.1f%%), want ≥ 95%%", p.name, user, v.afterOK, v.after, share)
+		}
+	}
+	got := countOf(reasons)
+	if got[api.AuditCheckLimit] > 0 {
+		t.Errorf("load %s: %d polls passed the check cap", p.name, got[api.AuditCheckLimit])
+	}
+	if c.peak.Load() > sar.DefaultMaxInFlight {
+		t.Errorf("load %s: %d SARs in flight, limit %d", p.name, c.peak.Load(), sar.DefaultMaxInFlight)
+	}
+	// The SAR start is noted just after its token, so allow a tenth of a second at the rate.
+	if slack := float64(sar.DefaultBurst + sar.DefaultRate/10); excess > slack {
+		t.Errorf("load %s: %.0f SARs above %d/s over one interval, burst %d", p.name, excess, sar.DefaultRate, sar.DefaultBurst)
+	}
 	t.Logf("load: %d namespace-grants viewers polling %s every 5 s for %v (clock ×%d, %v per SAR): %d SARs; peak %d in flight (limit %d); peak %d in any 1 s, most above %d/s over any interval %.0f (burst %d)",
 		viewers, p.name, run, scale, lat, len(sends), c.peak.Load(), sar.DefaultMaxInFlight, peakSec, sar.DefaultRate, excess, sar.DefaultBurst)
-	t.Logf("load: polls %v (%d), %.1f%% answered 200; 503 reasons %v; first 200 per viewer p50 %v max %v",
-		codes, total, 100*float64(codes[http.StatusOK])/float64(total), countOf(reasons), pct(firstOK, 50).Round(time.Second), pct(firstOK, 100).Round(time.Second))
+	// q is pct, or 0 for no samples.
+	q := func(d []time.Duration, n int) time.Duration {
+		if len(d) == 0 {
+			return 0
+		}
+		return pct(d, n)
+	}
+	if m := q(warm, 100); m > 5*time.Second {
+		t.Errorf("load %s: a warm poll took %v, longer than the poll interval", p.name, m)
+	}
+	t.Logf("load: polls %v (%d), %.1f%% answered 200, %d cut by the deadline; 503 reasons %v; first 200 per viewer p50 %v max %v (bound %v: %d cold SARs each)",
+		codes, total, 100*float64(codes[http.StatusOK])/float64(max(total, 1)), cut, got, q(firstOK, 50).Round(time.Second),
+		q(firstOK, 100).Round(time.Second), bound.Round(time.Second), cold.sars)
+	t.Logf("load: after the first 200, worst viewer %.1f%% answered 200 (fewest polls %d); warm polls (no SAR) %d, p50 %v p95 %v max %v; most SARs in one poll %d",
+		worst, fewest, len(warm), q(warm, 50), q(warm, 95), q(warm, 100), maxPoll)
+	t.Logf("load: SARs by cause before the first 200 %v, after %v", trace.causes[0], trace.causes[1])
 }
 
 func countOf(s []string) map[string]int {
