@@ -83,8 +83,8 @@ type Authorizer struct {
 	admission *admission
 	// parallel bounds the SARs of one full-read evaluation; tests lower it.
 	parallel int
-	// spend, report and note are api.SpendCheck, api.ReportAuthzError and api.NoteAllow; tests swap them.
-	spend  func(*http.Request) error
+	// spend, report and note are api.SpendCheckOn, api.ReportAuthzError and api.NoteAllow; tests swap them.
+	spend  func(r *http.Request, reason string, key any) error
 	report func(*http.Request, error)
 	note   func(*http.Request, time.Time)
 	// Test hooks, nil in production: run after each sweep; a full-read evaluation stopped early.
@@ -132,7 +132,7 @@ func New(o Options) *Authorizer {
 		full:         &fullCache{c: c},
 		admission:    newAdmission(places),
 		parallel:     fullReadParallel,
-		spend:        api.SpendCheck,
+		spend:        api.SpendCheckOn,
 		report:       api.ReportAuthzError,
 		note:         api.NoteAllow,
 	}
@@ -140,11 +140,12 @@ func New(o Options) *Authorizer {
 
 // Admit implements api.Admitter: it waits under r's context for one of the
 // MaxInFlight / 8 admission places, in arrival order (D-116). Too many
-// requests waiting, in all or of r's identity, is ErrOverloaded.
+// requests waiting, in all or of r's identity, is ErrOverloaded. A request
+// without an identity can send no SAR, so it is admitted without a place.
 func (a *Authorizer) Admit(r *http.Request) (func(), error) {
 	id, ok := a.identityFrom(r.Context())
 	if !ok {
-		return nil, ErrNoIdentity
+		return func() {}, nil
 	}
 	return a.admission.admit(r.Context(), hashIdentity(id))
 }
@@ -252,7 +253,7 @@ func (a *Authorizer) CanList(r *http.Request, gk objects.GroupKind, namespace st
 }
 
 func (a *Authorizer) check(r *http.Request, id oidc.Identity, h idHash, at Attributes) (decision, error) {
-	return a.cache.check(r.Context(), func() error { return a.spend(r) }, id, h, at)
+	return a.cache.check(r.Context(), func(reason string) error { return a.spend(r, reason, at) }, id, h, at)
 }
 
 // allow reports d's answer to r's request, noting an allow's expiry (D-100).

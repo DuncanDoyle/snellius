@@ -494,34 +494,38 @@ func TestNamedOnlyDoesNotProbeFullRead(t *testing.T) {
 	}
 }
 
-// /routes asks the full read once per build: a cold request twice, in the
-// build that waits for admission and in the admitted one (D-116). Its cached
-// "false" sends no cluster-wide list on the next request, which builds once.
+// A cold /routes sends each cluster-wide list of the full read once and shows
+// the viewer's own routes; the next request, answered from the cache, sends no
+// SAR and shows the same routes.
 func TestListProbesFullReadOnce(t *testing.T) {
 	src, base := world(t)
 	c := &checker{decide: grant(nil)}
-	a := &countedFull{Authorizer: newAuthz(c, clocktesting.NewFakeClock(t0))}
-	srv := serve(t, src, a)
-	clusterLists := func() int {
-		n := 0
-		for _, at := range c.recorded() {
-			if isClusterList(at) {
-				n++
+	srv := serve(t, src, newAuthz(c, clocktesting.NewFakeClock(t0)))
+	ns0 := testutil.ScaleNamespace(0) + "/"
+	want := routeNames(t, serve(t, src, api.AuthorizerFunc(func(_ *http.Request, r objects.Ref) bool {
+		return r.Group == routesGroup && r.Kind == "HTTPRoute" && strings.HasPrefix(r.Namespace+"/", ns0)
+	})), "team", base)
+	if got := routeNames(t, srv, "team", base); len(got) == 0 || !slices.Equal(got, want) {
+		t.Fatalf("cold: team sees %v, want %v", got, want)
+	}
+	cold := c.recorded()
+	var lists []sar.Attributes
+	for _, at := range cold {
+		if isClusterList(at) {
+			if slices.Contains(lists, at) {
+				t.Errorf("%+v sent twice", at)
 			}
+			lists = append(lists, at)
 		}
-		return n
 	}
-	routeNames(t, srv, "team", base)
-	if n := a.count(); n != 2 {
-		t.Fatalf("one cold /routes request asked the full read %d times, want once per build", n)
-	}
-	first := clusterLists()
-	if first == 0 {
+	if len(lists) == 0 {
 		t.Fatal("no cluster-wide list for the full read")
 	}
-	routeNames(t, srv, "team", base)
-	if n, lists := a.count(), clusterLists(); n != 3 || lists != first {
-		t.Errorf("second request: %d full reads, %d cluster-wide lists (first %d)", n, lists, first)
+	if got := routeNames(t, srv, "team", base); !slices.Equal(got, want) {
+		t.Errorf("warm: team sees %v, want %v", got, want)
+	}
+	if n := len(c.recorded()) - len(cold); n != 0 {
+		t.Errorf("warm request sent %d SARs, want none", n)
 	}
 }
 

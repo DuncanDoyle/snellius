@@ -168,8 +168,9 @@ type admission struct {
 	waiters *list.List
 	perID   map[idHash]int
 
-	// waiting is a test hook, nil in production: a request started waiting.
+	// Test hooks, nil in production: a request started waiting; identity h got a place (under mu).
 	waiting func()
+	granted func(h idHash)
 }
 
 // admitWaiter is one waiting request and its identity.
@@ -191,6 +192,9 @@ func (q *admission) admit(ctx context.Context, h idHash) (release func(), err er
 	q.mu.Lock()
 	if q.admitted < q.max && q.waiters.Len() == 0 {
 		q.admitted++
+		if q.granted != nil {
+			q.granted(h)
+		}
 		q.mu.Unlock()
 		return sync.OnceFunc(q.release), nil
 	}
@@ -234,6 +238,9 @@ func (q *admission) releaseLocked() {
 	if el := q.waiters.Front(); el != nil {
 		w := q.waiters.Remove(el).(*admitWaiter)
 		q.left(w.id)
+		if q.granted != nil {
+			q.granted(w.id)
+		}
 		close(w.ch)
 		return
 	}

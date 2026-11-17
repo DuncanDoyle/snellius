@@ -475,7 +475,7 @@ func TestFullReadLeaderNotAdmitted(t *testing.T) {
 	f, _ := newFullFixture(3, func(oidc.Identity, Attributes) (bool, error) { return true, nil })
 	refusing, joined, gate := make(chan struct{}, 3), make(chan struct{}, 1), make(chan struct{})
 	f.a.full.joined = func() { joined <- struct{}{} }
-	f.a.spend = func(r *http.Request) error {
+	f.a.spend = func(r *http.Request, _ string, _ any) error {
 		if r.Context().Value(notAdmittedKey{}) == nil {
 			return nil
 		}

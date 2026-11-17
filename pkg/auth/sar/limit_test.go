@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -738,34 +739,52 @@ func (noModel) Platform() platform.Info    { return platform.Info{} }
 // admitFixture is an Authorizer with one admission place over checker, its
 // admission waits signalled on waiting, and the API over it in complete
 // secure mode. Its extension GET /api/ext/admit/{list} authorises route "a"
-// in each comma-separated namespace of list and writes how many it may see;
-// an allowed namespace "panic" panics after the checks.
+// in each comma-separated namespace of list and writes the namespaces it may
+// see, comma-separated; an allowed namespace "panic" panics after the checks.
+// The list "full" writes the full read's answer instead.
 func admitFixture(checker Checker, clk *clocktesting.FakeClock, waiting chan<- struct{}, opts ...api.HandlerOption) (*Authorizer, http.Handler) {
 	a := limitedFixture(checker, clk, batchParallel, unlimited, unlimited, nil)
 	a.admission.waiting = func() { waiting <- struct{}{} }
 	ext := api.ExtMount{Name: "admit", Pattern: "GET /{list}", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n, panics := 0, false
+		if r.PathValue("list") == "full" {
+			all, err := a.FullRead(r)
+			api.ReportAuthzError(r, err)
+			api.WriteJSON(w, all)
+			return
+		}
+		var seen []string
 		for ns := range strings.SplitSeq(r.PathValue("list"), ",") {
 			if a.Authorize(r, route(ns, "a")) {
-				n++
-				panics = panics || ns == "panic"
+				seen = append(seen, ns)
 			}
 		}
-		if panics {
+		if slices.Contains(seen, "panic") {
 			panic("handler")
 		}
-		api.WriteJSON(w, n)
+		api.WriteJSON(w, strings.Join(seen, ","))
 	})}
 	opts = append([]api.HandlerOption{api.WithSecureMode(true), api.WithCommitClock(clk.Now), api.WithExtMounts(ext)}, opts...)
 	return a, api.NewHandler(noModel{}, fstest.MapFS{}, a, opts...)
 }
 
-// admitGet is GET /api/ext/admit/{list} on h as id under ctx.
+// admitRequest is GET /api/ext/admit/{list} as id under ctx.
+func admitRequest(ctx context.Context, id oidc.Identity, list string) *http.Request {
+	return httptest.NewRequestWithContext(context.WithValue(ctx, idKey{}, id), http.MethodGet, "/api/ext/admit/"+list, nil)
+}
+
+// admitGet serves admitRequest on h.
 func admitGet(ctx context.Context, h http.Handler, id oidc.Identity, list string) *httptest.ResponseRecorder {
-	r := httptest.NewRequestWithContext(context.WithValue(ctx, idKey{}, id), http.MethodGet, "/api/ext/admit/"+list, nil)
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
+	h.ServeHTTP(w, admitRequest(ctx, id, list))
 	return w
+}
+
+// wantSeen checks that w answered 200 with the namespaces seen.
+func wantSeen(t *testing.T, w *httptest.ResponseRecorder, who, seen string) {
+	t.Helper()
+	if want := `"` + seen + `"` + "\n"; w.Code != http.StatusOK || w.Body.String() != want {
+		t.Errorf("%s: %d %q, want 200 %q", who, w.Code, w.Body.String(), want)
+	}
 }
 
 // A request whose checks are cached never waits. One that needs a SAR waits
@@ -783,41 +802,37 @@ func TestAdmissionAtCommit(t *testing.T) {
 		}
 		return true, nil
 	}), clk, waiting)
-	ok := func(w *httptest.ResponseRecorder, who string) {
-		t.Helper()
-		if w.Code != http.StatusOK || w.Body.String() != "1\n" {
-			t.Errorf("%s: %d %q", who, w.Code, w.Body.String())
-		}
+	names := map[idHash]string{}
+	for _, who := range []string{"alice", "holder", "bob", "carol", "dave"} {
+		names[hashIdentity(user(who))] = who
 	}
-	ok(admitGet(context.Background(), h, user("alice"), "shop"), "alice cold")
+	// granted runs under the admission's lock, in the order places are given.
+	var order []string
+	a.admission.granted = func(h idHash) { order = append(order, names[h]) }
+	wantSeen(t, admitGet(context.Background(), h, user("alice"), "shop"), "alice cold", "shop")
 	held, err := a.Admit(request(user("holder")))
 	if err != nil {
 		t.Fatal(err)
 	}
 	n := sent.Load()
-	ok(admitGet(context.Background(), h, user("alice"), "shop"), "alice warm")
+	wantSeen(t, admitGet(context.Background(), h, user("alice"), "shop"), "alice warm", "shop")
 	if len(waiting) != 0 || sent.Load() != n {
 		t.Fatalf("a cached request waited (%v) or sent %d SARs", len(waiting) != 0, sent.Load()-n)
 	}
-	type answer struct {
-		who string
-		w   *httptest.ResponseRecorder
-	}
-	done := make(chan answer, 3)
+	done := make(chan *httptest.ResponseRecorder, 3)
 	for _, who := range []string{"bob", "carol", "dave"} {
-		go func() { done <- answer{who, admitGet(context.Background(), h, user(who), "shop")} }()
+		go func() { done <- admitGet(context.Background(), h, user(who), "shop") }()
 		testutil.Recv(t, waiting, who+" to queue")
 	}
 	if n, w, _ := admissionState(a.admission); n != 1 || w != 3 {
 		t.Fatalf("%d admitted, %d waiting; want 1, 3", n, w)
 	}
 	held()
-	for _, who := range []string{"bob", "carol", "dave"} {
-		got := testutil.Recv(t, done, who+"'s answer")
-		if got.who != who {
-			t.Fatalf("%s answered before %s", got.who, who)
-		}
-		ok(got.w, who)
+	for range 3 {
+		wantSeen(t, testutil.Recv(t, done, "an answer"), "a queued viewer", "shop")
+	}
+	if want := []string{"alice", "holder", "bob", "carol", "dave"}; !slices.Equal(order, want) {
+		t.Errorf("admitted in order %v, want %v", order, want)
 	}
 	if n, w, ids := admissionState(a.admission); n != 0 || w != 0 || ids != 0 {
 		t.Fatalf("after the answers: %d admitted, %d waiting, %d identities", n, w, ids)
@@ -917,9 +932,7 @@ func TestAdmissionExpiredWhileWaiting(t *testing.T) {
 		return !revoked || at.Namespace != "shop", nil
 	}}
 	a, h := admitFixture(c, clk, waiting)
-	if w := admitGet(context.Background(), h, user("alice"), "shop"); w.Body.String() != "1\n" {
-		t.Fatalf("before: %d %q", w.Code, w.Body.String())
-	}
+	wantSeen(t, admitGet(context.Background(), h, user("alice"), "shop"), "before", "shop")
 	held, err := a.Admit(request(user("holder")))
 	if err != nil {
 		t.Fatal(err)
@@ -933,9 +946,7 @@ func TestAdmissionExpiredWhileWaiting(t *testing.T) {
 	revoked = true
 	mu.Unlock()
 	held()
-	if w := testutil.Recv(t, done, "alice's answer"); w.Code != http.StatusOK || w.Body.String() != "1\n" {
-		t.Errorf("after the wait: %d %q, want blog alone", w.Code, w.Body.String())
-	}
+	wantSeen(t, testutil.Recv(t, done, "alice's answer"), "after the wait", "blog")
 	n := 0
 	for _, x := range c.calls {
 		if x.a == listAt("shop") {
@@ -944,5 +955,77 @@ func TestAdmissionExpiredWhileWaiting(t *testing.T) {
 	}
 	if n != 2 {
 		t.Errorf("list in shop sent %d times, want again after the wait", n)
+	}
+}
+
+// stallWriter blocks every Write until unblock closes, signalling writing first.
+type stallWriter struct {
+	*httptest.ResponseRecorder
+	writing chan<- struct{}
+	unblock <-chan struct{}
+}
+
+func (s *stallWriter) Write(p []byte) (int, error) {
+	select {
+	case s.writing <- struct{}{}:
+	default:
+	}
+	<-s.unblock
+	return s.ResponseRecorder.Write(p)
+}
+
+// A response is final before it is written: a client that stalls the write
+// holds no place, and another cold request is admitted meanwhile (D-116).
+func TestAdmissionReleasedBeforeWrite(t *testing.T) {
+	clk := clocktesting.NewFakeClock(t0)
+	a, h := admitFixture(checkerFunc(func(context.Context, oidc.Identity, Attributes) (bool, error) { return true, nil }), clk, make(chan struct{}, 2))
+	writing, unblock := make(chan struct{}, 1), make(chan struct{})
+	stalled := &stallWriter{ResponseRecorder: httptest.NewRecorder(), writing: writing, unblock: unblock}
+	first := make(chan struct{})
+	go func() {
+		h.ServeHTTP(stalled, admitRequest(context.Background(), user("alice"), "shop"))
+		close(first)
+	}()
+	testutil.Recv(t, writing, "alice's response to be written")
+	if n, _, _ := admissionState(a.admission); n != 0 {
+		t.Errorf("%d places held while a response is written, want 0", n)
+	}
+	second := make(chan *httptest.ResponseRecorder, 1)
+	go func() { second <- admitGet(context.Background(), h, user("bob"), "blog") }()
+	wantSeen(t, testutil.Recv(t, second, "bob's answer while alice's write stalls"), "bob", "blog")
+	close(unblock)
+	testutil.Recv(t, first, "alice's write")
+	wantSeen(t, stalled.ResponseRecorder, "alice", "shop")
+}
+
+// A request that joins a full read another, admitted, request is evaluating
+// is not queued and sends no SARs of its own (D-116 item 2).
+func TestAdmissionFullReadFollower(t *testing.T) {
+	clk := clocktesting.NewFakeClock(t0)
+	started, release := make(chan struct{}, 8), make(chan struct{})
+	var sent atomic.Int32
+	waiting := make(chan struct{}, 2)
+	a, h := admitFixture(checkerFunc(func(context.Context, oidc.Identity, Attributes) (bool, error) {
+		sent.Add(1)
+		started <- struct{}{}
+		<-release
+		return true, nil
+	}), clk, waiting)
+	joined := make(chan struct{}, 1)
+	a.full.joined = func() { joined <- struct{}{} }
+	answers := make(chan *httptest.ResponseRecorder, 2)
+	go func() { answers <- admitGet(context.Background(), h, user("alice"), "full") }()
+	testutil.Recv(t, started, "the admitted full read")
+	go func() { answers <- admitGet(context.Background(), h, user("alice"), "full") }()
+	testutil.Recv(t, joined, "the second request to join the evaluation")
+	close(release)
+	for range 2 {
+		if w := testutil.Recv(t, answers, "an answer"); w.Code != http.StatusOK || w.Body.String() != "true\n" {
+			t.Errorf("full read: %d %q, want true", w.Code, w.Body.String())
+		}
+	}
+	kinds, _ := testKinds.All()
+	if len(waiting) != 0 || int(sent.Load()) != len(kinds) {
+		t.Errorf("queued %v, %d SARs; want no wait and one list per kind (%d)", len(waiting) != 0, sent.Load(), len(kinds))
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"k8s.io/utils/clock"
 
+	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 )
 
@@ -112,20 +113,22 @@ func (c *cache) ttl(allowed bool) time.Duration {
 }
 
 // check answers a for the identity from the cache, a running flight or a new
-// SAR. Every miss calls spend first; a hit does not. A waiter whose leader
-// ended before admission leads a new attempt without spending again.
-func (c *cache) check(ctx context.Context, spend func() error, id oidc.Identity, h idHash, a Attributes) (decision, error) {
+// SAR. Every miss calls spend first with why it missed (an api.Miss reason);
+// a hit does not. A waiter whose leader ended before admission leads a new
+// attempt without spending again.
+func (c *cache) check(ctx context.Context, spend func(reason string) error, id oidc.Identity, h idHash, a Attributes) (decision, error) {
 	k := flightKey{h, a}
 	requeued := false
 	for {
 		c.mu.Lock()
-		if d, ok := c.lookup(h, a, c.clock.Now()); ok {
+		d, ok, reason := c.lookup(h, a, c.clock.Now())
+		if ok {
 			c.mu.Unlock()
 			c.m.cache.Inc("hit")
 			return d, nil
 		}
 		if !requeued {
-			if err := spend(); err != nil {
+			if err := spend(reason); err != nil {
 				c.mu.Unlock()
 				return decision{}, err
 			}
@@ -225,20 +228,24 @@ func (c *cache) send(ctx context.Context, id oidc.Identity, a Attributes) (decis
 // flying is the SARs and full-read evaluations in flight.
 func (c *cache) flying() int { return len(c.flights) + len(c.fullFlights) }
 
-// lookup returns an unexpired decision and marks it used; an expired one is dropped.
-func (c *cache) lookup(h idHash, a Attributes, now time.Time) (decision, bool) {
+// lookup returns an unexpired decision and marks it used; an expired one is
+// dropped. A miss says why, as an api.Miss reason.
+func (c *cache) lookup(h idHash, a Attributes, now time.Time) (decision, bool, string) {
 	el := c.decisions[flightKey{h, a}]
 	if el == nil {
-		return decision{}, false
+		return decision{}, false, api.MissAbsent
 	}
 	e := el.Value.(*entry)
 	if !now.Before(e.d.expires) {
 		c.remove(el)
 		c.report()
-		return decision{}, false
+		if e.d.allowed {
+			return decision{}, false, api.MissAllowExpired
+		}
+		return decision{}, false, api.MissDenyExpired
 	}
 	c.lru.MoveToFront(el)
-	return e.d, true
+	return e.d, true, ""
 }
 
 // lookupFull returns the identity's unexpired full-read decision for k's kinds

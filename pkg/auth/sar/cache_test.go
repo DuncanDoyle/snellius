@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -129,7 +130,7 @@ func TestMergedChecks(t *testing.T) {
 	f.a.cache.joined = func() { joined <- struct{}{} }
 	var spends int
 	var mu sync.Mutex
-	f.a.spend = func(*http.Request) error { mu.Lock(); spends++; mu.Unlock(); return nil }
+	f.a.spend = func(*http.Request, string, any) error { mu.Lock(); spends++; mu.Unlock(); return nil }
 
 	var wg sync.WaitGroup
 	results := make(chan bool, 51)
@@ -522,20 +523,30 @@ func TestSweep(t *testing.T) {
 	}
 }
 
+// A miss spends with why it missed and the check's attributes; a hit spends nothing.
 func TestSpendOnMissOnly(t *testing.T) {
 	f := newFixture(grants(call{"alice", listAt("shop")}))
-	spends := 0
-	f.a.spend = func(*http.Request) error { spends++; return nil }
-	mustAuthorize(t, f.a, user("alice"), route("shop", "web"))
-	mustAuthorize(t, f.a, user("alice"), route("shop", "web"))
-	if spends != 1 {
-		t.Fatalf("SpendCheck called %d times for a miss then a hit, want 1", spends)
+	var spent []string
+	f.a.spend = func(_ *http.Request, reason string, key any) error {
+		spent = append(spent, reason+" "+key.(Attributes).Namespace)
+		return nil
 	}
-	f.a.spend = func(*http.Request) error { return api.ErrCheckLimit }
-	if _, err := f.a.AuthorizeErr(request(user("alice")), route("ops", "web")); !errors.Is(err, api.ErrCheckLimit) {
+	mustAuthorize(t, f.a, user("alice"), route("shop", "web"))
+	mustAuthorize(t, f.a, user("alice"), route("shop", "web"))
+	mustAuthorize(t, f.a, user("alice"), route("ops", "web"))
+	f.clock.Step(f.a.cache.allowTTL)
+	mustAuthorize(t, f.a, user("alice"), route("shop", "web"))
+	f.clock.Step(DenyTTL)
+	mustAuthorize(t, f.a, user("alice"), route("ops", "web"))
+	want := []string{api.MissAbsent + " shop", api.MissAbsent + " ops", api.MissAllowExpired + " shop", api.MissDenyExpired + " ops"}
+	if !slices.Equal(spent, want) {
+		t.Fatalf("spent %v, want %v", spent, want)
+	}
+	f.a.spend = func(*http.Request, string, any) error { return api.ErrCheckLimit }
+	if _, err := f.a.AuthorizeErr(request(user("alice")), route("dev", "web")); !errors.Is(err, api.ErrCheckLimit) {
 		t.Fatalf("error past the limit = %v, want ErrCheckLimit", err)
 	}
-	f.expectSARs(t, 1, "past the limit")
+	f.expectSARs(t, 4, "past the limit")
 }
 
 func TestMetrics(t *testing.T) {
