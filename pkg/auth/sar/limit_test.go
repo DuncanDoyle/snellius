@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	clocktesting "k8s.io/utils/clock/testing"
@@ -16,8 +19,10 @@ import (
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
+	"github.com/DuncanDoyle/snellius/pkg/engine"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/obs"
+	"github.com/DuncanDoyle/snellius/pkg/platform"
 )
 
 // unlimited lifts a global SAR limit in tests whose fake clock never refills the rate.
@@ -564,5 +569,380 @@ func TestFullReadQueuedCancel(t *testing.T) {
 			}
 			settled(t, before)
 		})
+	}
+}
+
+// admissionState returns q's requests admitted and waiting, and the identities waiting.
+func admissionState(q *admission) (admitted, waiting, ids int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.admitted, q.waiters.Len(), len(q.perID)
+}
+
+// The places are the in-flight limit over the per-request parallelism, at least one (D-116).
+func TestAdmissionPlaces(t *testing.T) {
+	for _, c := range []struct{ inFlight, places int }{{0, 4}, {DefaultMaxInFlight, 4}, {64, 8}, {4, 1}} {
+		a := New(Options{Checker: &fakeChecker{}, Kinds: testKinds, MaxInFlight: c.inFlight})
+		if a.admission.max != c.places {
+			t.Errorf("MaxInFlight %d: %d places, want %d", c.inFlight, a.admission.max, c.places)
+		}
+	}
+}
+
+// Requests are admitted oldest first, at most max at once.
+func TestAdmissionFIFO(t *testing.T) {
+	before := runtime.NumGoroutine()
+	q := newAdmission(2)
+	waiting := make(chan struct{}, 3)
+	q.waiting = func() { waiting <- struct{}{} }
+	var held []func()
+	for _, name := range []string{"a", "b"} {
+		release, err := q.admit(context.Background(), hashIdentity(user(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, release)
+	}
+	type admitted struct {
+		i       int
+		release func()
+	}
+	order := make(chan admitted, 3)
+	for i := range 3 {
+		go func() {
+			release, err := q.admit(context.Background(), hashIdentity(user(fmt.Sprintf("w%d", i))))
+			if err != nil {
+				t.Error(err)
+				release = func() {}
+			}
+			order <- admitted{i, release}
+		}()
+		testutil.Recv(t, waiting, fmt.Sprintf("waiter %d to queue", i))
+	}
+	if n, w, _ := admissionState(q); n != 2 || w != 3 {
+		t.Fatalf("%d admitted, %d waiting; want 2, 3", n, w)
+	}
+	next := func(want int) admitted {
+		t.Helper()
+		got := testutil.Recv(t, order, fmt.Sprintf("waiter %d", want))
+		if got.i != want || len(order) != 0 {
+			t.Fatalf("admitted waiter %d (%d more), want %d alone", got.i, len(order), want)
+		}
+		if n, _, _ := admissionState(q); n != 2 {
+			t.Fatalf("%d admitted, want 2", n)
+		}
+		return got
+	}
+	held[0]()
+	w0 := next(0)
+	held[1]()
+	w1 := next(1)
+	w0.release()
+	w0.release()
+	w2 := next(2)
+	w1.release()
+	w2.release()
+	if n, w, ids := admissionState(q); n != 0 || w != 0 || ids != 0 {
+		t.Fatalf("drained: %d admitted, %d waiting, %d identities", n, w, ids)
+	}
+	settled(t, before)
+}
+
+// A cancelled waiter leaves the queue at once and never takes a place.
+func TestAdmissionCancel(t *testing.T) {
+	before := runtime.NumGoroutine()
+	q := newAdmission(1)
+	waiting := make(chan struct{}, 1)
+	q.waiting = func() { waiting <- struct{}{} }
+	held, err := q.admit(context.Background(), hashIdentity(user("holder")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := q.admit(ctx, hashIdentity(user("alice")))
+		done <- err
+	}()
+	testutil.Recv(t, waiting, "alice to queue")
+	cancel()
+	if err := testutil.Recv(t, done, "the cancelled waiter"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled waiter: %v, want context.Canceled", err)
+	}
+	if n, w, ids := admissionState(q); n != 1 || w != 0 || ids != 0 {
+		t.Fatalf("after cancel: %d admitted, %d waiting, %d identities; want 1, 0, 0", n, w, ids)
+	}
+	held()
+	release, err := q.admit(context.Background(), hashIdentity(user("bob")))
+	if err != nil || len(waiting) != 0 {
+		t.Fatalf("after the place came back: %v, waited %v", err, len(waiting) != 0)
+	}
+	release()
+	settled(t, before)
+}
+
+// Waiting requests are bounded per identity and in all: past either bound
+// admit answers ErrOverloaded at once, and the queue drains after.
+func TestAdmissionBounds(t *testing.T) {
+	before := runtime.NumGoroutine()
+	q := newAdmission(1)
+	waiting := make(chan struct{}, maxAdmitWaiting)
+	q.waiting = func() { waiting <- struct{}{} }
+	held, err := q.admit(context.Background(), hashIdentity(user("holder")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	queue := func(name string) {
+		wg.Go(func() {
+			release, err := q.admit(context.Background(), hashIdentity(user(name)))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			release()
+		})
+		testutil.Recv(t, waiting, name+" to queue")
+	}
+	for range maxAdmitPerID {
+		queue("alice")
+	}
+	if _, err := q.admit(context.Background(), hashIdentity(user("alice"))); !errors.Is(err, ErrOverloaded) || !errors.Is(err, ErrCheck) {
+		t.Fatalf("alice's request %d: %v, want ErrOverloaded", maxAdmitPerID+1, err)
+	}
+	for i := range maxAdmitWaiting - maxAdmitPerID {
+		queue(fmt.Sprintf("u%03d", i))
+	}
+	if _, err := q.admit(context.Background(), hashIdentity(user("bob"))); !errors.Is(err, ErrOverloaded) {
+		t.Fatalf("request %d: %v, want ErrOverloaded", maxAdmitWaiting+1, err)
+	}
+	held()
+	wg.Wait()
+	if n, w, ids := admissionState(q); n != 0 || w != 0 || ids != 0 {
+		t.Fatalf("drained: %d admitted, %d waiting, %d identities", n, w, ids)
+	}
+	release, err := q.admit(context.Background(), hashIdentity(user("bob")))
+	if err != nil || len(waiting) != 0 {
+		t.Fatalf("after draining: %v, waited %v", err, len(waiting) != 0)
+	}
+	release()
+	settled(t, before)
+}
+
+// noModel is a ModelSource without a model: the admission tests serve only an extension.
+type noModel struct{}
+
+func (noModel) Current() *engine.Published { return nil }
+func (noModel) Platform() platform.Info    { return platform.Info{} }
+
+// admitFixture is an Authorizer with one admission place over checker, its
+// admission waits signalled on waiting, and the API over it in complete
+// secure mode. Its extension GET /api/ext/admit/{list} authorises route "a"
+// in each comma-separated namespace of list and writes how many it may see;
+// an allowed namespace "panic" panics after the checks.
+func admitFixture(checker Checker, clk *clocktesting.FakeClock, waiting chan<- struct{}, opts ...api.HandlerOption) (*Authorizer, http.Handler) {
+	a := limitedFixture(checker, clk, batchParallel, unlimited, unlimited, nil)
+	a.admission.waiting = func() { waiting <- struct{}{} }
+	ext := api.ExtMount{Name: "admit", Pattern: "GET /{list}", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, panics := 0, false
+		for ns := range strings.SplitSeq(r.PathValue("list"), ",") {
+			if a.Authorize(r, route(ns, "a")) {
+				n++
+				panics = panics || ns == "panic"
+			}
+		}
+		if panics {
+			panic("handler")
+		}
+		api.WriteJSON(w, n)
+	})}
+	opts = append([]api.HandlerOption{api.WithSecureMode(true), api.WithCommitClock(clk.Now), api.WithExtMounts(ext)}, opts...)
+	return a, api.NewHandler(noModel{}, fstest.MapFS{}, a, opts...)
+}
+
+// admitGet is GET /api/ext/admit/{list} on h as id under ctx.
+func admitGet(ctx context.Context, h http.Handler, id oidc.Identity, list string) *httptest.ResponseRecorder {
+	r := httptest.NewRequestWithContext(context.WithValue(ctx, idKey{}, id), http.MethodGet, "/api/ext/admit/"+list, nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
+// A request whose checks are cached never waits. One that needs a SAR waits
+// for a place, in arrival order, and holds it until it is answered (D-116).
+func TestAdmissionAtCommit(t *testing.T) {
+	before := runtime.NumGoroutine()
+	clk := clocktesting.NewFakeClock(t0)
+	waiting := make(chan struct{}, 3)
+	var a *Authorizer
+	var sent atomic.Int32
+	a, h := admitFixture(checkerFunc(func(context.Context, oidc.Identity, Attributes) (bool, error) {
+		sent.Add(1)
+		if n, _, _ := admissionState(a.admission); n != 1 {
+			t.Errorf("a SAR sent with %d requests admitted, want 1", n)
+		}
+		return true, nil
+	}), clk, waiting)
+	ok := func(w *httptest.ResponseRecorder, who string) {
+		t.Helper()
+		if w.Code != http.StatusOK || w.Body.String() != "1\n" {
+			t.Errorf("%s: %d %q", who, w.Code, w.Body.String())
+		}
+	}
+	ok(admitGet(context.Background(), h, user("alice"), "shop"), "alice cold")
+	held, err := a.Admit(request(user("holder")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := sent.Load()
+	ok(admitGet(context.Background(), h, user("alice"), "shop"), "alice warm")
+	if len(waiting) != 0 || sent.Load() != n {
+		t.Fatalf("a cached request waited (%v) or sent %d SARs", len(waiting) != 0, sent.Load()-n)
+	}
+	type answer struct {
+		who string
+		w   *httptest.ResponseRecorder
+	}
+	done := make(chan answer, 3)
+	for _, who := range []string{"bob", "carol", "dave"} {
+		go func() { done <- answer{who, admitGet(context.Background(), h, user(who), "shop")} }()
+		testutil.Recv(t, waiting, who+" to queue")
+	}
+	if n, w, _ := admissionState(a.admission); n != 1 || w != 3 {
+		t.Fatalf("%d admitted, %d waiting; want 1, 3", n, w)
+	}
+	held()
+	for _, who := range []string{"bob", "carol", "dave"} {
+		got := testutil.Recv(t, done, who+"'s answer")
+		if got.who != who {
+			t.Fatalf("%s answered before %s", got.who, who)
+		}
+		ok(got.w, who)
+	}
+	if n, w, ids := admissionState(a.admission); n != 0 || w != 0 || ids != 0 {
+		t.Fatalf("after the answers: %d admitted, %d waiting, %d identities", n, w, ids)
+	}
+	settled(t, before)
+}
+
+// Every way out of a request gives its place back: a SAR error, a handler
+// panic, a cancelled wait; a full queue answers 503 at once (D-116).
+func TestAdmissionReleased(t *testing.T) {
+	before := runtime.NumGoroutine()
+	clk := clocktesting.NewFakeClock(t0)
+	waiting := make(chan struct{}, maxAdmitPerID)
+	var mu sync.Mutex
+	var reasons []string
+	a, h := admitFixture(checkerFunc(func(_ context.Context, _ oidc.Identity, at Attributes) (bool, error) {
+		if at.Namespace == "error" {
+			return false, checkError(categoryRequest)
+		}
+		return true, nil
+	}), clk, waiting, api.WithAuthzAudit(func(_ *http.Request, why string) {
+		mu.Lock()
+		defer mu.Unlock()
+		reasons = append(reasons, why)
+	}))
+	free := func(when string, admitted int) {
+		t.Helper()
+		if n, w, ids := admissionState(a.admission); n != admitted || w != 0 || ids != 0 {
+			t.Fatalf("%s: %d admitted, %d waiting, %d identities; want %d, 0, 0", when, n, w, ids, admitted)
+		}
+	}
+	if w := admitGet(context.Background(), h, user("alice"), "error"); w.Code != http.StatusServiceUnavailable {
+		t.Errorf("SAR error: %d", w.Code)
+	}
+	free("after a SAR error", 0)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("the handler's panic did not reach the caller")
+			}
+		}()
+		admitGet(context.Background(), h, user("alice"), "panic")
+	}()
+	free("after a panic", 0)
+
+	held, err := a.Admit(request(user("holder")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	codes := make(chan int, maxAdmitPerID)
+	go func() { codes <- admitGet(ctx, h, user("bob"), "shop").Code }()
+	testutil.Recv(t, waiting, "bob to queue")
+	cancel()
+	if code := testutil.Recv(t, codes, "bob's answer"); code != http.StatusServiceUnavailable {
+		t.Errorf("cancelled wait: %d", code)
+	}
+	free("after a cancelled wait", 1)
+
+	ctx, cancel = context.WithCancel(context.Background())
+	for i := range maxAdmitPerID {
+		go func() { codes <- admitGet(ctx, h, user("carol"), fmt.Sprintf("ns%d", i)).Code }()
+		testutil.Recv(t, waiting, "carol to queue")
+	}
+	mu.Lock()
+	reasons = nil
+	mu.Unlock()
+	if w := admitGet(context.Background(), h, user("carol"), "more"); w.Code != http.StatusServiceUnavailable {
+		t.Errorf("full queue: %d", w.Code)
+	}
+	mu.Lock()
+	if len(reasons) != 1 || reasons[0] != api.AuditCheckFailed {
+		t.Errorf("full queue audited %v, want check-failed", reasons)
+	}
+	mu.Unlock()
+	cancel()
+	for range maxAdmitPerID {
+		if code := testutil.Recv(t, codes, "carol's answers"); code != http.StatusServiceUnavailable {
+			t.Errorf("cancelled wait: %d", code)
+		}
+	}
+	held()
+	free("after the queue drained", 0)
+	settled(t, before)
+}
+
+// An allow read before the wait for admission, which expires during it and is
+// revoked, is asked again by the admitted build: the response hides its route.
+func TestAdmissionExpiredWhileWaiting(t *testing.T) {
+	clk := clocktesting.NewFakeClock(t0)
+	waiting := make(chan struct{}, 1)
+	var mu sync.Mutex
+	revoked := false
+	c := &fakeChecker{decide: func(_ oidc.Identity, at Attributes) (bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return !revoked || at.Namespace != "shop", nil
+	}}
+	a, h := admitFixture(c, clk, waiting)
+	if w := admitGet(context.Background(), h, user("alice"), "shop"); w.Body.String() != "1\n" {
+		t.Fatalf("before: %d %q", w.Code, w.Body.String())
+	}
+	held, err := a.Admit(request(user("holder")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- admitGet(context.Background(), h, user("alice"), "shop,blog") }()
+	// The first build read shop's cached allow, then needed blog.
+	testutil.Recv(t, waiting, "alice to queue")
+	clk.Step(DefaultAllowTTL)
+	mu.Lock()
+	revoked = true
+	mu.Unlock()
+	held()
+	if w := testutil.Recv(t, done, "alice's answer"); w.Code != http.StatusOK || w.Body.String() != "1\n" {
+		t.Errorf("after the wait: %d %q, want blog alone", w.Code, w.Body.String())
+	}
+	n := 0
+	for _, x := range c.calls {
+		if x.a == listAt("shop") {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("list in shop sent %d times, want again after the wait", n)
 	}
 }

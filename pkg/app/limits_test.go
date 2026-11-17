@@ -41,20 +41,21 @@ func TestCheckLimitCountedAndLogged(t *testing.T) {
 	kube.PrependReactor("create", "subjectaccessreviews", func(clienttesting.Action) (bool, runtime.Object, error) {
 		return true, &authzv1.SubjectAccessReview{Status: authzv1.SubjectAccessReviewStatus{Allowed: true}}, nil
 	})
-	// flood spends one check past the cap on a hidden route per request; ?end=1 signs out first.
+	// flood spends one check past the cap on a hidden route per request; ?end=1
+	// signs out after the first check, once the request is admitted (D-116).
 	var (
 		a   *App
 		err error
 	)
 	flood := extension.WithHandlers("flood", func(r extension.Router, _ extension.Deps) {
 		r.Handle("GET /n", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Query().Get("end") != "" {
-				call(a, "POST", "/auth/logout", r.Cookies(), map[string]string{"Origin": "https://s.example.com"})
-			}
-			for range api.CheckLimit + 1 {
+			for i := range api.CheckLimit + 1 {
 				if err := api.SpendCheck(r); err != nil {
 					api.ReportAuthzError(r, err)
 					break
+				}
+				if i == 0 && r.URL.Query().Get("end") != "" {
+					call(a, "POST", "/auth/logout", r.Cookies(), map[string]string{"Origin": "https://s.example.com"})
 				}
 			}
 			api.WriteJSON(w, "shop/web")

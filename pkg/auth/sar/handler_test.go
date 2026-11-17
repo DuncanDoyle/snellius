@@ -494,8 +494,9 @@ func TestNamedOnlyDoesNotProbeFullRead(t *testing.T) {
 	}
 }
 
-// /routes asks the full read once per request; its cached "false" sends no
-// cluster-wide list on the next request.
+// /routes asks the full read once per build: a cold request twice, in the
+// build that waits for admission and in the admitted one (D-116). Its cached
+// "false" sends no cluster-wide list on the next request, which builds once.
 func TestListProbesFullReadOnce(t *testing.T) {
 	src, base := world(t)
 	c := &checker{decide: grant(nil)}
@@ -511,15 +512,15 @@ func TestListProbesFullReadOnce(t *testing.T) {
 		return n
 	}
 	routeNames(t, srv, "team", base)
-	if n := a.count(); n != 1 {
-		t.Fatalf("one /routes request asked the full read %d times", n)
+	if n := a.count(); n != 2 {
+		t.Fatalf("one cold /routes request asked the full read %d times, want once per build", n)
 	}
 	first := clusterLists()
 	if first == 0 {
 		t.Fatal("no cluster-wide list for the full read")
 	}
 	routeNames(t, srv, "team", base)
-	if n, lists := a.count(), clusterLists(); n != 2 || lists != first {
+	if n, lists := a.count(), clusterLists(); n != 3 || lists != first {
 		t.Errorf("second request: %d full reads, %d cluster-wide lists (first %d)", n, lists, first)
 	}
 }

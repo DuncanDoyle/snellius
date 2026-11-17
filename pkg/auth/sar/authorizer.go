@@ -79,6 +79,8 @@ type Authorizer struct {
 	clock        clock.WithTicker
 	cache        *cache
 	full         *fullCache
+	// admission admits the requests that need uncached SARs (D-116).
+	admission *admission
 	// parallel bounds the SARs of one full-read evaluation; tests lower it.
 	parallel int
 	// spend, report and note are api.SpendCheck, api.ReportAuthzError and api.NoteAllow; tests swap them.
@@ -97,6 +99,7 @@ var (
 	_ api.FullReader      = (*Authorizer)(nil)
 	_ api.BatchAuthorizer = (*Authorizer)(nil)
 	_ api.ListScanner     = (*Authorizer)(nil)
+	_ api.Admitter        = (*Authorizer)(nil)
 )
 
 // New returns an Authorizer; call Run to sweep its cache.
@@ -118,6 +121,8 @@ func New(o Options) *Authorizer {
 	o.Burst = cmp.Or(o.Burst, DefaultBurst)
 	lim := newLimiter(o.Clock, o.MaxInFlight, o.Rate, o.Burst)
 	c := newCache(o.Checker, lim, o.Clock, o.AllowTTL, o.MaxBytes, newMetrics(o.Metrics))
+	// Admitted requests, batchParallel SARs each, can fill every permit (D-116).
+	places := o.MaxInFlight / batchParallel
 	return &Authorizer{
 		kinds:        o.Kinds,
 		namedGetScan: o.NamedGetScan,
@@ -125,11 +130,23 @@ func New(o Options) *Authorizer {
 		clock:        o.Clock,
 		cache:        c,
 		full:         &fullCache{c: c},
+		admission:    newAdmission(places),
 		parallel:     fullReadParallel,
 		spend:        api.SpendCheck,
 		report:       api.ReportAuthzError,
 		note:         api.NoteAllow,
 	}
+}
+
+// Admit implements api.Admitter: it waits under r's context for one of the
+// MaxInFlight / 8 admission places, in arrival order (D-116). Too many
+// requests waiting, in all or of r's identity, is ErrOverloaded.
+func (a *Authorizer) Admit(r *http.Request) (func(), error) {
+	id, ok := a.identityFrom(r.Context())
+	if !ok {
+		return nil, ErrNoIdentity
+	}
+	return a.admission.admit(r.Context(), hashIdentity(id))
 }
 
 // Run sweeps expired decisions every minute until ctx ends.

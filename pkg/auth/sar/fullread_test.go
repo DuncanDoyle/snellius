@@ -13,6 +13,8 @@ import (
 
 	clocktesting "k8s.io/utils/clock/testing"
 
+	"github.com/DuncanDoyle/snellius/internal/testutil"
+	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/obs"
 )
@@ -462,4 +464,51 @@ func TestFullReadMergedWaiterExpiry(t *testing.T) {
 			t.Fatalf("owner got %+v, want the decision from before expiry or the error", owner)
 		}
 	})
+}
+
+// notAdmittedKey marks a request that is not yet admitted (D-116).
+type notAdmittedKey struct{}
+
+// A full read led by a request not yet admitted fails for it alone: an
+// admitted waiter on the same evaluation leads its own (D-116).
+func TestFullReadLeaderNotAdmitted(t *testing.T) {
+	f, _ := newFullFixture(3, func(oidc.Identity, Attributes) (bool, error) { return true, nil })
+	refusing, joined, gate := make(chan struct{}, 3), make(chan struct{}, 1), make(chan struct{})
+	f.a.full.joined = func() { joined <- struct{}{} }
+	f.a.spend = func(r *http.Request) error {
+		if r.Context().Value(notAdmittedKey{}) == nil {
+			return nil
+		}
+		return api.ErrNotAdmitted
+	}
+	// The leader's evaluation stops on the refusal and waits there for the waiter.
+	f.a.fullStopped = func() {
+		refusing <- struct{}{}
+		<-gate
+	}
+	probe := request(user("alice"))
+	probe = probe.WithContext(context.WithValue(probe.Context(), notAdmittedKey{}, true))
+	leader := make(chan error, 1)
+	go func() {
+		_, err := f.a.FullRead(probe)
+		leader <- err
+	}()
+	testutil.Recv(t, refusing, "the leader's first check")
+	waiter := make(chan error, 1)
+	go func() {
+		ok, err := f.a.FullRead(request(user("alice")))
+		if err == nil && !ok {
+			err = errors.New("false")
+		}
+		waiter <- err
+	}()
+	testutil.Recv(t, joined, "the admitted request to join")
+	close(gate)
+	if err := testutil.Recv(t, leader, "the leader"); !errors.Is(err, api.ErrNotAdmitted) {
+		t.Fatalf("leader: %v, want ErrNotAdmitted", err)
+	}
+	if err := testutil.Recv(t, waiter, "the waiter"); err != nil {
+		t.Fatalf("waiter: %v, want true", err)
+	}
+	f.expectSARs(t, 3, "one evaluation, by the waiter")
 }

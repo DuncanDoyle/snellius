@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 )
 
@@ -77,7 +78,8 @@ func (fc *fullCache) get(ctx context.Context, k fullKey, eval func() (decision, 
 }
 
 // fly runs eval for f and completes f even when eval panics. An evaluation
-// that fails after the leader's ctx ended lets a waiter retry.
+// that fails after the leader's ctx ended, or because its request was not yet
+// admitted (D-116), lets a waiter retry.
 func (fc *fullCache) fly(ctx context.Context, f *flight, k fullKey, eval func() (decision, error)) (decision, error) {
 	c := fc.c
 	ran := false
@@ -94,7 +96,7 @@ func (fc *fullCache) fly(ctx context.Context, f *flight, k fullKey, eval func() 
 		close(f.done)
 	}()
 	f.d, f.err = eval()
-	f.retry = f.err != nil && ctx.Err() != nil
+	f.retry = f.err != nil && (ctx.Err() != nil || errors.Is(f.err, api.ErrNotAdmitted))
 	ran = true
 	return f.d, f.err
 }

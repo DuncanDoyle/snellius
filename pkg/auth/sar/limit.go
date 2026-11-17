@@ -148,3 +148,101 @@ func (l *limiter) releaseLocked() {
 	}
 	l.inFlight--
 }
+
+// Bounds on requests waiting for admission (D-116); one more is ErrOverloaded.
+const (
+	// maxAdmitWaiting is the most requests waiting in all: the load bench's 50 cold viewers twice over,
+	// and about ten minutes of 500-SAR pages at the default rate.
+	maxAdmitWaiting = 128
+	// maxAdmitPerID is the most requests of one identity waiting: a page's parallel calls in a few tabs.
+	maxAdmitPerID = 8
+)
+
+// admission admits requests that need uncached SARs: at most max at once,
+// oldest first, with the waiting requests bounded in all and per identity (D-116).
+type admission struct {
+	mu       sync.Mutex
+	max      int
+	admitted int
+	// waiters are the requests waiting, oldest first; release hands one a place by closing its ch.
+	waiters *list.List
+	perID   map[idHash]int
+
+	// waiting is a test hook, nil in production: a request started waiting.
+	waiting func()
+}
+
+// admitWaiter is one waiting request and its identity.
+type admitWaiter struct {
+	ch chan struct{}
+	id idHash
+}
+
+func newAdmission(places int) *admission {
+	return &admission{max: max(places, 1), waiters: list.New(), perID: map[idHash]int{}}
+}
+
+// admit waits under ctx for a place for identity h and returns its release.
+// A ctx that ends first leaves the queue at once; a full queue admits nothing.
+func (q *admission) admit(ctx context.Context, h idHash) (release func(), err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	q.mu.Lock()
+	if q.admitted < q.max && q.waiters.Len() == 0 {
+		q.admitted++
+		q.mu.Unlock()
+		return sync.OnceFunc(q.release), nil
+	}
+	if q.waiters.Len() >= maxAdmitWaiting || q.perID[h] >= maxAdmitPerID {
+		q.mu.Unlock()
+		return nil, ErrOverloaded
+	}
+	w := &admitWaiter{ch: make(chan struct{}), id: h}
+	el := q.waiters.PushBack(w)
+	q.perID[h]++
+	q.mu.Unlock()
+	if q.waiting != nil {
+		q.waiting()
+	}
+	select {
+	case <-w.ch:
+		return sync.OnceFunc(q.release), nil
+	case <-ctx.Done():
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	select {
+	case <-w.ch:
+		// Admitted as ctx ended: pass the place on.
+		q.releaseLocked()
+	default:
+		q.waiters.Remove(el)
+		q.left(h)
+	}
+	return nil, ctx.Err()
+}
+
+func (q *admission) release() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.releaseLocked()
+}
+
+// releaseLocked hands a place to the oldest waiter, else returns it.
+func (q *admission) releaseLocked() {
+	if el := q.waiters.Front(); el != nil {
+		w := q.waiters.Remove(el).(*admitWaiter)
+		q.left(w.id)
+		close(w.ch)
+		return
+	}
+	q.admitted--
+}
+
+// left counts a waiter of identity h out of the queue.
+func (q *admission) left(h idHash) {
+	if q.perID[h]--; q.perID[h] == 0 {
+		delete(q.perID, h)
+	}
+}
