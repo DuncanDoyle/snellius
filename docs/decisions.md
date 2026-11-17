@@ -1682,9 +1682,9 @@ Measured on the reference machine, 5 runs per world:
 
 **Decision:**
 1. A request that needs at least one uncached check waits for admission. Requests are admitted in arrival order, at most K at a time; K is the in-flight limit divided by the per-request parallelism (32 ÷ 8 = 4 by default), so admitted requests can fill every permit. No new setting.
-2. A request whose checks are all cached is never queued.
-3. An admitted request keeps its admission until its response is committed: full read, dependency rounds and a rebuild at commit. Answers read before the wait are not relied on; validity at commit (item 4) is unchanged.
-4. Waiting requests are bounded globally and per viewer; above either bound the answer is `503 overloaded`, as for the 1,024-waiter backstop, which stays. A cancelled request leaves the queue at once.
+2. A request whose checks are all cached is never queued. Neither is a request that joins a full-read evaluation another request is already running: it sends no checks of its own.
+3. An admitted request keeps its admission until its response is final: full read, dependency rounds and the one rebuild at commit, which admission does not reset. Writing the response to the client happens after release, so a slow client holds no place. Answers read before the wait are not relied on; validity at commit (item 4) is unchanged. A GET or HEAD is first built without admission, and that build is discarded if it needs an uncached check; any other method is admitted before its first build, so it is never built twice for admission.
+4. Waiting requests are bounded globally and per viewer; above either bound the answer is the same as for the 1,024-waiter backstop, which stays: `503 authz-unavailable`, audited `check-failed`. A cancelled request leaves the queue at once.
 5. Unchanged: both TTLs, the 1,000-check cap per request across rebuilds, 32 in flight, the rate and burst.
 
-**Consequences:** Under a cold storm, page loads finish one after another instead of all failing: the last of 50 cold viewers waits about their total checks ÷ the rate. A poll that needs a refresh (its allows are older than 60 s) queues behind cold loads and is slower meanwhile, but answers. Sustained demand above the rate still sheds load with `503 overloaded`.
+**Consequences:** Under a cold storm, page loads finish one after another instead of all failing: the last of 50 cold viewers waits about their total checks ÷ the rate. A poll that needs a refresh (its allows are older than 60 s) queues behind cold loads and is slower meanwhile, but answers. Sustained demand above the rate still sheds load with `503 authz-unavailable`. Items 2–4 were made precise after the implementation review (`phases/phase-7/reviews/7.5-d116-codex.md`).
