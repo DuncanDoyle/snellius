@@ -64,6 +64,8 @@ const (
 	routeReader    = "route-reader"
 	// nsReader is restricted plus the Namespaces, so a root in ns-000 is readable.
 	nsReader = "ns-reader"
+	// crdGetter is restricted plus get on the Gateway CRD.
+	crdGetter = "crd-getter"
 	// nobodyUser may read nothing; metaUser+"dcn" reads the controller Deployment, GatewayClasses and Namespaces.
 	nobodyUser = "nobody"
 	metaUser   = "meta-"
@@ -784,6 +786,9 @@ func (ruleChecker) Check(_ context.Context, id oidc.Identity, a sar.Attributes) 
 	if id.Username == fullUser || id.Username == routeReader && strings.HasSuffix(a.Resource, "routes") {
 		return true, nil
 	}
+	if id.Username == crdGetter && a.Verb == "get" && a.Resource == "customresourcedefinitions" && a.Name == "gateways."+objects.GatewayAPIGroup {
+		return true, nil
+	}
 	if id.Username == nsReader && a.Resource == "namespaces" {
 		return true, nil
 	}
@@ -1456,6 +1461,27 @@ func TestRuleExtraWorldsUnchanged(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRuleCRDGetterSeesCRDFields: a viewer without the full read who may get
+// the Gateway CRD sees the rejected ListenerSet's CRD fields; the restricted viewer does not.
+func TestRuleCRDGetterSeesCRDFields(t *testing.T) {
+	w := extraWorlds[slices.IndexFunc(extraWorlds, func(w extraWorld) bool { return w.name == "rejected ListenerSet" })]
+	srv := w.pairs(t)[0].before
+	path := ruleBase + "/listenersets/" + objects.GatewayAPIGroup + "/ListenerSet/" + ns0 + "/" + lsRejected
+	al := func(user string) api.AllowedListenersDTO {
+		d := decode[api.ListenerSetDetail](t, srv, user, path)
+		if d.ParentAllowedListeners == nil {
+			t.Fatalf("%s: no parentAllowedListeners", user)
+		}
+		return *d.ParentAllowedListeners
+	}
+	if got := al(crdGetter); got.CRDBundleVersion != "v1.4.0" || got.CRDChannel != "standard" || got.CRDField != "missing" {
+		t.Errorf("CRD getter's fields %+v, want the Gateway CRD's", got)
+	}
+	if got := al(restrictedUser); got.CRDBundleVersion != "" || got.CRDChannel != "" || got.CRDField != "" {
+		t.Errorf("restricted viewer's fields %+v, want none", got)
 	}
 }
 
