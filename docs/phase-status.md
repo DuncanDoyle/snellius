@@ -14,7 +14,7 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 - [x] 7.2 Identity and sessions — closed 2026-11-15, phases/phase-7/phase-7.2-complete.md (kind-secure green on PR #50 after D-097)
 - [x] 7.3 Authoriser — closed 2026-11-16, phases/phase-7/phase-7.3-complete.md (D-099, D-100, D-101)
 - [x] 7.4 Visibility everywhere — closed 2026-11-17, phases/phase-7/phase-7.4-complete.md (D-102 to D-115; #52, #53)
-- [ ] 7.5 Two signals (gate opens) ← NEXT; first item: the P2 load cliff on /paths and /backends (7.4 complete, Deferred); also the P3 engine cost of D-115
+- [ ] 7.5 Two signals (gate opens) ← CURRENT; brief phases/phase-7/phase-7.5-brief.md
 - [ ] 7.6 Audit, docs, release
 - [-] 7.7 Claim-mapping fallback — dropped (D-098); see #51
 
@@ -28,11 +28,28 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 - [ ] phase-7-complete.md written, roadmap updated, tracked items closed
 
 ## Sub-phase
-Sub-phase: none (7.4 closed 2026-11-17; 7.5 not started)
+Sub-phase: 7.5 — Two signals (the gate opens)
+Kind: planned
+Base: 40932fdc626d9a2f5876bfecb9cf59a4fbb9a493
+Brief: docs/phases/phase-7/phase-7.5-brief.md
+
+### Allowed work
+Features within the approved design (§8, §2 gate); the load fix and D-115 follow-up carried from 7.4.
+
+### Not allowed
+Design changes without a decisions.md entry and user approval; 7.6 work (audit levels, release docs).
+
+### Queue
+- [ ] Load: every cold viewer gets answers on /routes, /paths, /backends under the load bench (P2, 7.4 Deferred) ← CURRENT
+- [ ] `pkg/explore`: `config`, `path`, `path.incomplete`, legacy `health`, `path-incomplete` (plan 7.5 item 1)
+- [ ] API: route list and detail, Gateway and ListenerSet route tables, `config=` and `path=` filters (item 2)
+- [ ] Web: columns, header badges, problem strip, map nodes, wording (item 3)
+- [ ] D-115 follow-up: shared route walk in `own` (P3)
+- [ ] Open the gate, rule tests on the new fields (item 4)
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md
-Waiting on: nothing (program file read 2026-11-14; no edge feeds Phase 7). Program file updated for the D-084 renumbering and the new edge E10 (kgwctl local MCP, D-089): kgateway-tooling `6612f3d`. Open `cross-repo` issues here: #15, #21 (Phase 12). Phase 7 ships as `v0.8.0` (user, 2026-11-14).
+Waiting on: nothing (program file read 2026-11-14, unchanged at 7.5 start 2026-11-17; no edge feeds Phase 7). Program file updated for the D-084 renumbering and the new edge E10 (kgwctl local MCP, D-089): kgateway-tooling `6612f3d`. Open `cross-repo` issues here: #15, #21 (Phase 12). Phase 7 ships as `v0.8.0` (user, 2026-11-14).
 Consumers: E2 (kgwctl Phase 1), E3 and E8 (kgwctl Phases 5 and 2): delivered in `v0.3.0` (2026-11-05, kgwctl#3), updated in `v0.4.0` (kgwctl#4), `v0.5.0` (module `github.com/DuncanDoyle/snellius`, kgwctl#5), `v0.6.0` (2026-11-09, generic core, kgwctl#7; E8 break, kgwctl#6) and `v0.7.0` (2026-11-12): kgwctl's E2 requests #18 (`cache.ListOnce`) and #19 (namespace-scoped inputs) shipped and closed; notified kgwctl#8, program file updated (kgateway-tooling `fd99830`). E7 (kgwctl Phase 6, policy model under `pkg/`) is UI Phase 8 (was 7 before D-084; program file not yet updated). An informational kgwctl compile job reports on every PR, never blocks.
 Open `cross-repo` issues (2026-11-13): here #15, #21 (xdsview E4/E5, for Phase 12); in kgwctl #1–#8 (notices from xdsview and this repo, consumer side).
 Provided to this repo: E4 and E5 from xdsview `v0.3.0` (renamed from krp; #15, #21) are for UI Phase 12 (was 11 before D-084).
