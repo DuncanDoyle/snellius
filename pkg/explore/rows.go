@@ -1150,6 +1150,7 @@ func (b *builder) refScopes(ix *Index, n *interner) {
 	if wild.Known && wild.Value == "" {
 		wild.Value = install.WildcardAll // an empty value means all, as the selector reads it
 	}
+	ix.wild, ix.byLabels = wild, res.Scope.Mode == install.ScopeSelectors
 	scope := func(as objects.DelegationRef) DepSet {
 		switch as.Mode {
 		case objects.DelegationName:

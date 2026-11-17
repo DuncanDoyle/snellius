@@ -1189,12 +1189,12 @@ func TestFlagDropped(t *testing.T) {
 	}
 	// With chains it comes from readable chains alone: k1 is dropped under a
 	// through the Namespace and rejected under b, whose root reads it.
-	all := func(objects.Ref) bool { return true }
+	all, listAll := func(objects.Ref) bool { return true }, func(objects.GroupKind, string) bool { return true }
 	for _, tc := range []struct {
 		visible func(objects.Ref) bool
 		want    bool
 	}{{all, true}, {noNS, false}, {func(r objects.Ref) bool { return r != dA && r != dB }, false}, {noA, true}} {
-		if got := ix.rowFlags(id1, tc.visible, ix.Chains(tc.visible))&FlagDropped != 0; got != tc.want {
+		if got := ix.rowFlags(id1, tc.visible, ix.Chains(tc.visible, listAll))&FlagDropped != 0; got != tc.want {
 			t.Errorf("chains: k1 dropped %v, want %v", got, tc.want)
 		}
 	}
@@ -1273,6 +1273,36 @@ func TestRefScopeEmptyWildcardIsAll(t *testing.T) {
 	for _, r := range ix.Routes {
 		if isHTTPRoute(r.Ref.Group, r.Ref.Kind) && r.Ref.Namespace == "shop" && !slices.ContainsFunc(scope, func(i int32) bool { return ix.Ref(i) == r.Ref }) {
 			t.Errorf("%s missing from the label scope", r.Ref)
+		}
+	}
+}
+
+// A label ref over every namespace is readable with a cluster-wide HTTPRoute
+// list, plus Namespaces when the install's scope picks namespaces by label (D-110).
+func TestSelectionAllAsksClusterList(t *testing.T) {
+	for _, byLabels := range []bool{false, true} {
+		in := delegWorld().input(t)
+		in.Install.Settings.WildcardNamespace = install.Setting{Value: "", Known: true}
+		in.Install.Scope = install.Scope{Mode: install.ScopeAll}
+		if byLabels {
+			in.Install.Scope = install.Scope{Mode: install.ScopeSelectors, Selectors: []metav1.LabelSelector{{}}}
+		}
+		v := delegViews()
+		v.Delegation.Rows[0].RefAsWritten = objects.DelegationRef{Mode: objects.DelegationLabel, Namespace: install.WildcardAll, Label: "team"}
+		in.Computed = v
+		ix := Build(in)
+		var asked []string
+		list := func(gk objects.GroupKind, ns string) bool {
+			asked = append(asked, gk.Kind+"/"+ns)
+			return gk.Kind == "HTTPRoute"
+		}
+		hidden := ix.Chains(func(objects.Ref) bool { return true }, list).SelectionHidden(RefKey{dA, 0, 0})
+		want := []string{"HTTPRoute/"}
+		if byLabels {
+			want = append(want, "Namespace/")
+		}
+		if hidden != byLabels || !slices.Equal(asked, want) {
+			t.Errorf("byLabels %v: hidden %v, asked %v; want hidden %v, asked %v", byLabels, hidden, asked, byLabels, want)
 		}
 	}
 }

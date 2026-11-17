@@ -1024,6 +1024,11 @@ var ruleSurfaces = []ruleSurface{
 	{name: "delegation (sibling root)", path: routePath(ns0, sibRoot, "/delegation"), changes: []string{"siblingCreated", "siblingCreatedFits"}},
 	{name: "route detail (sibling root)", path: routePath(ns0, sibRoot, ""), changes: []string{"siblingCreated", "siblingCreatedFits"}},
 	{name: "route detail (sibling child)", path: routePath(ns0, sibChild, ""), changes: []string{}},
+	// Readable roots whose first ref selects from selNS, which holds no route before.
+	{name: "delegation (scope root)", path: routePath(ns0, scopeRoot, "/delegation"), changes: []string{"scopeFirstFits", "scopeFirstDrops"}},
+	{name: "route detail (scope root)", path: routePath(ns0, scopeRoot, ""), changes: []string{"scopeFirstFits", "scopeFirstDrops"}},
+	{name: "delegation (label root)", path: routePath(ns0, labelRoot, "/delegation"), changes: []string{"labelFirst"}},
+	{name: "route detail (label root)", path: routePath(ns0, labelRoot, ""), changes: []string{"labelFirst"}},
 	// A readable chain to shared-mid that a hidden root on gw0 may also reach.
 	{name: "delegation (shared mid)", path: routePath(ns0, sharedMid, "/delegation"), changes: []string{"hiddenSelectsFits", "hiddenSharedNarrows"}},
 	{name: "route detail (shared mid)", path: routePath(ns0, sharedMid, ""), changes: []string{"hiddenSelects", "hiddenSelectsFits", "hiddenSharedNarrows"}},
@@ -1370,6 +1375,59 @@ var extraWorlds = []extraWorld{
 	{name: "hidden root selects", add: func(s ruleSnap) { s.add(sharedRoutes()...) }, changes: selectChanges, user: nsReader},
 	{name: "hidden root shares", add: func(s ruleSnap) { s.add(sharedRoutes()...); hiddenSelect(s, chainMatch(sharedRoot)) },
 		changes: []ruleChange{{name: "hiddenSharedNarrows", apply: func(s ruleSnap) { hiddenSelect(s, chainMatch(sharedRoot, sharedMid)) }}}, user: nsReader},
+	{name: "scope selections", add: scopeRoutes, changes: scopeChanges, user: nsReader},
+}
+
+// scopeRoot's one rule selects every route of selNS, then scopeChild;
+// labelRoot's the routes of selNS labelled scopeLabel, then labelChild;
+// openRoot's every route of ns-001, which the viewers read, then openChild.
+const (
+	scopeRoot  = "scope-root"
+	scopeChild = "scope-child"
+	labelRoot  = "label-root"
+	labelChild = "label-child"
+	scopeLabel = "scope-team"
+	openRoot   = "open-root"
+	openChild  = "open-child"
+	// selNS holds no route in the base world; the restricted viewers cannot read it.
+	selNS = "ns-scope"
+)
+
+// scopeRoutes adds selNS and the three roots on gw0's listener l0, each with its readable child.
+func scopeRoutes(s ruleSnap) {
+	s.Namespaces = append(s.Namespaces, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: selNS}})
+	l0 := gw0()[0]
+	l0.SectionName = "l0"
+	root := func(name, childName string, first map[string]any) []*unstructured.Unstructured {
+		u := delegating(ns0, name, []objects.ParentRef{l0}, ns0, childName)
+		rule := u.Object["spec"].(map[string]any)["rules"].([]any)[0].(map[string]any)
+		rule["backendRefs"] = append([]any{first}, rule["backendRefs"].([]any)...)
+		return []*unstructured.Unstructured{u, child(ns0, childName, testutil.HTTPRouteRef(ns0, name))}
+	}
+	s.add(root(scopeRoot, scopeChild, map[string]any{"group": objects.GatewayAPIGroup, "kind": "HTTPRoute", "name": "*", "namespace": selNS})...)
+	s.add(root(labelRoot, labelChild, map[string]any{"group": "delegation.kgateway.dev", "kind": "label", "name": scopeLabel, "namespace": selNS})...)
+	s.add(root(openRoot, openChild, map[string]any{"group": objects.GatewayAPIGroup, "kind": "HTTPRoute", "name": "*", "namespace": testutil.ScaleNamespace(1)})...)
+}
+
+// scopeChanges each create selNS's first route.
+var scopeChanges = []ruleChange{
+	// An unlabelled child of scopeRoot that fits: labelRoot's scope holds it, though it does not match.
+	{name: "scopeFirstFits", apply: func(s ruleSnap) { s.add(child(selNS, "scope-first", testutil.HTTPRouteRef(ns0, scopeRoot))) }},
+	// The same with a match that does not fit.
+	{name: "scopeFirstDrops", apply: func(s ruleSnap) {
+		u := child(selNS, "scope-first", testutil.HTTPRouteRef(ns0, scopeRoot))
+		u.Object["spec"].(map[string]any)["rules"].([]any)[0].(map[string]any)["matches"] = []any{
+			map[string]any{"path": map[string]any{"type": "PathPrefix", "value": "/elsewhere"}}}
+		s.add(u)
+	}},
+	// A child of labelRoot with its label.
+	{name: "labelFirst", apply: func(s ruleSnap) {
+		u := child(selNS, "label-first", testutil.HTTPRouteRef(ns0, labelRoot))
+		u.SetLabels(map[string]string{objects.DelegationLabelKey: scopeLabel})
+		s.add(u)
+	}},
+	// A route on hidden-gw that neither root selects.
+	{name: "scopeUnrelated", apply: func(s ruleSnap) { s.add(routeTo(selNS, "scope-unrelated", hiddenGW("hidden-gw"), "", "", true)) }},
 }
 
 // sibRoot's one rule delegates to sibChild, then to sibHidden in hiddenNS;
@@ -1557,6 +1615,31 @@ func TestRuleReadableChainShown(t *testing.T) {
 	}
 	if !slices.Contains(names, sharedDropped) {
 		t.Errorf("namespace reader's dropped routes %v, want %s", names, sharedDropped)
+	}
+}
+
+// TestRuleSelectionByListPermission: the namespace reader sees a later ref's
+// readable child only when it may list the HTTPRoutes an earlier selection
+// reads; the full viewer sees both children.
+func TestRuleSelectionByListPermission(t *testing.T) {
+	w := extraWorlds[slices.IndexFunc(extraWorlds, func(w extraWorld) bool { return w.name == "scope selections" })]
+	srv := w.pairs(t)[0].before
+	shows := func(user, root, childName string) bool {
+		path := ruleBase + "/routes/" + objects.GatewayAPIGroup + "/HTTPRoute/" + ns0 + "/" + root + "/delegation?limit=200"
+		return slices.ContainsFunc(decode[api.Page[api.DelegationRow]](t, srv, user, path).Items, func(r api.DelegationRow) bool {
+			return r.Child != nil && r.Child.Name == childName
+		})
+	}
+	for _, c := range []struct {
+		user, root, child string
+		want              bool
+	}{
+		{nsReader, openRoot, openChild, true}, {nsReader, scopeRoot, scopeChild, false}, {nsReader, labelRoot, labelChild, false},
+		{fullUser, scopeRoot, scopeChild, true}, {fullUser, labelRoot, labelChild, true},
+	} {
+		if got := shows(c.user, c.root, c.child); got != c.want {
+			t.Errorf("%s sees %s under %s: %v, want %v", c.user, c.child, c.root, got, c.want)
+		}
 	}
 }
 

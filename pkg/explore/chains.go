@@ -16,6 +16,8 @@ import (
 type Chains struct {
 	ix      *Index
 	visible func(objects.Ref) bool
+	// list reports whether the viewer may list a kind in a namespace, "" meaning cluster-wide.
+	list func(objects.GroupKind, string) bool
 	// reached and incomplete memoise per route: 1 yes, -1 no, 2 being decided.
 	reached, incomplete map[objects.Ref]int8
 	rows                map[int]*chainRow
@@ -29,9 +31,9 @@ type chainRow struct {
 	ok  bool
 }
 
-// Chains returns the readable-chain view of ix for visible, which is never nil.
-func (ix *Index) Chains(visible func(objects.Ref) bool) *Chains {
-	return &Chains{ix: ix, visible: visible, reached: map[objects.Ref]int8{}, incomplete: map[objects.Ref]int8{},
+// Chains returns the readable-chain view of ix for visible and list, which are never nil.
+func (ix *Index) Chains(visible func(objects.Ref) bool, list func(objects.GroupKind, string) bool) *Chains {
+	return &Chains{ix: ix, visible: visible, list: list, reached: map[objects.Ref]int8{}, incomplete: map[objects.Ref]int8{},
 		rows: map[int]*chainRow{}, selections: map[RefKey]bool{}, edges: map[objects.Ref][]*computed.EffectiveEdge{}}
 }
 
@@ -91,25 +93,40 @@ func (c *Chains) walkFrom(memo map[objects.Ref]int8, route objects.Ref, seed fun
 	return false, open
 }
 
-// SelectionHidden reports whether a route that ref k's selection reads is
-// hidden: its own scope's, or an earlier ref's of the same rule, whose
-// children the controller hands on to the later refs (rules §5.2, quirk 1).
+// SelectionHidden reports whether ref k's selection is unreadable, or an
+// earlier ref's of the same rule, whose children the controller hands on
+// to the later refs (rules §5.2, quirk 1). Permissions alone decide it,
+// never which routes exist.
 func (c *Chains) SelectionHidden(k RefKey) bool {
 	if h, ok := c.selections[k]; ok {
 		return h
 	}
 	h := false
 	for j := 0; j <= k.Ref && !h; j++ {
-		if d, ok := c.ix.RefScope[RefKey{k.Parent, k.Rule, j}]; ok {
-			h = !c.ix.Visible(d, c.visible)
+		if s, ok := c.ix.Selection(RefKey{k.Parent, k.Rule, j}); ok {
+			h = !c.readable(s)
 		}
 	}
 	c.selections[k] = h
 	return h
 }
 
+// readable reports whether the viewer may read all of s: its named target,
+// or a list of HTTPRoutes in its namespace, or cluster-wide with Namespaces too
+// when labels pick them (D-110).
+func (c *Chains) readable(s Selection) bool {
+	routes := objects.GroupKind{Group: objects.GatewayAPIGroup, Kind: "HTTPRoute"}
+	switch {
+	case s.Named:
+		return c.visible(s.Target)
+	case s.All:
+		return c.list(routes, "") && (!s.ByLabels || c.list(objects.GroupKind{Kind: "Namespace"}, ""))
+	}
+	return c.list(routes, s.Namespace)
+}
+
 // Row is DelegRows[i] as the viewer sees it, and false when no readable
-// chain reaches its parent or its ref's selection reads a hidden route. Its contexts are the readable retained ones and
+// chain reaches its parent or its ref's selection is hidden. Its contexts are the readable retained ones and
 // its outcome is theirs (rules §5.5); a row whose contexts were cut by a
 // compute bound is unknown too-large. It has no child-entry check, which
 // compares every chain with the controller, and its Deps are empty.

@@ -866,6 +866,7 @@ func matchKey(m objects.Match) string {
 // are left out; it still counts its visible children (our call, 2.4).
 func (d *detail) refCounts(dto *DelegationRefDTO, k explore.RefKey) {
 	ids := d.ix.RefRows[k]
+	chains := d.v.chainsOf(d.ix)
 	if len(ids) == 0 {
 		// The edge cap cut it before selection: too large, not empty (rules §5.7,
 		// D-025). An unknown scope wins over every other reason (rules §3.3).
@@ -875,7 +876,7 @@ func (d *detail) refCounts(dto *DelegationRefDTO, k explore.RefKey) {
 				reason = computed.UnknownScope
 			}
 			c := d.f.unknown(ruleDelegation, reason)
-			if d.ix.SelectionHidden(k, d.v.visible()) {
+			if chains != nil && chains.SelectionHidden(k) || chains == nil && d.ix.SelectionHidden(k, d.v.visible()) {
 				c = d.f.restricted()
 			}
 			if !d.f.omitted(c) {
@@ -884,8 +885,8 @@ func (d *detail) refCounts(dto *DelegationRefDTO, k explore.RefKey) {
 		}
 		return
 	}
-	// Readable chains: a selection that reads a hidden route gives no rows, so no counts either.
-	if c := d.v.chainsOf(d.ix); c != nil && c.SelectionHidden(k) {
+	// Readable chains: a hidden selection gives no rows, so no counts either.
+	if chains != nil && chains.SelectionHidden(k) {
 		return
 	}
 	hidden := d.ix.SelectionHidden(k, d.v.visible())

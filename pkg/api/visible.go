@@ -462,7 +462,7 @@ func (v *view) chainsOf(ix *explore.Index) *explore.Chains {
 	if v.chains == nil {
 		v.chains = map[*explore.Index]*explore.Chains{}
 	}
-	v.chains[ix] = ix.Chains(v.can)
+	v.chains[ix] = ix.Chains(v.can, v.canList)
 	return v.chains[ix]
 }
 

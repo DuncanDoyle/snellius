@@ -298,6 +298,10 @@ type Index struct {
 	unknown bool
 	// parentKinds are the served Gateway and ListenerSet kinds.
 	parentKinds map[objects.GroupKind]bool
+	// wild is the delegation wildcard namespace, "all" when empty; byLabels is
+	// set when the install's scope picks namespaces by their labels.
+	wild     install.Setting
+	byLabels bool
 	// controllers are the install's controller names and noDelegation is its
 	// rule set's delegation switch: install context for PathIncomplete.
 	controllers  []string
@@ -418,6 +422,36 @@ func (ix *Index) SelectionHidden(k RefKey, visible func(objects.Ref) bool) bool 
 
 // Ref returns the ref at index i of the dependency table.
 func (ix *Index) Ref(i int32) objects.Ref { return ix.Refs[i] }
+
+// Selection is what a delegation ref's selection reads, as permissions
+// decide it: a name ref its Target, a wildcard or label ref every HTTPRoute
+// of Namespace, or of every namespace in the install's scope when All.
+type Selection struct {
+	Named     bool
+	Target    objects.Ref
+	Namespace string
+	All       bool
+	// ByLabels is set with All when the install's scope picks namespaces by their labels.
+	ByLabels bool
+}
+
+// Selection is ref k's selection, from its rows or else its parent's spec;
+// false when k is not a delegation ref.
+func (ix *Index) Selection(k RefKey) (Selection, bool) {
+	var as *objects.DelegationRef
+	if ids := ix.RefRows[k]; len(ids) > 0 {
+		as = &ix.DelegRows[ids[0]].RefAsWritten
+	} else if as = cutRef(ix, k); as == nil {
+		return Selection{}, false
+	}
+	switch {
+	case as.Mode == objects.DelegationName:
+		return Selection{Named: true, Target: objects.Ref{Group: objects.GatewayAPIGroup, Kind: "HTTPRoute", Namespace: as.Namespace, Name: as.Name}}, true
+	case as.Mode == objects.DelegationLabel && (!ix.wild.Known || as.Namespace == ix.wild.Value):
+		return Selection{All: true, ByLabels: ix.byLabels}, true
+	}
+	return Selection{Namespace: as.Namespace}, true
+}
 
 // Visible reports whether visible admits every ref of d; nil admits all.
 func (ix *Index) Visible(d DepSet, visible func(objects.Ref) bool) bool {
