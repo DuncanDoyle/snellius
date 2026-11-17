@@ -564,6 +564,7 @@ func (h *handler) routeDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	out.Effective, out.EffectiveTruncated = d.effective(ref, v.InheritParentMatcher)
 	out.Ancestors, out.AncestorsTruncated = d.ancestors(ref)
+	out.DelegationNotChecked = d.v.noDelegation()
 	writeJSON(w, out)
 }
 
@@ -1050,7 +1051,8 @@ func (h *handler) routeDelegation(w http.ResponseWriter, r *http.Request) {
 	}
 	// Without delegation analysis no row is sent (D-114).
 	if d.v.noDelegation() {
-		writeJSON(w, Page[DelegationRow]{Install: d.i.Resolved.ID(), Items: []DelegationRow{}, CollectedAt: wireTime(d.p.ConfirmedAt)})
+		writeJSON(w, Page[DelegationRow]{Install: d.i.Resolved.ID(), Items: []DelegationRow{}, DelegationNotChecked: true,
+			CollectedAt: wireTime(d.p.ConfirmedAt)})
 		return
 	}
 	query := d.ix.QueryDelegation

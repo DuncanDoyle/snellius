@@ -123,7 +123,10 @@ func (h *handler) routes(w http.ResponseWriter, r *http.Request) {
 	for _, id := range pg.IDs {
 		items = append(items, ls.routeRow(id))
 	}
-	writeJSON(w, page(ls, pg, items, ls.deniedInScope(len(ls.ix.Routes), ls.routeRef)))
+	out := page(ls, pg, items, ls.deniedInScope(len(ls.ix.Routes), ls.routeRef))
+	// The dropped flag and state are withheld from every row (D-114).
+	out.DelegationNotChecked = ls.vw.NoDelegation
+	writeJSON(w, out)
 }
 
 // prefetchRouteRows resolves the buckets the page's route rows read: their

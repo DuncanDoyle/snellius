@@ -29,8 +29,10 @@ type BackendsResponse struct {
 	Hidden  bool            `json:"hidden,omitempty"`
 	// Facets are the Gateways and namespaces of the visible backends, each
 	// counted with every filter but its own.
-	Facets      *BackendFacetsDTO `json:"facets,omitempty"`
-	CollectedAt time.Time         `json:"collectedAt"`
+	Facets *BackendFacetsDTO `json:"facets,omitempty"`
+	// DelegationNotChecked says the caller gets no paths through parent routes (D-114).
+	DelegationNotChecked bool      `json:"delegationNotChecked,omitempty"`
+	CollectedAt          time.Time `json:"collectedAt"`
 }
 
 // BackendFacetsDTO lists the gateway and namespace filter values, sorted by name.
@@ -71,7 +73,9 @@ type BackendDetail struct {
 	Explanations []RefExplanationDTO `json:"explanations"`
 	Service      *ServiceFactDTO     `json:"service,omitempty"`
 	Conditions   []Condition         `json:"conditions,omitempty"`
-	CollectedAt  time.Time           `json:"collectedAt"`
+	// DelegationNotChecked says the caller gets no paths through parent routes (D-114).
+	DelegationNotChecked bool      `json:"delegationNotChecked,omitempty"`
+	CollectedAt          time.Time `json:"collectedAt"`
 }
 
 // ConsumerDTO is a non-route object that uses the backend (design §8.3):

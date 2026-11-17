@@ -154,13 +154,15 @@ type NamespaceFacetDTO struct {
 // result the page was cut from, visible rows only: pages of one walk agree on
 // it while the result holds, and a walk whose pages differ must restart.
 type PathsResponse struct {
-	Install     string         `json:"install"`
-	Revision    string         `json:"revision,omitempty"`
-	Rows        []PathRowDTO   `json:"rows"`
-	Next        string         `json:"next,omitempty"`
-	Prev        string         `json:"prev,omitempty"`
-	Summary     PathSummaryDTO `json:"summary"`
-	CollectedAt time.Time      `json:"collectedAt"`
+	Install  string         `json:"install"`
+	Revision string         `json:"revision,omitempty"`
+	Rows     []PathRowDTO   `json:"rows"`
+	Next     string         `json:"next,omitempty"`
+	Prev     string         `json:"prev,omitempty"`
+	Summary  PathSummaryDTO `json:"summary"`
+	// DelegationNotChecked says the caller gets no paths through parent routes (D-114).
+	DelegationNotChecked bool      `json:"delegationNotChecked,omitempty"`
+	CollectedAt          time.Time `json:"collectedAt"`
 }
 
 // EndpointsDTO is one backend port's endpoints from one source (design §9.5).

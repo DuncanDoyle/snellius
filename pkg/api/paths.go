@@ -167,7 +167,7 @@ func pathsPage(l linker, p *engine.Published, i *engine.InstallModel, v *view, t
 		sum.NotComputed = NotComputedNoAttachments
 	}
 	return PathsResponse{Install: i.Resolved.ID(), Revision: strconv.FormatUint(pg.Digest, 36), Rows: rows, Next: pg.Next, Prev: pg.Prev,
-		Summary: sum, CollectedAt: wireTime(p.ConfirmedAt)}, nil
+		Summary: sum, DelegationNotChecked: v.noDelegation(), CollectedAt: wireTime(p.ConfirmedAt)}, nil
 }
 
 // titleKey is a finding's code and resource.

@@ -181,7 +181,7 @@ func (h *handler) backendList(w http.ResponseWriter, r *http.Request) {
 	}
 	// Secure mode says nothing of what was left out (design §7.5).
 	writeJSON(w, BackendsResponse{Install: i.Resolved.ID(), Rows: rows, Next: pg.Next, Prev: pg.Prev, Hidden: set.Hidden && !v.omits(),
-		Facets: backendFacetsDTO(l, pg.Facets), CollectedAt: wireTime(p.ConfirmedAt)})
+		Facets: backendFacetsDTO(l, pg.Facets), DelegationNotChecked: v.noDelegation(), CollectedAt: wireTime(p.ConfirmedAt)})
 }
 
 // backendFacetsDTO is f on the wire; every facet's Gateway carries a visible path.
@@ -252,7 +252,7 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 	titles := signalTitles(v, i, b.Problem.Signals)
 	out := BackendDetail{Install: i.Resolved.ID(), Ref: l.linkedNamed(ref), Kind: backendKind(b), Type: b.Type, Problem: problemDTO(l, titles, b.Problem),
 		Status: problemDTO(l, titles, paths.Problem{Signals: b.Own}).Signals, Exposure: exposure, Consumers: make([]ConsumerDTO, 0, len(b.Consumers)),
-		Sources: []EndpointsDTO{}, PortChain: []PortChainDTO{}, Explanations: []RefExplanationDTO{}, CollectedAt: wireTime(p.ConfirmedAt)}
+		Sources: []EndpointsDTO{}, PortChain: []PortChainDTO{}, Explanations: []RefExplanationDTO{}, DelegationNotChecked: v.noDelegation(), CollectedAt: wireTime(p.ConfirmedAt)}
 	for _, c := range b.Consumers {
 		out.Consumers = append(out.Consumers, ConsumerDTO{Consumer: l.linked(c.Consumer), Role: c.Role, Field: c.Field, Port: c.Port})
 	}

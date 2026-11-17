@@ -1824,6 +1824,51 @@ func TestRuleNoDelegationForProjectingViewer(t *testing.T) {
 	}
 }
 
+// TestRuleDelegationNotCheckedMarker: every response that withholds
+// delegation analysis says so, so the web never reads /meta for it. The
+// full viewer and local mode never get the marker.
+func TestRuleDelegationNotCheckedMarker(t *testing.T) {
+	src := worldNamed("hidden root selects").pairs(t)[0].before
+	world := func(s ruleSnap) { s.add(sharedRoutes()...) }
+	local := localServe(t, worldWith(t, func() ruleSnap { s := ruleSnapshot(t); world(s); return s }(), ruleChange{name: "base"}))
+	route := "/routes/" + objects.GatewayAPIGroup + "/HTTPRoute/" + ns0 + "/"
+	surfaces := map[string]string{
+		"/routes":           "/routes?limit=200",
+		"route detail":      route + sharedMid,
+		"delegation":        route + sharedMid + "/delegation",
+		"/paths":            "/paths?limit=200",
+		"/backends":         "/backends?limit=200",
+		"backend detail":    "/backends/" + kinds.KgatewayGroup + "/Backend/" + ns0 + "/be-0000",
+		"exposure (detail)": "/backends/" + kinds.KgatewayGroup + "/Backend/" + ns0 + "/be-0000#exposure",
+	}
+	marked := func(srv *httptest.Server, user, path string) bool {
+		p, field, _ := strings.Cut(path, "#")
+		code, body := fetch(t, srv, user, ruleBase+p)
+		if code != http.StatusOK {
+			t.Fatalf("GET %s as %s: %d", p, user, code)
+		}
+		var v map[string]any
+		if err := json.Unmarshal([]byte(body), &v); err != nil {
+			t.Fatal(err)
+		}
+		if field != "" {
+			v, _ = v[field].(map[string]any)
+		}
+		return v["delegationNotChecked"] == true
+	}
+	for name, path := range surfaces {
+		if !marked(src, nsReader, path) {
+			t.Errorf("%s: no marker for %s", name, nsReader)
+		}
+		if marked(src, fullUser, path) {
+			t.Errorf("%s: marker for the full viewer", name)
+		}
+		if marked(local, nsReader, path) {
+			t.Errorf("%s: marker in local mode", name)
+		}
+	}
+}
+
 // lsRejected is a readable ListenerSet its readable parent, which sets no
 // allowedListeners, does not allow: the detail then reads the Gateway CRD.
 const lsRejected = "ls-rejected"
