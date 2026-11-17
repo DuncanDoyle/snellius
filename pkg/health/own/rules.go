@@ -23,8 +23,8 @@ const RuleReplacedHintAge = 10 * time.Minute
 const (
 	// ruleMessagePattern is "Replaced Rule (%d): …" or "Dropped Rule (%d): …".
 	ruleMessagePattern = `(?s)^(Replaced|Dropped) Rule \((\d+)\): (.*)$`
-	// policyTokenPattern is a group/Kind/namespace/name token in the text after the colon.
-	policyTokenPattern = `([a-z0-9][-a-z0-9.]*)/([A-Z][A-Za-z0-9]*)/([a-z0-9][-a-z0-9]*)/([a-z0-9][-a-z0-9.]*[a-z0-9]|[a-z0-9])`
+	// policyRefPattern is a group/Kind/namespace/name ref in the text after the colon.
+	policyRefPattern = `([a-z0-9][-a-z0-9.]*)/([A-Z][A-Za-z0-9]*)/([a-z0-9][-a-z0-9]*)/([a-z0-9][-a-z0-9.]*[a-z0-9]|[a-z0-9])`
 )
 
 // rules reports KGWUI-015 on a route: a current RouteRuleReplaced or
@@ -78,7 +78,7 @@ func namedPolicy(ic InstallContext, text string) *objects.Ref {
 		return nil
 	}
 	var found *objects.Ref
-	for _, m := range regexp.MustCompile(policyTokenPattern).FindAllStringSubmatch(text, -1) {
+	for _, m := range regexp.MustCompile(policyRefPattern).FindAllStringSubmatch(text, -1) {
 		r := objects.Ref{Group: m[1], Kind: m[2], Namespace: m[3], Name: m[4]}
 		if !slices.Contains(ic.PolicyKinds, objects.GroupKind{Group: r.Group, Kind: r.Kind}) || !ic.Catalog.Served(r.Group, r.Kind) {
 			continue

@@ -57,11 +57,6 @@ func (s *scopedReads) asked(ns, name string) bool {
 	return slices.ContainsFunc(s.asks, func(r objects.Ref) bool { return r.Namespace == ns && r.Name == name })
 }
 
-// svcRef is the Service ns/name.
-func svcRef(ns, name string) objects.Ref {
-	return objects.Ref{Kind: "Service", Namespace: ns, Name: name}
-}
-
 // pathTo is user's first /paths row sending to Service ns/name.
 func pathTo(t *testing.T, srv *httptest.Server, user, ns, name string) api.PathRowDTO {
 	t.Helper()

@@ -548,13 +548,13 @@ func (extCheck) Name() string { return "extension check" }
 func (extCheck) Inputs() health.InputSet { return health.InputSet{Clock: true} }
 
 func (c extCheck) Run(ctx health.RunContext) ([]health.Finding, health.CheckResult) {
-	res := health.CheckResult{Name: c.Name(), OK: true, Required: true, CollectedAt: ctx.Input.Now}
+	res := health.CheckResult{Name: c.Name(), OK: true, Required: true, CollectedAt: ctx.Now}
 	var out []health.Finding
-	for _, objs := range ctx.Input.Snapshot.Objects {
+	for _, objs := range ctx.Snapshot.Objects {
 		for _, u := range objs {
 			if u.GetLabels()[extLabel] != "" {
 				r := objects.RefOf(u)
-				out = append(out, health.Finding{Code: "EXT-001", Slug: "ext", Severity: health.SeverityError, Install: ctx.Input.Install.ID(), Resource: &r,
+				out = append(out, health.Finding{Code: "EXT-001", Slug: "ext", Severity: health.SeverityError, Install: ctx.Install.ID(), Resource: &r,
 					Message: "extension says " + r.Name})
 				res.OK, res.Error = false, "extension failed on "+r.Namespace+"/"+r.Name
 			}
