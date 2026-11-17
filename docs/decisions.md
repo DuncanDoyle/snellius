@@ -1656,3 +1656,12 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** In secure mode, for a viewer without the full read, delegation rows, contexts, effective matches and the dropped flag are omitted when they pass through a route the viewer cannot read. Outside secure mode D-024 is unchanged.
 
 **Consequences:** A restricted viewer can miss a context that a fully readable chain also reaches. Routes on a delegation path are authorised with `list`, while path incompleteness (D-111) walks parents with `get`.
+
+## D-114 — Delegation analysis is derived (2026-11-17, Phase 7, supersedes D-113's per-viewer rule)
+**Status:** accepted by the user (2026-11-17), after five fix rounds on the 7.4 Codex review's finding 1.
+
+**Context:** The delegation traversal computes contexts, effective matches, outcomes, notes, the dropped flag, uncertainty and child-entry checks over every route in the install. Five rounds of projecting these per viewer each closed one input and Codex found the next one computed install-wide (sibling selections, scope occupancy, uncertainty seeds, the unconfirmable note, child-entry classes).
+
+**Decision:** Delegation analysis is a derived result (D-106 item 3). In secure mode, a viewer without the full read gets none of it: no delegation contexts, effective matches, outcomes, notes, dropped flag or computed child-entry checks, and no path signals derived from them. Where the UI needs a value it shows "Not checked", decided by permissions alone. Outside secure mode and for full readers nothing changes (D-024).
+
+**Consequences:** Safe by construction: nothing the traversal computes reaches a restricted viewer. Application teams lose delegation analysis in secure mode until a per-viewer computation is designed. The per-viewer delegation projection from the fix rounds is removed where it becomes unused.
