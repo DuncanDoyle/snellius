@@ -70,9 +70,10 @@ type ListScanner interface {
 }
 
 // Admitter admits requests that need uncached checks a few at a time (D-116).
-// The commit wrapper first builds a request without admission; a build that
-// meets an uncached check is discarded, and the request waits in Admit, is
-// built afresh, and holds its admission until its response is committed.
+// The commit wrapper first builds a GET or HEAD without admission; a build that
+// meets an uncached check is discarded, and the request waits in Admit and is
+// built afresh. Other methods are admitted first. A request holds its
+// admission until its response is final, not while it is written.
 type Admitter interface {
 	// Admit waits under r's context for admission and returns its release, or why it could not admit.
 	Admit(r *http.Request) (release func(), err error)
@@ -84,6 +85,15 @@ var ErrCheckLimit = errors.New("authorisation check limit reached")
 // ErrNotAdmitted is the error of an uncached check made before its request was
 // admitted; the commit wrapper admits the request and builds it again (D-116).
 var ErrNotAdmitted = errors.New("authorisation: request not admitted")
+
+// Why an uncached check missed the cache, as an authoriser passes it to SpendCheckOn.
+const (
+	// MissAbsent is a check with no cached answer: never asked, or evicted.
+	MissAbsent = "absent"
+	// MissAllowExpired and MissDenyExpired are checks whose cached allow or deny expired.
+	MissAllowExpired = "allow-expired"
+	MissDenyExpired  = "deny-expired"
+)
 
 // CheckLimit is the most uncached authorisation checks one request may make (design §6.4, R25).
 // The global limiter protects the API server; this bounds one request's spend.
@@ -104,6 +114,8 @@ type authzState struct {
 	allowExp time.Time
 	// gated refuses uncached checks until the request is admitted; refused marks that one was (D-116).
 	gated, refused bool
+	// trace hears each counted check, set before the build starts; nil means none.
+	trace func(reason string, key any)
 }
 
 // notAdmitted reports whether the build refused an uncached check for want of admission.
@@ -267,23 +279,32 @@ func authzStateOf(r *http.Request) *authzState {
 // SpendCheck counts one uncached check for r's request and returns
 // ErrCheckLimit past the limit, or ErrNotAdmitted, counting nothing, before
 // the request is admitted. It is nil outside a committed request.
-func SpendCheck(r *http.Request) error {
+func SpendCheck(r *http.Request) error { return SpendCheckOn(r, "", nil) }
+
+// SpendCheckOn is SpendCheck for a check the authoriser names by key, which
+// missed for reason (a Miss constant); WithCheckTrace hears each counted one.
+func SpendCheckOn(r *http.Request, reason string, key any) error {
 	s := authzStateOf(r)
 	if s == nil {
 		return nil
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.gated {
 		s.refused = true
+		s.mu.Unlock()
 		return ErrNotAdmitted
 	}
 	s.checks++
+	var err error
 	if s.checks > CheckLimit {
 		s.passed = s.passed || s.checks == CheckLimit+1
-		return ErrCheckLimit
+		err = ErrCheckLimit
 	}
-	return nil
+	s.mu.Unlock()
+	if s.trace != nil {
+		s.trace(reason, key)
+	}
+	return err
 }
 
 // ReportAuthzError records the first authorisation error of r's request. It

@@ -99,7 +99,7 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 		return secureGate(next)
 	case cfg.secure:
 		admit, _ := authz.(Admitter)
-		return commit(next, admit, cfg.commitCheck, cfg.authzAudit, cfg.capHit, cfg.commitClock)
+		return commit(next, admit, cfg.commitCheck, cfg.authzAudit, cfg.capHit, cfg.checkTrace, cfg.commitClock)
 	}
 	return next
 }

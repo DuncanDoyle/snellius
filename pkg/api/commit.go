@@ -45,6 +45,15 @@ func WithCheckCapHit(hit func(r *http.Request)) HandlerOption {
 	return func(c *handlerConfig) { c.capHit = hit }
 }
 
+// WithCheckTrace calls trace for each uncached check a secure /api/ request
+// counts, with the build it was counted in (1-based, discarded builds
+// included), why the check was a miss (a Miss reason, or "" when the
+// authoriser gives none) and the authoriser's key for the check. It runs while
+// the authoriser holds its locks, so it must be quick and must not call back.
+func WithCheckTrace(trace func(r *http.Request, build int, reason string, key any)) HandlerOption {
+	return func(c *handlerConfig) { c.checkTrace = trace }
+}
+
 // WithCommitClock sets the clock commit compares allow expiries with; without it, time.Now.
 func WithCommitClock(now func() time.Time) HandlerOption {
 	return func(c *handlerConfig) { c.commitClock = now }
@@ -55,34 +64,54 @@ func WithCommitClock(now func() time.Time) HandlerOption {
 // authorisation error and the earliest allow expiry are checked, in that order,
 // after every build. A response whose allows expired, or whose identity a refresh
 // replaced, is built once more from fresh request state, keeping only the check
-// count. With admit, a build that needs an uncached check before admission is
-// discarded; the request waits for admission, holds it until it is answered,
-// and is built afresh (D-116). Other paths pass through.
-func commit(next http.Handler, admit Admitter, check func(http.ResponseWriter, *http.Request) (*http.Request, error), audit func(*http.Request, string), capHit func(*http.Request), now func() time.Time) http.Handler {
+// count. With admit, a GET or HEAD build that needs an uncached check before
+// admission is discarded, the request waits for admission and is built afresh
+// in the same attempt; other methods are admitted before their first build.
+// Admission is given back once the response is final, before it is written
+// (D-116). Other paths pass through.
+func commit(next http.Handler, admit Admitter, check func(http.ResponseWriter, *http.Request) (*http.Request, error), audit func(*http.Request, string), capHit func(*http.Request), trace func(*http.Request, int, string, any), now func() time.Time) http.Handler {
 	if now == nil {
 		now = time.Now
-	}
-	unavailable := func(w http.ResponseWriter, r *http.Request, reason string) {
-		if audit != nil {
-			audit(r, reason)
-		}
-		w.Header().Set("Cache-Control", "no-store")
-		writeErr(w, http.StatusServiceUnavailable, authzUnavailable)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, base *http.Request) {
 		if !strings.HasPrefix(base.URL.Path, "/api/") {
 			next.ServeHTTP(w, base)
 			return
 		}
-		checks := 0
 		var release func()
-		defer func() {
+		// done gives admission back; the deferred call covers a panic.
+		done := func() {
 			if release != nil {
 				release()
+				release = nil
 			}
-		}()
+		}
+		defer done()
+		unavailable := func(r *http.Request, reason string) {
+			done()
+			if audit != nil {
+				audit(r, reason)
+			}
+			w.Header().Set("Cache-Control", "no-store")
+			writeErr(w, http.StatusServiceUnavailable, authzUnavailable)
+		}
+		if admit != nil && base.Method != http.MethodGet && base.Method != http.MethodHead {
+			// Never built twice for admission: its body or side effects may not replay.
+			rel, err := admit.Admit(base)
+			if err != nil {
+				unavailable(base, auditReason(err, false))
+				return
+			}
+			release = rel
+		}
+		gated := admit != nil && release == nil
+		checks, builds := 0, 0
 		for attempt := 1; ; attempt++ {
-			r, st := withAuthzStateFrom(base, checks, admit != nil && release == nil)
+			r, st := withAuthzStateFrom(base, checks, gated)
+			if builds++; trace != nil {
+				build := builds
+				st.trace = func(reason string, key any) { trace(r, build, reason, key) }
+			}
 			buf := &bufferedResponse{header: http.Header{}}
 			next.ServeHTTP(buf, r)
 			if capHit != nil && st.capPassed() {
@@ -97,38 +126,41 @@ func commit(next http.Handler, admit Admitter, check func(http.ResponseWriter, *
 				}
 			}
 			if st.notAdmitted() && stale == nil {
-				// Nothing of this build is kept: the admitted build asks afresh.
+				// Nothing of this build is kept: the admitted build asks afresh, in the same attempt.
 				rel, err := admit.Admit(cur)
 				if err != nil {
-					unavailable(w, r, auditReason(err, false))
+					unavailable(r, auditReason(err, false))
 					return
 				}
-				release, base, attempt = rel, cur, 0
+				release, base, gated = rel, cur, false
+				attempt--
 				continue
 			}
 			// This build's own refusal, with a stale identity, answers as that identity below.
 			if err := st.failed(); err != nil && (!st.notAdmitted() || !errors.Is(err, ErrNotAdmitted)) {
-				unavailable(w, r, auditReason(err, st.fullReadFailed()))
+				unavailable(r, auditReason(err, st.fullReadFailed()))
 				return
 			}
 			switch {
 			case stale != nil:
-				unavailable(w, r, AuditIdentity)
+				unavailable(r, AuditIdentity)
 				return
 			case cur != r:
 				if attempt == commitAttempts {
-					unavailable(w, r, AuditIdentity)
+					unavailable(r, AuditIdentity)
 					return
 				}
 				base, checks = cur, st.spent()
 				continue
 			}
 			if exp := st.allowExpiry(); exp.IsZero() || exp.After(now()) {
+				// The response is final: a slow client must not hold the place while it is written.
+				done()
 				buf.writeTo(w)
 				return
 			}
 			if attempt == commitAttempts {
-				unavailable(w, r, AuditExpired)
+				unavailable(r, AuditExpired)
 				return
 			}
 			checks = st.spent()

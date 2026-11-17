@@ -54,6 +54,8 @@ type handlerConfig struct {
 	authzAudit  func(*http.Request, string)
 	// capHit hears each request that passes CheckLimit; nil means none.
 	capHit func(*http.Request)
+	// checkTrace hears each uncached check a request counts; nil means none.
+	checkTrace func(*http.Request, int, string, any)
 	// commitClock is the commit wrapper's clock; nil means time.Now.
 	commitClock func() time.Time
 	// bypass turns the secure-mode projection off, and off some of its steps;

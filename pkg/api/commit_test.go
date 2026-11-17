@@ -472,13 +472,15 @@ var commitT0 = time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
 
 // expiringAuthz allows every ref but deny's, noting each allow as valid for a
 // minute from the clock's now. step runs inside the n-th call, counted over
-// every build; full, when set, answers the n-th FullRead.
+// every build; full, when set, answers the n-th FullRead. With spend, calls
+// after the spendFrom-th spend an uncached check.
 type expiringAuthz struct {
-	clock *clocktesting.FakeClock
-	deny  func(objects.Ref) bool
-	spend bool
-	step  func(n int)
-	full  []bool
+	clock     *clocktesting.FakeClock
+	deny      func(objects.Ref) bool
+	spend     bool
+	spendFrom int
+	step      func(n int)
+	full      []bool
 
 	mu           sync.Mutex
 	calls, reads int
@@ -497,7 +499,7 @@ func (a *expiringAuthz) AuthorizeErr(r *http.Request, ref objects.Ref) (bool, er
 	a.calls++
 	n := a.calls
 	a.mu.Unlock()
-	if a.spend {
+	if a.spend && n > a.spendFrom {
 		if err := SpendCheck(r); err != nil {
 			return false, err
 		}
@@ -665,6 +667,72 @@ func TestCommitAdmission(t *testing.T) {
 		if a.admits.Load() != c.admits || a.releases.Load() != c.releases || !slices.Equal(l.got(), c.audit) {
 			t.Errorf("%s: %d admits, %d releases, audit %v; want %d, %d, %v", c.name, a.admits.Load(), a.releases.Load(), l.got(), c.admits, c.releases, c.audit)
 		}
+	}
+}
+
+// A cache-only build that expires spends the one rebuild. When that rebuild
+// meets a miss and waits for admission, the admitted build is still the last:
+// its own expiry answers 503 (D-100 item 4, D-116 item 3).
+func TestCommitAdmissionKeepsRebuild(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	// Calls 1–3 are the first build, 4 is refused in the rebuild, 5–7 are the admitted build.
+	a := &admitAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: true, spendFrom: 3, step: func(n int) {
+		if n == 2 || n == 6 {
+			clk.Step(time.Minute)
+		}
+	}}}
+	srv, b, l := expiringServer(t, a, clk, 3)
+	wantUnavailable(t, srv, "/api/ext/b/n")
+	if b.count() != 3 || a.admits.Load() != 1 || a.releases.Load() != 1 || !slices.Equal(l.got(), []string{AuditExpired}) {
+		t.Errorf("%d builds, %d admits, %d releases, audit %v; want 3, 1, 1, [expired]", b.count(), a.admits.Load(), a.releases.Load(), l.got())
+	}
+}
+
+// Methods other than GET and HEAD are admitted before their first build, so
+// admission never builds them twice; their place is given back (D-116 item 3).
+func TestCommitAdmitsOtherMethodsFirst(t *testing.T) {
+	for _, spend := range []bool{false, true} {
+		clk := clocktesting.NewFakeClock(commitT0)
+		a := &admitAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: spend}}
+		b := &builds{}
+		post := b.mount(a, 3)
+		post.Pattern = "POST /n"
+		srv := secureServer(t, staticModel{}, a, WithExtMounts(post), WithCommitClock(clk.Now))
+		resp, err := http.Post(srv.URL+"/api/ext/b/n", "application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || string(body) != `{"build":1,"visible":3}`+"\n" || b.count() != 1 {
+			t.Errorf("spend %v: %d %q after %d builds, want one build", spend, resp.StatusCode, body, b.count())
+		}
+		if a.admits.Load() != 1 || a.releases.Load() != 1 {
+			t.Errorf("spend %v: %d admits, %d releases; want 1, 1", spend, a.admits.Load(), a.releases.Load())
+		}
+	}
+}
+
+// The check trace hears each counted check with its build: none from the
+// discarded build, three from the admitted one, which is the second.
+func TestCommitCheckTrace(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &admitAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: true}}
+	var mu sync.Mutex
+	var got []int
+	trace := WithCheckTrace(func(_ *http.Request, build int, _ string, _ any) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, build)
+	})
+	srv, _, _ := expiringServer(t, a, clk, 3, trace)
+	if code, _, _ := fetchRaw(t, srv, "/api/ext/b/n"); code != http.StatusOK {
+		t.Fatalf("%d", code)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(got, []int{2, 2, 2}) {
+		t.Errorf("traced builds %v, want [2 2 2]", got)
 	}
 }
 
