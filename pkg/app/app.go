@@ -417,7 +417,7 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		}
 		// The data gate stays closed in production; only tests set completeSecure.
 		hopts = append(hopts, api.WithSecureMode(o.completeSecure), api.WithCommitCheck(sessions.StillSignedIn),
-			api.WithAuthzAudit(authzAuditor(auditLog, lim, eng.Installs)), api.WithCommitClock(clk.Now))
+			api.WithAuthzAudit(authzAuditor(auditLog)), api.WithCheckCapHit(capHitter(lim, eng.Installs)), api.WithCommitClock(clk.Now))
 	}
 	h := api.NewHandler(eng, o.UI, authz, hopts...)
 	return &App{Engine: eng, oidc: prov, flow: flow, oidcErr: oidcErr, sessions: sessions, sar: sarAuthz, Handler: h, Metrics: metrics, Audit: auditLog, cfg: cfg, cache: ca, kinds: mon, opts: o, authz: authz, discovered: discovered, reg: reg,
@@ -443,9 +443,8 @@ func (a *App) Start(ctx context.Context) {
 }
 
 // authzAuditor writes a security record for each request answered 503
-// authz-unavailable, with the request's session and Kubernetes identity. A
-// check-cap 503 is also a hit on lim, for the install installs names in its path.
-func authzAuditor(l *audit.Logger, lim *limits.Recorder, installs func() []install.Install) func(r *http.Request, reason string) {
+// authz-unavailable, with the request's session and Kubernetes identity.
+func authzAuditor(l *audit.Logger) func(r *http.Request, reason string) {
 	return func(r *http.Request, reason string) {
 		rec := audit.FromRequest(r)
 		if rec.Request.Route == "" {
@@ -457,10 +456,16 @@ func authzAuditor(l *audit.Logger, lim *limits.Recorder, installs func() []insta
 			rec.Kube = audit.Kube{Username: info.Identity.Username, Groups: info.Identity.Groups}
 			rec.Session = info.AuditID
 		}
-		if reason == api.AuditCheckLimit {
-			lim.Hit(limits.AuthzChecks, requestInstall(r, installs), rec.Session)
-		}
 		l.Emit(r.Context(), rec)
+	}
+}
+
+// capHitter records a request that passed the check cap on lim, with its
+// session's audit ID and the install its path names.
+func capHitter(lim *limits.Recorder, installs func() []install.Install) func(*http.Request) {
+	return func(r *http.Request) {
+		info, _ := session.FromContext(r.Context())
+		lim.Hit(limits.AuthzChecks, requestInstall(r, installs), info.AuditID)
 	}
 }
 

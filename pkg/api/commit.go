@@ -39,6 +39,12 @@ func WithAuthzAudit(audit func(r *http.Request, reason string)) HandlerOption {
 	return func(c *handlerConfig) { c.authzAudit = audit }
 }
 
+// WithCheckCapHit calls hit once for each secure /api/ request that passes
+// CheckLimit, whatever it is answered, before the answer is chosen.
+func WithCheckCapHit(hit func(r *http.Request)) HandlerOption {
+	return func(c *handlerConfig) { c.capHit = hit }
+}
+
 // WithCommitClock sets the clock commit compares allow expiries with; without it, time.Now.
 func WithCommitClock(now func() time.Time) HandlerOption {
 	return func(c *handlerConfig) { c.commitClock = now }
@@ -50,7 +56,7 @@ func WithCommitClock(now func() time.Time) HandlerOption {
 // after every build. A response whose allows expired, or whose identity a refresh
 // replaced, is built once more from fresh request state, keeping only the check
 // count. Other paths pass through.
-func commit(next http.Handler, check func(http.ResponseWriter, *http.Request) (*http.Request, error), audit func(*http.Request, string), now func() time.Time) http.Handler {
+func commit(next http.Handler, check func(http.ResponseWriter, *http.Request) (*http.Request, error), audit func(*http.Request, string), capHit func(*http.Request), now func() time.Time) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
@@ -71,6 +77,9 @@ func commit(next http.Handler, check func(http.ResponseWriter, *http.Request) (*
 			r, st := withAuthzStateFrom(base, checks)
 			buf := &bufferedResponse{header: http.Header{}}
 			next.ServeHTTP(buf, r)
+			if capHit != nil && st.capPassed() {
+				capHit(r)
+			}
 			// An ended session answers 401 even when an authorisation error was recorded;
 			// that error answers 503 before a stale or replaced identity is looked at.
 			cur, stale := r, error(nil)

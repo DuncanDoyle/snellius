@@ -3,6 +3,7 @@ package limits
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net/http/httptest"
@@ -132,17 +133,29 @@ func TestFixedLabels(t *testing.T) {
 	nilRec.Hit(AuthzChecks, "", "")
 }
 
-// Windows that ended without a suppressed hit are forgotten.
-func TestQuietWindowsForgotten(t *testing.T) {
+// Installs that come and go leave no windows behind, suppressed hits or not.
+func TestInstallChurnStaysBounded(t *testing.T) {
 	f := newFixture()
-	f.rec.Hit(DelegationEdges, "a", "")
-	f.rec.Hit(DelegationEdges, "b", "")
-	f.rec.Hit(DelegationEdges, "b", "")
-	f.now = t0.Add(Window)
-	f.rec.Hit(DelegationEdges, "c", "")
+	for round := range 5 {
+		f.now = t0.Add(time.Duration(round) * Window)
+		for i := range 100 {
+			id := fmt.Sprintf("r%d.i%d", round, i)
+			f.rec.Hit(DelegationEdges, id, "")
+			f.rec.Hit(DelegationEdges, id, "") // held back
+		}
+	}
+	f.now = t0.Add(5 * Window)
+	f.rec.Hit(DelegationEdges, "last", "")
+	held := 0
+	for _, l := range f.lines(t) {
+		held += int(l["suppressed"].(float64))
+	}
+	if held != 500 {
+		t.Fatalf("lines report %d held-back hits, want 500", held)
+	}
 	f.rec.mu.Lock()
 	defer f.rec.mu.Unlock()
-	if _, ok := f.rec.windows[key{DelegationEdges, "a"}]; ok || len(f.rec.windows) != 2 {
-		t.Fatalf("windows %v, want b (suppressed) and c", f.rec.windows)
+	if len(f.rec.windows) != 1 {
+		t.Fatalf("%d windows after churn, want 1", len(f.rec.windows))
 	}
 }

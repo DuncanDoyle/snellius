@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -642,10 +643,43 @@ func TestCommitRebuildSharesCap(t *testing.T) {
 			clk.Step(time.Minute)
 		}
 	}}
-	srv, b, l := expiringServer(t, a, clk, per)
+	var hits atomic.Int32
+	srv, b, l := expiringServer(t, a, clk, per, WithCheckCapHit(func(*http.Request) { hits.Add(1) }))
 	wantUnavailable(t, srv, "/api/ext/b/n")
-	if b.count() != 2 || !slices.Equal(l.got(), []string{AuditCheckLimit}) {
-		t.Errorf("%d builds, audit %v", b.count(), l.got())
+	if b.count() != 2 || !slices.Equal(l.got(), []string{AuditCheckLimit}) || hits.Load() != 1 {
+		t.Errorf("%d builds, audit %v, %d cap hits", b.count(), l.got(), hits.Load())
+	}
+}
+
+// Passing the cap is reported once per request, whatever is answered: the
+// 503, or the 401 of a session that ended during the request.
+func TestCommitCheckCapHitOnce(t *testing.T) {
+	ended := WithCommitCheck(func(w http.ResponseWriter, _ *http.Request) (*http.Request, error) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return nil, nil
+	})
+	cases := []struct {
+		n     int
+		ended bool
+		code  int
+		hits  int32
+	}{
+		{CheckLimit, false, http.StatusOK, 0},
+		{CheckLimit + 1, false, http.StatusServiceUnavailable, 1},
+		{CheckLimit + 50, false, http.StatusServiceUnavailable, 1},
+		{CheckLimit + 1, true, http.StatusUnauthorized, 1},
+	}
+	for _, c := range cases {
+		a := &errAuthz{spend: true}
+		var hits atomic.Int32
+		opts := []HandlerOption{WithExtMounts(refsExt(a, c.n)), WithCheckCapHit(func(*http.Request) { hits.Add(1) })}
+		if c.ended {
+			opts = append(opts, ended)
+		}
+		srv := secureServer(t, staticModel{}, a, opts...)
+		if code, _, _ := fetchRaw(t, srv, "/api/ext/refs/n"); code != c.code || hits.Load() != c.hits {
+			t.Errorf("%d checks, ended %v: %d with %d cap hits, want %d with %d", c.n, c.ended, code, hits.Load(), c.code, c.hits)
+		}
 	}
 }
 

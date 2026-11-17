@@ -80,6 +80,8 @@ const CheckLimit = 1000
 type authzState struct {
 	mu     sync.Mutex
 	checks int
+	// passed is set by the check that first passes CheckLimit, so a rebuild never reports it again.
+	passed bool
 	err    error
 	// fullOnce asks the full read at most once, when a population first needs it (D-100).
 	fullOnce sync.Once
@@ -101,6 +103,13 @@ func (s *authzState) spent() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.checks
+}
+
+// capPassed reports whether this build made the check that passed CheckLimit.
+func (s *authzState) capPassed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.passed
 }
 
 // NoteAllow records that r's request used an allow valid until expires; the
@@ -243,6 +252,7 @@ func SpendCheck(r *http.Request) error {
 	defer s.mu.Unlock()
 	s.checks++
 	if s.checks > CheckLimit {
+		s.passed = s.passed || s.checks == CheckLimit+1
 		return ErrCheckLimit
 	}
 	return nil

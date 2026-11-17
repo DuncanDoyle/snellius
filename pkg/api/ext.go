@@ -52,6 +52,8 @@ type handlerConfig struct {
 	// commitCheck and authzAudit are the commit wrapper's hooks (commit.go); nil means none.
 	commitCheck func(http.ResponseWriter, *http.Request) (*http.Request, error)
 	authzAudit  func(*http.Request, string)
+	// capHit hears each request that passes CheckLimit; nil means none.
+	capHit func(*http.Request)
 	// commitClock is the commit wrapper's clock; nil means time.Now.
 	commitClock func() time.Time
 	// bypass turns the secure-mode projection off, and off some of its steps;

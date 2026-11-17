@@ -41,7 +41,8 @@ const Window = time.Minute
 const Message = "size limit hit"
 
 // Recorder counts every hit in snellius_limit_hits_total{limit} and logs at
-// most one warning per limit and install per Window. Safe for concurrent use.
+// most one warning per limit and install per Window; an ended window's
+// held-back hits are logged when a later line drops it. Safe for concurrent use.
 type Recorder struct {
 	hits *obs.CounterVec
 	log  *slog.Logger
@@ -101,14 +102,22 @@ func (r *Recorder) Hit(l Limit, install, session string) {
 	if w != nil {
 		suppressed = w.suppressed
 	}
-	// A quiet window that ended is the same as none, so it is dropped.
+	// Ended windows are dropped, so gone installs leave nothing behind; held-back hits get a line first.
+	var held []key
+	var counts []int
 	for kk, ww := range r.windows {
-		if ww.suppressed == 0 && now.Sub(ww.start) >= Window {
+		if kk != k && now.Sub(ww.start) >= Window {
+			if ww.suppressed > 0 {
+				held, counts = append(held, kk), append(counts, ww.suppressed)
+			}
 			delete(r.windows, kk)
 		}
 	}
 	r.windows[k] = &window{start: now}
 	r.mu.Unlock()
+	for i, kk := range held {
+		r.log.Warn(Message, "limit", string(kk.limit), "install", kk.install, "suppressed", counts[i])
+	}
 	attrs := []any{"limit", string(l), "install", install}
 	if session != "" {
 		attrs = append(attrs, "session", session)

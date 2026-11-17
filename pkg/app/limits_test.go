@@ -26,7 +26,8 @@ import (
 )
 
 // A request past the check cap counts once in snellius_limit_hits_total and
-// logs once per window, with the session's audit ID and no object.
+// logs once per window, with the session's audit ID and no object, also when
+// its session ends during the request and it answers 401.
 func TestCheckLimitCountedAndLogged(t *testing.T) {
 	var log lockedBuf
 	old := slog.Default()
@@ -40,9 +41,16 @@ func TestCheckLimitCountedAndLogged(t *testing.T) {
 	kube.PrependReactor("create", "subjectaccessreviews", func(clienttesting.Action) (bool, runtime.Object, error) {
 		return true, &authzv1.SubjectAccessReview{Status: authzv1.SubjectAccessReviewStatus{Allowed: true}}, nil
 	})
-	// flood spends one check past the cap on a hidden route per request.
+	// flood spends one check past the cap on a hidden route per request; ?end=1 signs out first.
+	var (
+		a   *App
+		err error
+	)
 	flood := extension.WithHandlers("flood", func(r extension.Router, _ extension.Deps) {
 		r.Handle("GET /n", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("end") != "" {
+				call(a, "POST", "/auth/logout", r.Cookies(), map[string]string{"Origin": "https://s.example.com"})
+			}
 			for range api.CheckLimit + 1 {
 				if err := api.SpendCheck(r); err != nil {
 					api.ReportAuthzError(r, err)
@@ -56,7 +64,7 @@ func TestCheckLimitCountedAndLogged(t *testing.T) {
 	o := secureOpts()
 	o.OIDC = oidc.Config{IssuerURL: idp.srv.URL, ClientID: "c", RedirectURL: "https://s.example.com/auth/callback", CAFile: ca}
 	o.AuditOut, o.completeSecure = audits, true
-	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}}, o, extension.New(flood))
+	a, err = Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}}, o, extension.New(flood))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,8 +73,10 @@ func TestCheckLimitCountedAndLogged(t *testing.T) {
 	go a.oidc.Run(ctx)
 	a.Start(ctx)
 	eventually(t, "discovery", func() bool { ok, _ := a.oidc.Ready(); return ok })
+	if rec := call(a, "GET", "/api/ext/flood/n?end=1", signIn(t, a, idp), nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("flood with sign-out = %d %s, want 401", rec.Code, rec.Body.String())
+	}
 	sess := signIn(t, a, idp)
-
 	for range 2 {
 		if rec := call(a, "GET", "/api/ext/flood/n", sess, nil); rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("flood = %d %s, want 503", rec.Code, rec.Body.String())
@@ -74,7 +84,7 @@ func TestCheckLimitCountedAndLogged(t *testing.T) {
 	}
 	m := httptest.NewRecorder()
 	a.Metrics.ServeHTTP(m, httptest.NewRequest("GET", "/metrics", nil))
-	if !strings.Contains(m.Body.String(), `snellius_limit_hits_total{limit="authz-checks"} 2`+"\n") {
+	if !strings.Contains(m.Body.String(), `snellius_limit_hits_total{limit="authz-checks"} 3`+"\n") {
 		t.Fatalf("metrics:\n%s", m.Body.String())
 	}
 	done, stop := context.WithCancel(context.Background())
@@ -83,7 +93,7 @@ func TestCheckLimitCountedAndLogged(t *testing.T) {
 	var session string
 	for _, l := range strings.Split(audits.String(), "\n") {
 		rec := map[string]any{}
-		if json.Unmarshal([]byte(l), &rec) == nil && rec["action"] == "authz-unavailable" {
+		if json.Unmarshal([]byte(l), &rec) == nil && rec["action"] == "login" && session == "" {
 			session, _ = rec["session"].(string)
 		}
 	}
