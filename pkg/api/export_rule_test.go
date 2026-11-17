@@ -14,6 +14,19 @@ func WithProjectionBypass() HandlerOption {
 	return func(c *handlerConfig) { c.bypass = true }
 }
 
+// projectionSteps names the steps WithProjectionStepOff turns off.
+var projectionSteps = map[string]projStep{"findings": stepFindings, "rowState": stepRowState, "counts": stepCounts, "paths": stepPaths}
+
+// WithProjectionStepOff turns one secure-mode projection step off, the
+// others staying on: the rule harness shows that each matters on its own.
+func WithProjectionStepOff(step string) HandlerOption {
+	s, ok := projectionSteps[step]
+	if !ok {
+		panic("no projection step " + step)
+	}
+	return func(c *handlerConfig) { c.off |= s }
+}
+
 // ruleMetrics serves install id's controller metrics, collected at now(),
 // with an active reject on each Gateway in rejects.
 type ruleMetrics struct {

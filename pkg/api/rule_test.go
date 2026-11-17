@@ -1010,8 +1010,23 @@ var ruleSurfaces = []ruleSurface{
 	{name: "delegation (hidden hop)", path: routePath(ns0, chainMid, "/delegation"), changes: []string{"hopMatchNarrows", "hopMatchDrops"}},
 	{name: "route detail (hidden hop)", path: routePath(ns0, chainLeaf, ""), changes: []string{"hopMatchDrops"}},
 	{name: "/routes?state=dropped", path: fixed("/routes?limit=200&state=dropped"), changes: []string{"hopMatchDrops"}},
+	{name: "/routes?state=accepted", path: fixed("/routes?limit=200&state=accepted"), changes: []string{"created", "listenerCount"}},
+	// Page 2 through the cursor the restricted viewer's page 1 returns.
+	{name: "/routes page 2", path: routesPage2, changes: []string{"created", "listenerCount"}},
 	{name: "ListenerSet detail (rejected)", path: fixed("/listenersets/" + objects.GatewayAPIGroup + "/ListenerSet/" + ns0 + "/" + lsRejected),
 		changes: []string{"crdDefinesField", "crdChannel"}},
+}
+
+// routesPage2 is the routes list after the next cursor of the restricted
+// viewer's first page in the before world.
+func routesPage2(t *testing.T, before, _ *httptest.Server) string {
+	t.Helper()
+	const page = ruleBase + "/routes?limit=50"
+	next := decode[api.Page[api.RouteRow]](t, before, restrictedUser, page).Next
+	if next == "" {
+		t.Fatal("the restricted viewer's first routes page has no next cursor")
+	}
+	return page + "&cursor=" + url.QueryEscape(next)
 }
 
 // abs is the fixed path p outside the install's base.
@@ -1027,6 +1042,7 @@ var ruleMasks = map[[2]string][]string{
 	// Deleting hidden-gw takes hidden-parent's child out of the install (D-107); nothing else moves.
 	{"/routes", "deleted"}:                      {"items.@child", "total"},
 	{"/routes?namespaces=visible", "deleted"}:   {"items.@child", "total"},
+	{"/routes page 2", "deleted"}:               {"total"},
 	{"route detail (hidden parent)", "deleted"}: {""},
 	// The same move takes child out of the overview's HTTPRoute count and be-0000's routes.
 	{"/overview", "deleted"}: {"counts"},
@@ -1282,6 +1298,45 @@ func TestRuleBypassBreaksInvariant(t *testing.T) {
 				t.Errorf("%s under %s fails without the projection, but ruleHeldBefore says %q", s.name, c.name, reason)
 			}
 		}
+	}
+}
+
+// stepCases are, per projection step, pairs only that step holds: each
+// changes for its viewer with the step off and the others on.
+var stepCases = []struct {
+	step, world, user string
+	// keys are (surface, change) pairs.
+	keys [][2]string
+}{
+	{step: "findings", user: restrictedUser, keys: [][2]string{{"/findings", "faulty"}, {"/diagnostics", "extension"}}},
+	{step: "rowState", user: restrictedUser, keys: [][2]string{{"/routes", "rejecting"}, {"/gateways", "extension"}}},
+	{step: "counts", user: restrictedUser, keys: [][2]string{{"/routes?namespaces=hidden", "created"}, {"/gateways", "gatewayAdded"}}},
+	{step: "paths", world: "hidden hop", user: nsReader, keys: [][2]string{{"delegation (hidden hop)", "hopMatchNarrows"}, {"/routes?state=dropped", "hopMatchDrops"}}},
+}
+
+// TestRuleEachStepMatters: turning one projection step off breaks the
+// invariant on its own pairs, so no step is covered only by the others.
+func TestRuleEachStepMatters(t *testing.T) {
+	for _, sc := range stepCases {
+		t.Run(sc.step, func(t *testing.T) {
+			off := api.WithProjectionStepOff(sc.step)
+			var pairs []rulePair
+			if sc.world == "" {
+				var cs []ruleChange
+				for _, k := range sc.keys {
+					cs = append(cs, ruleChanges[slices.IndexFunc(ruleChanges, func(c ruleChange) bool { return c.name == k[1] })])
+				}
+				pairs = rulePairs(t, cs, off)
+			} else {
+				pairs = extraWorlds[slices.IndexFunc(extraWorlds, func(w extraWorld) bool { return w.name == sc.world })].pairs(t, off)
+			}
+			diffs := differences(t, pairs, sc.user, ruleMasks)
+			for _, k := range sc.keys {
+				if _, ok := diffs[k]; !ok {
+					t.Errorf("%s under %s holds with only %s off", k[0], k[1], sc.step)
+				}
+			}
+		})
 	}
 }
 

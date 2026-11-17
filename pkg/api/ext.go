@@ -54,8 +54,10 @@ type handlerConfig struct {
 	authzAudit  func(*http.Request, string)
 	// commitClock is the commit wrapper's clock; nil means time.Now.
 	commitClock func() time.Time
-	// bypass turns the secure-mode projection off; only the rule tests set it.
+	// bypass turns the secure-mode projection off, and off some of its steps;
+	// only the rule tests set them.
 	bypass bool
+	off    projStep
 }
 
 // WithSecureMode marks the handler secure. Until complete is true, every /api/

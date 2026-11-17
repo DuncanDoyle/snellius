@@ -52,7 +52,7 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 		cfg.commands = diagnose.Kubectl{}
 	}
 	h := &handler{src: src, authz: authz, capSources: cfg.capSources, coreSource: cfg.coreSource, commands: cfg.commands, commandsFor: cfg.commandsFor,
-		featuresFor: cfg.featuresFor, packs: cfg.packs, kindFor: cfg.kindFor, pathMemo: cfg.pathMemo, scoped: cfg.scoped, consumersFor: cfg.consumersFor, secure: cfg.secure, bypass: cfg.bypass}
+		featuresFor: cfg.featuresFor, packs: cfg.packs, kindFor: cfg.kindFor, pathMemo: cfg.pathMemo, scoped: cfg.scoped, consumersFor: cfg.consumersFor, secure: cfg.secure, bypass: cfg.bypass, off: cfg.off}
 	if h.pathMemo == nil {
 		h.pathMemo = paths.NewMemo(nil)
 	}
@@ -135,8 +135,9 @@ type handler struct {
 	consumersFor func(install.Install, *install.Owned) []objects.Consumer
 	// secure is true when the handler was built with WithSecureMode.
 	secure bool
-	// bypass turns the secure-mode projection off (rule tests only).
+	// bypass turns the secure-mode projection off, and off some of its steps (rule tests only).
 	bypass bool
+	off    projStep
 }
 
 // WithScopedReader reads one Service's endpoints for backend detail (design

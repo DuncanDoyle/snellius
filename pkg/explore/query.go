@@ -365,7 +365,7 @@ func (ix *Index) queryRoutes(in Query, vw Viewer) (Page, int, error) {
 		if !q.common(r.Ref, st, func() string { return r.search }) ||
 			len(q.Kinds) > 0 && !slices.Contains(q.Kinds, gk) ||
 			backends != nil && !backends[id] ||
-			q.States != 0 && (shown && f&q.States == 0 || !shown && ix.RowFlags(id, visible)&q.States == 0) ||
+			q.States != 0 && (shown && f&q.States == 0 || !shown && ix.rowFlags(id, visible, vw.Paths)&q.States == 0) ||
 			q.Listener == ListenerUnknown && !ix.unknownRef(id, *q.Parent, visible) ||
 			visible != nil && !visible(r.Ref) ||
 			q.Parent != nil && (q.Attachment != "" || visible != nil) && !ix.Under(id, *q.Parent, q.Attachment, visible) {
@@ -450,6 +450,8 @@ type DelegationQuery struct {
 	// Limit is 1–MaxLimit; 0 means DefaultLimit.
 	Limit  int
 	Cursor string
+	// Paths makes rows read their FullDeps: a hidden route on a path then hides them (secure mode).
+	Paths bool
 }
 
 // rowOutcomes are the outcomes a delegation row can have (rules §5.5).
@@ -462,15 +464,15 @@ var rowOutcomes = []computed.RowOutcome{computed.OutcomeAttached, computed.Outco
 // zero-child rows and matches no outcome (our call, 2.4). A row whose child visible rejects is left out; a row with
 // no child never is (design §7.4 rule 3). The outcome filter matches a row
 // only when visible admits every ref of its Deps, which leave out the routes
-// on its paths (rules 4a, 4b). Both apply before Total and paging; nil
+// on its paths (rules 4a, 4b), or of its FullDeps with q.Paths. Both apply before Total and paging; nil
 // admits every row.
 func (ix *Index) QueryDelegation(parent objects.Ref, q DelegationQuery, visible func(objects.Ref) bool) (Page, error) {
 	return ix.queryDelegation(parent, q, visible, false)
 }
 
 // QueryDelegationVisible is QueryDelegation without the restricted rows: no
-// selection-restricted row (negative ID), and no row whose FullDeps visible
-// rejects, so none through a hidden route; both are left out before Total and paging.
+// selection-restricted row (negative ID), and no row whose dependencies, as
+// the outcome filter reads them, visible rejects; both are left out before Total and paging.
 func (ix *Index) QueryDelegationVisible(parent objects.Ref, q DelegationQuery, visible func(objects.Ref) bool) (Page, error) {
 	return ix.queryDelegation(parent, q, visible, true)
 }
@@ -521,7 +523,7 @@ func (ix *Index) queryDelegation(parent objects.Ref, q DelegationQuery, visible 
 				match = append(match, -1-i)
 			}
 		}
-		deps := r.RowDeps(omit)
+		deps := r.RowDeps(q.Paths)
 		if hidden && k.Child == (objects.Ref{}) ||
 			len(q.Outcomes) > 0 && (!slices.Contains(q.Outcomes, r.Outcome) || !ix.Visible(deps, visible)) ||
 			visible != nil && k.Child != (objects.Ref{}) && !visible(k.Child) ||

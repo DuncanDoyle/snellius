@@ -45,6 +45,8 @@ type view struct {
 	// secure is set in secure mode: without the full read, findings and check
 	// results are projected (D-106) instead of shown as D-013 restricted rows.
 	secure bool
+	// off are the projection steps turned off (rule tests only).
+	off projStep
 	// projections memoises each install's projected report and diagnosis.
 	projections map[*engine.InstallModel]*projection
 	// listed memoises canList's cluster-wide answers.
@@ -57,10 +59,27 @@ type projection struct {
 	diag *diagnose.Diagnosis
 }
 
+// projStep is one step of the secure-mode projection. The rule tests turn
+// each off alone to show that it matters.
+type projStep uint8
+
+const (
+	// stepFindings projects findings, check results and derived facts (D-106).
+	stepFindings projStep = 1 << iota
+	// stepRowState decides row states and flags from the shown findings.
+	stepRowState
+	// stepCounts leaves hidden rows, counts and placeholders out (omits).
+	stepCounts
+	// stepPaths lets a hidden route on a delegation path hide what passes through it.
+	stepPaths
+)
+
 // view returns the view of the caller of r. Under a full read, asked the
 // first time a population needs it, it is the allow-all view.
 func (h *handler) view(r *http.Request) *view {
-	return newView(r, h.authz, h.secure && !h.bypass)
+	v := newView(r, h.authz, h.secure && !h.bypass)
+	v.off = h.off
+	return v
 }
 
 // newView is the view of r's caller through a; secure turns the projection on.
@@ -406,7 +425,7 @@ func (v *view) recount(ids []explore.RowID, ref func(explore.RowID) objects.Ref)
 // caller may not view. It takes no filter, so no query changes it (rule 2).
 // Secure mode sends no hidden count: it is 0 there.
 func (v *view) deniedInInstall(n int, ref func(explore.RowID) objects.Ref) int {
-	if v.secure || v.readsAll() {
+	if v.omits() || v.readsAll() {
 		return 0
 	}
 	d := 0
@@ -423,12 +442,12 @@ func (v *view) Ref(ref objects.Ref) bool { return v.can(ref) }
 
 // projects reports whether v projects findings and check results (D-106):
 // secure mode without the full read.
-func (v *view) projects() bool { return v.secure && !v.readsAll() }
+func (v *view) projects() bool { return v.secure && v.off&stepFindings == 0 && !v.readsAll() }
 
 // paths reports whether a hidden route on a delegation path hides the
 // contexts, matches and flags through it: secure mode without the full read.
 // Elsewhere such a route never restricts them (D-024).
-func (v *view) paths() bool { return v.projects() }
+func (v *view) paths() bool { return v.secure && v.off&stepPaths == 0 && !v.readsAll() }
 
 // shown reports whether the caller of v sees f: always under the full read
 // and outside secure mode, where D-013's restricted rows stay; else when
@@ -439,7 +458,7 @@ func (v *view) shown(f *health.Finding) bool {
 
 // omits reports whether v leaves out what D-013 shows as a placeholder:
 // in secure mode, a hidden object or fact is absent (brief row 16).
-func (v *view) omits() bool { return v.secure }
+func (v *view) omits() bool { return v.secure && v.off&stepCounts == 0 }
 
 // viewer is the explore form of v for install i: its population check and,
 // when v projects, the findings it shows and its install-wide unknown.
@@ -452,7 +471,7 @@ func (v *view) viewer(i *engine.InstallModel) explore.Viewer {
 func (v *view) viewerIn(i *engine.InstallModel, scope []string) explore.Viewer {
 	vw := explore.Viewer{Visible: v.visible(), Paths: v.paths()}
 	switch {
-	case !v.projects():
+	case !v.secure || v.off&stepRowState != 0 || v.readsAll():
 	case scope == nil:
 		vw.Shown, vw.Unknown = v.shown, requiredNotOK(v.report(i).Checks)
 	default:

@@ -1041,6 +1041,7 @@ func (h *handler) routeDelegation(w http.ResponseWriter, r *http.Request) {
 	if d.v.omits() {
 		query = d.ix.QueryDelegationVisible
 	}
+	q.Paths = d.v.paths()
 	pg, err := query(ref, q, d.v.visible())
 	if err != nil {
 		fail(w, err)
