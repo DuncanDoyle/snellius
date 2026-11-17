@@ -634,14 +634,14 @@ func (v *view) prefetchFindings(fs []health.Finding, want func(objects.Ref) bool
 	}
 	v.prefetch(func(add func(objects.Ref)) {
 		for k := range fs {
-			if f := &fs[k]; f.Resource != nil && (want == nil || want(*f.Resource)) && (f.Class == health.ClassOwn || f.Basis.Collection) {
+			if f := &fs[k]; f.Resource != nil && (want == nil || want(*f.Resource)) && (f.Class() == health.ClassOwn || f.Basis.Collection) {
 				add(*f.Resource)
 			}
 		}
 	})
 	v.prefetch(func(add func(objects.Ref)) {
 		for k := range fs {
-			if f := &fs[k]; f.Class == health.ClassOwn && f.Resource != nil && (want == nil || want(*f.Resource)) && !v.denied(*f.Resource) {
+			if f := &fs[k]; f.Class() == health.ClassOwn && f.Resource != nil && (want == nil || want(*f.Resource)) && !v.denied(*f.Resource) {
 				for _, r := range f.Basis.Refs {
 					add(r)
 				}

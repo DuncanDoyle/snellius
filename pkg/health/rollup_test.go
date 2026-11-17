@@ -27,7 +27,7 @@ func (readAll) Ref(objects.Ref) bool { return true }
 func TestShownToTable(t *testing.T) {
 	res, gw, svc := objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: "cart"}, testutil.GwRef("infra", "edge").Ref(),
 		objects.Ref{Kind: "Service", Namespace: "shop", Name: "cart"}
-	ownF := Finding{Resource: &res, Class: ClassOwn, Basis: Basis{Refs: []objects.Ref{gw, svc}}}
+	ownF := Finding{Resource: &res, class: ClassOwn, Basis: Basis{Refs: []objects.Ref{gw, svc}}}
 	all := readSet{res: true, gw: true, svc: true}
 	without := func(r objects.Ref) readSet {
 		s := readSet{res: true, gw: true, svc: true}
@@ -61,8 +61,8 @@ func TestProjectCountsAndState(t *testing.T) {
 	hidden, shown := objects.Ref{Kind: "HTTPRoute", Namespace: "a", Name: "x"}, objects.Ref{Kind: "HTTPRoute", Namespace: "b", Name: "y"}
 	rep := Report{Install: "i", State: StateError, Counts: map[Severity]int{SeverityError: 1, SeverityWarning: 1},
 		Findings: []Finding{
-			{Code: CodeConditionFalse, Severity: SeverityError, Resource: &hidden, Class: ClassOwn, Group: "g1"},
-			{Code: CodeRouteUnattached, Severity: SeverityWarning, Resource: &shown, Class: ClassOwn, Group: "g2"},
+			{Code: CodeConditionFalse, Severity: SeverityError, Resource: &hidden, class: ClassOwn, Group: "g1"},
+			{Code: CodeRouteUnattached, Severity: SeverityWarning, Resource: &shown, class: ClassOwn, Group: "g2"},
 		},
 		Checks: []CheckResult{{Name: "resource status", OK: true, Required: true}}}
 	got := Project(rep, readSet{shown: true})
@@ -217,7 +217,7 @@ func httpRoutesGVR() schema.GroupVersionResource {
 // output own-object or collection: a restricted viewer still sees nothing of it.
 func TestNonCoreCannotMarkVisible(t *testing.T) {
 	res := objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: "cart"}
-	c := markingCheck{f: Finding{Code: "ACME-002", Severity: SeverityError, Resource: &res, Message: "m", Class: ClassOwn,
+	c := markingCheck{f: Finding{Code: "ACME-002", Severity: SeverityError, Resource: &res, Message: "m", class: ClassOwn,
 		Basis: Basis{Collection: true, Refs: []objects.Ref{res}}}}
 	rep := Evaluate(Input{}, []Check{c}, Runtime{})
 	got := Project(rep, readAll{})
@@ -252,7 +252,7 @@ func TestProjectNilIsIdentity(t *testing.T) {
 func TestExtensionFindingsDerived(t *testing.T) {
 	res := objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: "cart"}
 	rep := Evaluate(Input{}, []Check{fixedCheck{{Code: "ACME-001", Severity: SeverityError, Resource: &res, Message: "m"}}}, Runtime{})
-	if f := rep.Findings[0]; f.Class != ClassDerived || f.Basis.Collection || len(f.Basis.Refs) > 0 {
+	if f := rep.Findings[0]; f.class != ClassDerived || f.Basis.Collection || len(f.Basis.Refs) > 0 {
 		t.Fatalf("extension finding %+v, want derived", f)
 	}
 	if got := Project(rep, readAll{}); len(got.Findings) != 0 || got.State != StateHealthy {

@@ -270,12 +270,12 @@ func TestEveryCodeClassified(t *testing.T) {
 		for _, f := range Evaluate(w.in, Upstream(), w.rt).Findings {
 			_, ownable := ownKindOf(w.in, f)
 			switch {
-			case f.Class == ClassOwn && (!ownable || f.Basis.Collection):
+			case f.class == ClassOwn && (!ownable || f.Basis.Collection):
 				t.Errorf("%s: %s on %v is own-object but not in the own-object set", name, f.Code, f.Resource)
-			case f.Class == ClassOwn:
+			case f.class == ClassOwn:
 				owned++
-			case f.Class != ClassDerived || ownable || len(f.Basis.Refs) > 0:
-				t.Errorf("%s: %s on %v is class %d, want derived", name, f.Code, f.Resource, f.Class)
+			case f.class != ClassDerived || ownable || len(f.Basis.Refs) > 0:
+				t.Errorf("%s: %s on %v is class %d, want derived", name, f.Code, f.Resource, f.class)
 			case f.Basis.Collection && f.Code != CodeSignalUnavailable:
 				t.Errorf("%s: %s marked collection", name, f.Code)
 			}
@@ -286,15 +286,22 @@ func TestEveryCodeClassified(t *testing.T) {
 	}
 }
 
-// ClassOwn is set only in fromOwn, and own.Evaluate, own.InstallContext and
+// A finding's class is set only in fromOwn (other packages cannot: it is
+// unexported), and own.Evaluate, own.InstallContext and
 // own.Named are used or implemented only in ownrun.go. fromOwn refuses a
 // Finding that own did not build.
 func TestOwnFindingsOnlyFromOwn(t *testing.T) {
 	if bad := ownUseViolations(t, "."); len(bad) > 0 {
 		t.Errorf("own-object marks outside fromOwn and ownrun.go:\n%s", strings.Join(bad, "\n"))
 	}
-	if bad := ownUseViolations(t, filepath.Join("testdata", "badclass")); len(bad) != 6 {
-		t.Errorf("the check must reject a variable, a conversion, arithmetic, own.InstallContext, own.Evaluate and a Named type: %v", bad)
+	if bad := ownUseViolations(t, filepath.Join("testdata", "badclass")); len(bad) != 3 {
+		t.Errorf("the check must reject own.InstallContext, own.Evaluate and a Named type: %v", bad)
+	}
+	// Runtime writes inside package health: a conversion, an increment, a copy, an
+	// op-assignment, a composite literal and a pointer, one each.
+	bad := ownUseViolations(t, ".", filepath.Join("testdata", "ownwrite", "writes.go.txt"))
+	if got := slices.DeleteFunc(bad, func(b string) bool { return !strings.HasPrefix(b, "writes.go.txt:") }); len(got) != 6 {
+		t.Errorf("the check must reject each runtime write of a finding's class: %v", got)
 	}
 	if _, ok := fromOwn(own.Finding{}, nil); ok {
 		t.Fatal("fromOwn must refuse a Finding own did not build")
@@ -302,11 +309,11 @@ func TestOwnFindingsOnlyFromOwn(t *testing.T) {
 }
 
 // ownUseViolations type-checks the non-test files of the package in dir and
-// returns each expression of type health.Class with ClassOwn's value outside
-// fromOwn (a comparison or case only reads it), and each use of own.Evaluate,
+// returns, with extra files parsed into that package, each write of a
+// finding's class outside fromOwn other than a reset to ClassDerived, and each use of own.Evaluate,
 // own.InstallContext or a type implementing own.Named outside ownrun.go.
 // Types resolve, so aliased imports, variables and conversions are caught.
-func ownUseViolations(t *testing.T, dir string) []string {
+func ownUseViolations(t *testing.T, dir string, extra ...string) []string {
 	t.Helper()
 	const healthPath, ownPath = "github.com/DuncanDoyle/snellius/pkg/health", "github.com/DuncanDoyle/snellius/pkg/health/own"
 	cmd := exec.Command("go", "list", "-export", "-deps", "-f", "{{.ImportPath}}={{.Export}}", ".")
@@ -323,6 +330,7 @@ func ownUseViolations(t *testing.T, dir string) []string {
 	}
 	fset := token.NewFileSet()
 	names, _ := filepath.Glob(filepath.Join(dir, "*.go"))
+	names = append(names, extra...)
 	var files []*ast.File
 	for _, n := range names {
 		if strings.HasSuffix(n, "_test.go") {
@@ -355,16 +363,22 @@ func ownUseViolations(t *testing.T, dir string) []string {
 		return filepath.Base(p.Filename) + ":" + strconv.Itoa(p.Line)
 	}
 	if healthPkg != nil {
-		classOwn := healthPkg.Scope().Lookup("ClassOwn").(*types.Const)
+		finding := healthPkg.Scope().Lookup("Finding").Type().Underlying().(*types.Struct)
+		var field *types.Var
+		for i := range finding.NumFields() {
+			if finding.Field(i).Name() == "class" {
+				field = finding.Field(i)
+			}
+		}
+		derived := healthPkg.Scope().Lookup("ClassDerived").(*types.Const)
+		// clears reports whether e is the constant ClassDerived: writing it never marks a finding own-object.
+		clears := func(e ast.Expr) bool {
+			tv, ok := info.Types[e]
+			return ok && tv.Value != nil && constant.Compare(tv.Value, token.EQL, derived.Val())
+		}
 		for _, f := range files {
 			for _, d := range f.Decls {
 				if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == "fromOwn" && pkg == healthPkg {
-					continue
-				}
-				if g, ok := d.(*ast.GenDecl); ok && slices.ContainsFunc(g.Specs, func(s ast.Spec) bool { // ClassOwn's own declaration
-					vs, ok := s.(*ast.ValueSpec)
-					return ok && slices.ContainsFunc(vs.Names, func(n *ast.Ident) bool { return info.Defs[n] == classOwn })
-				}) {
 					continue
 				}
 				var stack []ast.Node
@@ -373,24 +387,15 @@ func ownUseViolations(t *testing.T, dir string) []string {
 						stack = stack[:len(stack)-1]
 						return true
 					}
-					var parent ast.Node
-					if len(stack) > 0 {
-						parent = stack[len(stack)-1]
-					}
 					stack = append(stack, n)
-					e, ok := n.(ast.Expr)
-					tv, typed := info.Types[e]
-					if !ok || !typed || tv.Value == nil || !types.Identical(tv.Type, classOwn.Type()) || !constant.Compare(tv.Value, token.EQL, classOwn.Val()) {
+					id, ok := n.(*ast.Ident)
+					if !ok || field == nil || info.Uses[id] != field {
 						return true
 					}
-					if b, ok := parent.(*ast.BinaryExpr); ok && (b.Op == token.EQL || b.Op == token.NEQ) {
-						return true
+					if writes(stack, clears) {
+						bad = append(bad, at(n)+": a finding's class written outside fromOwn")
 					}
-					if _, ok := parent.(*ast.CaseClause); ok {
-						return true
-					}
-					bad = append(bad, at(n)+": ClassOwn outside fromOwn")
-					return false
+					return true
 				})
 			}
 		}
@@ -416,12 +421,40 @@ func ownUseViolations(t *testing.T, dir string) []string {
 	return bad
 }
 
+// writes reports whether the class field named by the last node of stack is
+// written there: assigned, incremented, set in a literal or addressed. An
+// assignment or literal value that clears accepts reports a reset, not a write.
+func writes(stack []ast.Node, clears func(ast.Expr) bool) bool {
+	id := stack[len(stack)-1]
+	parent := stack[len(stack)-2]
+	if kv, ok := parent.(*ast.KeyValueExpr); ok && kv.Key == id {
+		return !clears(kv.Value)
+	}
+	sel, ok := parent.(*ast.SelectorExpr)
+	if !ok || sel.Sel != id || len(stack) < 3 {
+		return false
+	}
+	switch g := stack[len(stack)-3].(type) {
+	case *ast.AssignStmt:
+		i := slices.Index(g.Lhs, ast.Expr(sel))
+		if i < 0 {
+			return false
+		}
+		return g.Tok != token.ASSIGN || len(g.Rhs) != len(g.Lhs) || !clears(g.Rhs[i])
+	case *ast.IncDecStmt:
+		return true
+	case *ast.UnaryExpr:
+		return g.Op == token.AND
+	}
+	return false
+}
+
 // A 015 inside its hint window wakes the report at the hint's deadline, as before the boundary.
 func TestOwnRulesWakeAt(t *testing.T) {
 	since := testutil.Now.Add(-2 * time.Minute)
 	r := ruleReport(t, ruleRoute(ruleCond(kgatewayProgrammed, "RouteRuleReplaced", "Replaced Rule (0): bad", since)), policyCatalog())
 	f, _ := onlyRule(t, r)
-	if f.Class != ClassOwn || strings.Contains(f.Detail, RuleReplacedHint) {
+	if f.class != ClassOwn || strings.Contains(f.Detail, RuleReplacedHint) {
 		t.Fatalf("015 %+v, want own-object without the hint yet", f)
 	}
 	if want := since.Add(RuleReplacedHintAge + time.Nanosecond); !r.Next.Equal(want) {

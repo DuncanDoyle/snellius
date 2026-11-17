@@ -81,6 +81,9 @@ const (
 	ClassOwn
 )
 
+// Class is f's class: ClassOwn only for a finding from package own.
+func (f *Finding) Class() Class { return f.class }
+
 // Basis is what decided a finding, for who may see it (D-106).
 type Basis struct {
 	// Collection marks a finding decided only by Snellius's own collection and access state.
@@ -111,7 +114,7 @@ func confine(c Check, fs []Finding, cr CheckResult) ([]Finding, CheckResult) {
 		cr.Collection, cr.fixed = false, ""
 	}
 	marked := func(f *Finding) bool {
-		return !own && (f.Class != ClassDerived || len(f.Basis.Refs) > 0) || !coll && (f.Basis.Collection || f.Basis.text != "")
+		return !own && (f.class != ClassDerived || len(f.Basis.Refs) > 0) || !coll && (f.Basis.Collection || f.Basis.text != "")
 	}
 	if !slices.ContainsFunc(fs, func(f Finding) bool { return marked(&f) }) {
 		return fs, cr
@@ -119,7 +122,7 @@ func confine(c Check, fs []Finding, cr CheckResult) ([]Finding, CheckResult) {
 	fs = slices.Clone(fs)
 	for i := range fs {
 		if !own {
-			fs[i].Class, fs[i].Basis.Refs = ClassDerived, nil
+			fs[i].class, fs[i].Basis.Refs = ClassDerived, nil
 		}
 		if !coll {
 			fs[i].Basis.Collection, fs[i].Basis.text = false, ""
@@ -167,8 +170,9 @@ type Finding struct {
 	// generation. It replaces Since for a caller who may not view all of
 	// Evidence, so Since tells that caller nothing about it. Never serialised.
 	ResourceSince *time.Time `json:"-"`
-	// Class is ClassOwn for a finding from package own, else ClassDerived. Never serialised.
-	Class Class `json:"-"`
+	// class is ClassOwn for a finding from package own, else ClassDerived.
+	// Only fromOwn sets it; Class reads it. Never serialised.
+	class Class
 	// Basis is what decided the finding; runOwn sets its Refs. Never serialised.
 	Basis Basis `json:"-"`
 	// parent is the route parentRef a KGWUI-003 or KGWUI-011 finding is about;

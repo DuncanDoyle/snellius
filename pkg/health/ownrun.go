@@ -247,7 +247,7 @@ func fromOwn(f own.Finding, basis []objects.Ref) (Finding, bool) {
 		}
 	}
 	out := Finding{Code: f.Code(), Slug: f.Slug(), Severity: Severity(f.Severity()), Message: f.Message(), Detail: f.Detail(),
-		Since: f.Since(), Key: f.Key(), Evidence: f.Evidence(), parent: f.Parent(), Class: ClassOwn, Basis: Basis{Refs: basis}}
+		Since: f.Since(), Key: f.Key(), Evidence: f.Evidence(), parent: f.Parent(), class: ClassOwn, Basis: Basis{Refs: basis}}
 	if ev, ok := f.Facts().(Evidence); ok {
 		out.Facts = ev
 	}

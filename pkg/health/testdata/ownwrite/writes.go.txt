@@ -1,0 +1,16 @@
+package health
+
+// Writes of a finding's class at runtime, in package health itself: each
+// may mark a derived finding own-object without the constant ClassOwn.
+
+func markConverted(f *Finding, n int) { f.class = Class(n) }
+
+func markIncremented(f *Finding) { f.class++ }
+
+func markCopied(f, g *Finding) { f.class = g.class }
+
+func markAdded(f *Finding) { f.class += 1 }
+
+func markLiteral(g *Finding) Finding { return Finding{Code: "X", class: g.class} }
+
+func markPointer(f *Finding) { p := &f.class; *p = 1 }

@@ -53,7 +53,7 @@ func RollUp(fs []Finding, cs []CheckResult) State {
 // finding needs the full read, under which Project is not called.
 func (f *Finding) ShownTo(rd Readable) bool {
 	switch {
-	case f.Class == ClassOwn:
+	case f.class == ClassOwn:
 		if f.Resource == nil || !rd.Ref(*f.Resource) {
 			return false
 		}
@@ -84,7 +84,7 @@ func Project(rep Report, rd Readable) Report {
 	for i := range rep.Findings {
 		if f := rep.Findings[i]; f.ShownTo(rd) {
 			f.Group = "" // the viewer's grouping is set per viewer
-			if f.Class != ClassOwn {
+			if f.class != ClassOwn {
 				f.Detail = f.Basis.text // the API server's text may name objects or namespaces
 			}
 			out.Findings = append(out.Findings, f)
