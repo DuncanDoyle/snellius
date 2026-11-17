@@ -15,7 +15,7 @@ func WithProjectionBypass() HandlerOption {
 }
 
 // projectionSteps names the steps WithProjectionStepOff turns off.
-var projectionSteps = map[string]projStep{"findings": stepFindings, "rowState": stepRowState, "counts": stepCounts, "paths": stepPaths}
+var projectionSteps = map[string]projStep{"findings": stepFindings, "rowState": stepRowState, "counts": stepCounts, "delegation": stepDelegation}
 
 // WithProjectionStepOff turns one secure-mode projection step off, the
 // others staying on: the rule harness shows that each matters on its own.

@@ -34,7 +34,7 @@ type routeTrace struct {
 // trace is route's trace: one pass over the caller's projection for the
 // rows on route's own rules, as the caller may see them.
 func (d *detail) trace(route objects.Ref) routeTrace {
-	t, proj, _ := d.h.pathModel(d.p, d.i)
+	t, proj, _ := d.h.pathModel(d.p, d.i, d.v)
 	in, f := d.v.projectInput(d.p, d.i), d.v.projectionFilter(d.i)
 	proj = proj.For(t, in, f)
 	var rows []int32

@@ -811,7 +811,6 @@ func (b *builder) delegation(ix *Index, n *interner, v *computed.Views) {
 	d := &v.Delegation
 	ix.DelegationCap = d.Cap
 	el := eligibility(n, v)
-	chainGraph(ix, n, v)
 	for _, u := range d.Uncertain {
 		// Any compute cap marks a cut ref too-large; only a ref with no rows reads it.
 		if k := (RefKey{u.Route, u.Rule, u.Ref}); u.Reason == computed.UnknownTooLarge && u.Ref >= 0 {
@@ -874,7 +873,7 @@ func delegRows(ix *Index, n *interner, src []computed.Row, checks []computed.Che
 			}
 		}
 	}
-	ctxDeps, fullCtx := make([]DepSet, nctx), make([]DepSet, nctx)
+	ctxDeps := make([]DepSet, nctx)
 	pLo, rLo, owned := 0, 0, false
 	for i := range rows {
 		r := &rows[i]
@@ -901,21 +900,14 @@ func delegRows(ix *Index, n *interner, src []computed.Row, checks []computed.Che
 		}
 		if c := len(r.Contexts); c > 0 {
 			r.ContextDeps, ctxDeps = ctxDeps[:c:c], ctxDeps[c:]
-			r.FullContextDeps, fullCtx = fullCtx[:c:c], fullCtx[c:]
 			for j := range r.Contexts {
-				r.ContextDeps[j], r.FullContextDeps[j] = n.offPath(r.Contexts[j].Deps), n.deps(r.Contexts[j].Deps)
+				r.ContextDeps[j] = n.offPath(r.Contexts[j].Deps)
 			}
 		}
 		if k.Child == (objects.Ref{}) {
 			continue
 		}
 		r.Check = byKey[checkKey{k.Child, k.Parent, r.ChildKey}]
-		if owned {
-			if ix.flaggers == nil {
-				ix.flaggers = map[objects.Ref][]int{}
-			}
-			ix.flaggers[k.Child] = append(ix.flaggers[k.Child], i)
-		}
 		switch r.Outcome {
 		case computed.OutcomeDropped, computed.OutcomeForbidden, computed.OutcomeRejectedHostnames:
 			if id, ok := ix.Row(k.Child); ok && owned {
@@ -1028,34 +1020,6 @@ func eligibility(n *interner, v *computed.Views) *eligible {
 	return el
 }
 
-// chainGraph keeps what Chains walks: each route's reach parents, the view A
-// deps of each of its parentRefs, and the uncertain points (rules §8.5).
-func chainGraph(ix *Index, n *interner, v *computed.Views) {
-	d := &v.Delegation
-	ix.reachParents = make(map[objects.Ref][]objects.Ref, len(d.Reach))
-	for _, e := range d.Reach {
-		ix.reachParents[e.Child] = append(ix.reachParents[e.Child], e.Parent)
-	}
-	outs := v.Attachment.Outcomes
-	ix.rootDeps = make(map[objects.Ref][]DepSet, len(outs))
-	for i := range outs {
-		ix.rootDeps[outs[i].Route] = append(ix.rootDeps[outs[i].Route], n.deps(outs[i].Deps))
-	}
-	ix.closureAll = d.Cap == computed.CapEdges
-	for _, u := range d.Uncertain {
-		if ix.uncertain == nil {
-			ix.uncertain = map[objects.Ref][]computed.Uncertain{}
-		}
-		ix.uncertain[u.Route] = append(ix.uncertain[u.Route], u)
-	}
-	for _, p := range d.PossibleBy {
-		if ix.possibleBy == nil {
-			ix.possibleBy = map[objects.Ref][]RefKey{}
-		}
-		ix.possibleBy[p.Route] = append(ix.possibleBy[p.Route], RefKey{p.Parent, p.Rule, p.Ref})
-	}
-}
-
 // with is d, in any order, united with the eligibility deps of parent.
 func (el *eligible) with(d DepSet, parent objects.Ref) DepSet {
 	e := el.at[parent]
@@ -1156,7 +1120,6 @@ func (b *builder) refScopes(ix *Index, n *interner) {
 	if wild.Known && wild.Value == "" {
 		wild.Value = install.WildcardAll // an empty value means all, as the selector reads it
 	}
-	ix.wild, ix.byLabels = wild, res.Scope.Mode == install.ScopeSelectors
 	scope := func(as objects.DelegationRef) DepSet {
 		switch as.Mode {
 		case objects.DelegationName:
@@ -1216,7 +1179,7 @@ func effective(ix *Index, n *interner, src map[objects.Ref]computed.ChildEffecti
 			nc += len(ce.Edges[j].Contexts)
 		}
 	}
-	edges, outer, inner := make([]DepSet, ne), make([][]DepSet, 2*ne), make([]DepSet, 2*nc)
+	edges, outer, inner := make([]DepSet, ne), make([][]DepSet, ne), make([]DepSet, nc)
 	ix.Effective = make(map[objects.Ref]EffectiveEntry, len(src))
 	add := func(child objects.Ref) {
 		ce, ok := src[child]
@@ -1224,15 +1187,15 @@ func effective(ix *Index, n *interner, src map[objects.Ref]computed.ChildEffecti
 			return
 		}
 		k := len(ce.Edges)
-		e := EffectiveEntry{ChildEffective: ce, EdgeDeps: edges[:k:k], ContextDeps: outer[:k:k], FullContextDeps: outer[k : 2*k : 2*k]}
-		edges, outer = edges[k:], outer[2*k:]
+		e := EffectiveEntry{ChildEffective: ce, EdgeDeps: edges[:k:k], ContextDeps: outer[:k:k]}
+		edges, outer = edges[k:], outer[k:]
 		for j := range ce.Edges {
 			ed := &ce.Edges[j]
 			e.EdgeDeps[j] = el.with(n.offPath(ed.Deps), ed.Parent)
 			c := len(ed.Contexts)
-			e.ContextDeps[j], e.FullContextDeps[j], inner = inner[:c:c], inner[c:2*c:2*c], inner[2*c:]
+			e.ContextDeps[j], inner = inner[:c:c], inner[c:]
 			for x := range ed.Contexts {
-				e.ContextDeps[j][x], e.FullContextDeps[j][x] = n.offPath(ed.Contexts[x].Deps), n.deps(ed.Contexts[x].Deps)
+				e.ContextDeps[j][x] = n.offPath(ed.Contexts[x].Deps)
 			}
 		}
 		ix.Effective[child] = e

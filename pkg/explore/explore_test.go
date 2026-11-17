@@ -1088,10 +1088,6 @@ func TestDelegationRowsOrder(t *testing.T) {
 	if len(r.ContextDeps) != 1 || !slices.Equal(refsOf(ix, r.ContextDeps[0]), []objects.Ref{gwObj}) {
 		t.Errorf("context deps %v", r.ContextDeps)
 	}
-	// The full form keeps them.
-	if !slices.Contains(refsOf(ix, r.FullContextDeps[0]), dA) {
-		t.Errorf("full context deps %v", refsOf(ix, r.FullContextDeps[0]))
-	}
 	if r := &ix.DelegRows[ix.Delegation[dA][3]]; !slices.Equal(refsOf(ix, r.Deps), []objects.Ref{gwObj, shopNS}) {
 		t.Errorf("namespace row deps %v", refsOf(ix, r.Deps))
 	}
@@ -1187,23 +1183,22 @@ func TestFlagDropped(t *testing.T) {
 	if ix.RowFlags(id2, noA)&FlagDropped == 0 || ix.RowFlags(id1, noA)&FlagDropped == 0 {
 		t.Error("a hidden parent route hid the dropped flag (D-024)")
 	}
-	// With chains it comes from readable chains alone: k1 is dropped under a
-	// through the Namespace and rejected under b, whose root reads it.
-	all, listAll := func(objects.Ref) bool { return true }, func(objects.GroupKind, string) bool { return true }
-	for _, tc := range []struct {
-		visible func(objects.Ref) bool
-		want    bool
-	}{{all, true}, {noNS, false}, {func(r objects.Ref) bool { return r != dA && r != dB }, false}, {noA, true}} {
-		if got := ix.rowFlags(id1, tc.visible, ix.Chains(tc.visible, listAll))&FlagDropped != 0; got != tc.want {
-			t.Errorf("chains: k1 dropped %v, want %v", got, tc.want)
-		}
-	}
 	for _, tc := range []struct {
 		visible func(objects.Ref) bool
 		want    []string
 	}{{nil, []string{"k1", "k2"}}, {noNS, []string{"k2"}}, {noA, []string{"k1", "k2"}}} {
 		if p := mustRoutes(t, ix, Query{States: FlagDropped}, tc.visible); !slices.Equal(names(ix, p), tc.want) || p.Total != len(tc.want) {
 			t.Errorf("state=dropped: %v total %d, want %v", names(ix, p), p.Total, tc.want)
+		}
+	}
+	// Without delegation analysis the flag never shows and state=dropped matches nothing (D-114).
+	for _, vw := range []Viewer{{NoDelegation: true}, {NoDelegation: true, Shown: func(*health.Finding) bool { return true }}} {
+		if _, f, _ := ix.RouteStateOf(id1, vw); f&FlagDropped != 0 {
+			t.Errorf("shown %v: k1 flags %v", vw.Shown != nil, f.Names())
+		}
+		p, err := ix.QueryRoutesAs(Query{States: FlagDropped}, vw)
+		if err != nil || p.Total != 0 {
+			t.Errorf("shown %v: state=dropped %v total %d, err %v", vw.Shown != nil, names(ix, p), p.Total, err)
 		}
 	}
 }
@@ -1273,70 +1268,6 @@ func TestRefScopeEmptyWildcardIsAll(t *testing.T) {
 	for _, r := range ix.Routes {
 		if isHTTPRoute(r.Ref.Group, r.Ref.Kind) && r.Ref.Namespace == "shop" && !slices.ContainsFunc(scope, func(i int32) bool { return ix.Ref(i) == r.Ref }) {
 			t.Errorf("%s missing from the label scope", r.Ref)
-		}
-	}
-}
-
-// A label ref over every namespace is readable with a cluster-wide HTTPRoute
-// list, plus Namespaces when the install's scope picks namespaces by label (D-110).
-func TestSelectionAllAsksClusterList(t *testing.T) {
-	for _, byLabels := range []bool{false, true} {
-		in := delegWorld().input(t)
-		in.Install.Settings.WildcardNamespace = install.Setting{Value: "", Known: true}
-		in.Install.Scope = install.Scope{Mode: install.ScopeAll}
-		if byLabels {
-			in.Install.Scope = install.Scope{Mode: install.ScopeSelectors, Selectors: []metav1.LabelSelector{{}}}
-		}
-		v := delegViews()
-		v.Delegation.Rows[0].RefAsWritten = objects.DelegationRef{Mode: objects.DelegationLabel, Namespace: install.WildcardAll, Label: "team"}
-		in.Computed = v
-		ix := Build(in)
-		var asked []string
-		list := func(gk objects.GroupKind, ns string) bool {
-			asked = append(asked, gk.Kind+"/"+ns)
-			return gk.Kind == "HTTPRoute"
-		}
-		hidden := ix.Chains(func(objects.Ref) bool { return true }, list).SelectionHidden(RefKey{dA, 0, 0})
-		want := []string{"HTTPRoute/"}
-		if byLabels {
-			want = append(want, "Namespace/")
-		}
-		if hidden != byLabels || !slices.Equal(asked, want) {
-			t.Errorf("byLabels %v: hidden %v, asked %v; want hidden %v, asked %v", byLabels, hidden, asked, byLabels, want)
-		}
-	}
-}
-
-// An uncertain point counts for a viewer only through a selection it may read:
-// p's own label selection, or q's wildcard behind possible route r.
-func TestSeededByReadableSelection(t *testing.T) {
-	p, q, r := routeRef("shop", "p"), routeRef("shop", "q"), routeRef("shop", "r")
-	ix := &Index{
-		uncertain: map[objects.Ref][]computed.Uncertain{
-			p: {{Route: p, Rule: 1, Ref: 0, Reason: computed.UnknownSetting}},
-			r: {{Route: r, Rule: computed.UncertainPossible, Ref: -1, Reason: computed.UnknownSetting}},
-		},
-		possibleBy: map[objects.Ref][]RefKey{r: {{q, 0, 0}}},
-		RefRows:    map[RefKey][]int{{p, 1, 0}: {0}, {q, 0, 0}: {1}},
-		DelegRows: []DelegRow{
-			{Row: computed.Row{RefAsWritten: objects.DelegationRef{Mode: objects.DelegationLabel, Namespace: "team", Label: "l"}}},
-			{Row: computed.Row{RefAsWritten: objects.DelegationRef{Mode: objects.DelegationWildcard, Namespace: "team"}}},
-		},
-		wild: install.Setting{Value: install.WildcardAll, Known: true},
-	}
-	for _, tc := range []struct {
-		name         string
-		team, seeQ   bool
-		wantP, wantR bool
-	}{
-		{"team unlistable", false, true, false, false},
-		{"team listable", true, true, true, true},
-		{"selecting parent hidden", true, false, true, false},
-	} {
-		list := func(_ objects.GroupKind, ns string) bool { return ns != "team" || tc.team }
-		c := ix.Chains(func(x objects.Ref) bool { return x != q || tc.seeQ }, list)
-		if c.seeded(p) != tc.wantP || c.seeded(r) != tc.wantR {
-			t.Errorf("%s: seeded p %v r %v, want %v %v", tc.name, c.seeded(p), c.seeded(r), tc.wantP, tc.wantR)
 		}
 	}
 }

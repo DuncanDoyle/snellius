@@ -153,7 +153,7 @@ func (h *handler) backendList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := h.view(r)
-	t, proj, _ := h.pathModel(p, i)
+	t, proj, _ := h.pathModel(p, i, v)
 	in := h.backendsInput(p, i, v, t)
 	in.Scope = q.Scope
 	h.prefetchBackends(p, i, v, t, in)
@@ -232,7 +232,7 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, notFoundInScope)
 		return
 	}
-	t, proj, kept := h.pathModel(p, i)
+	t, proj, kept := h.pathModel(p, i, v)
 	f := v.projectionFilter(i)
 	proj = proj.For(t, v.projectInput(p, i), f)
 	in := withSubject(h.backendsInput(p, i, v, t), v, t, ref)

@@ -52,8 +52,6 @@ type ProjectionFilter struct {
 	// Rows, when set, picks the rows to project; the others keep a zero
 	// problem and are never read, so nothing is asked about them (D-100 item 8).
 	Rows func(Row) bool
-	// Deleg, when set, is the view C rows the viewer sees: delegation states come from them (D-113).
-	Deleg ViewRow
 }
 
 // For is p as the viewer of f sees it: a per-request copy whose row
@@ -620,8 +618,12 @@ func (p *projector) delegation(ctx int32, routes []objects.Ref) []Signal {
 		return sigs
 	}
 	var sigs []Signal
-	unknown, flags := p.t.state(ctx, p.deleg())
-	if code := delegCode(unknown, flags); code != "" {
+	pc := &p.t.ctxs[ctx]
+	var unknown computed.UnknownReason
+	if pc.unknown > 0 {
+		unknown = p.t.unknowns[pc.unknown-1]
+	}
+	if code := delegCode(unknown, pc.flags); code != "" {
 		sigs = append(sigs, Signal{Kind: SignalDelegation, Code: code, Ref: routes[len(routes)-1], State: health.StateUnknown})
 	}
 	for k := 1; k < len(routes); k++ {
@@ -734,33 +736,12 @@ func (p *projector) edge(parent, child objects.Ref) *Signal {
 				unknown = cmp.Or(unknown, rows[i].Unknown)
 			}
 		}
-		// Only an uncertain edge asks the viewer's rows, which decide it again.
-		if row, ix := p.deleg(), p.in.Model.Index; row != nil && ix != nil && (flags != 0 || unknown != "") {
-			flags, unknown = 0, ""
-			for _, j := range ix.Delegation[parent] {
-				if ix.DelegRows[j].Key.Child != child {
-					continue
-				}
-				if r, ok := row(j); ok {
-					flags |= rowFlags(r)
-					unknown = cmp.Or(unknown, r.Unknown)
-				}
-			}
-		}
 		if code := delegCode(unknown, flags); code != "" {
 			s = &Signal{Kind: SignalDelegation, Code: code, Ref: child, State: health.StateUnknown}
 		}
 	}
 	p.edges[k] = s
 	return s
-}
-
-// deleg is the filter's view C rows, nil when every row is shown.
-func (p *projector) deleg() ViewRow {
-	if p.filter == nil {
-		return nil
-	}
-	return p.filter.Deleg
 }
 
 // delegCode names a view C state that is not certain: its unknown reason,

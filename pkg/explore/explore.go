@@ -170,7 +170,7 @@ type RouteRow struct {
 	UnknownDeps []DepSet
 	// DroppedDeps are the distinct Deps of the rows that set FlagDropped,
 	// which leave out the routes on their paths (D-024). The flag shows when
-	// any one of them is visible. A Viewer with Chains reads the rows instead.
+	// any one of them is visible.
 	DroppedDeps []DepSet
 	// search is the lower-cased "namespace/name" and hostnames.
 	search string
@@ -298,25 +298,10 @@ type Index struct {
 	unknown bool
 	// parentKinds are the served Gateway and ListenerSet kinds.
 	parentKinds map[objects.GroupKind]bool
-	// wild is the delegation wildcard namespace, "all" when empty; byLabels is
-	// set when the install's scope picks namespaces by their labels.
-	wild     install.Setting
-	byLabels bool
 	// controllers are the install's controller names and noDelegation is its
 	// rule set's delegation switch: install context for PathIncomplete.
 	controllers  []string
 	noDelegation bool
-	// reachParents, rootDeps, uncertain and closureAll are the delegation
-	// graph Chains walks: reach edges by child, each route's view A deps per
-	// parentRef, the uncertain points per route, and whether the edge cap hit.
-	// possibleBy names, per possible route, the uncertain selections behind it.
-	reachParents map[objects.Ref][]objects.Ref
-	rootDeps     map[objects.Ref][]DepSet
-	uncertain    map[objects.Ref][]computed.Uncertain
-	possibleBy   map[objects.Ref][]RefKey
-	closureAll   bool
-	// flaggers are, per child, the DelegRows indexes whose owned parent may set its dropped flag.
-	flaggers map[objects.Ref][]int
 	// parentObjs holds every ListenerSet and HTTPRoute of the snapshot, member or
 	// not: PathIncomplete reads a readable parent from its own object.
 	parentObjs map[objects.Ref]*unstructured.Unstructured
@@ -353,30 +338,22 @@ type ListenerFacts struct {
 // DelegRow is one view B row (rules §5.5) with its dependencies interned.
 // Deps and ContextDeps, index-aligned with Contexts, leave out the routes on
 // each context's path, which never restrict (design §7.4 rule 4b, D-024).
-// FullContextDeps keep them, for Chains. Check is the row's child-entry
-// check, joined by (child, parent, ChildKey); nil when none.
+// Check is the row's child-entry check, joined by (child, parent, ChildKey);
+// nil when none.
 type DelegRow struct {
 	computed.Row
-	Deps                         DepSet
-	ContextDeps, FullContextDeps []DepSet
-	Check                        *computed.CheckResult
-}
-
-// ContextDepsOf is context j's ContextDeps, or its FullContextDeps with paths.
-func (r *DelegRow) ContextDepsOf(j int, paths bool) DepSet {
-	if paths {
-		return r.FullContextDeps[j]
-	}
-	return r.ContextDeps[j]
+	Deps        DepSet
+	ContextDeps []DepSet
+	Check       *computed.CheckResult
 }
 
 // EffectiveEntry is view C of one child (rules §6). EdgeDeps are index-aligned
 // with Edges and ContextDeps with each edge's Contexts; both leave out the
-// routes on the paths, as DelegRow's do; FullContextDeps keep them.
+// routes on the paths, as DelegRow's do.
 type EffectiveEntry struct {
 	computed.ChildEffective
-	EdgeDeps                     []DepSet
-	ContextDeps, FullContextDeps [][]DepSet
+	EdgeDeps    []DepSet
+	ContextDeps [][]DepSet
 }
 
 // RefKey names one delegation ref of a parent route by rule and ref index.
@@ -424,36 +401,6 @@ func (ix *Index) SelectionHidden(k RefKey, visible func(objects.Ref) bool) bool 
 
 // Ref returns the ref at index i of the dependency table.
 func (ix *Index) Ref(i int32) objects.Ref { return ix.Refs[i] }
-
-// Selection is what a delegation ref's selection reads, as permissions
-// decide it: a name ref its Target, a wildcard or label ref every HTTPRoute
-// of Namespace, or of every namespace in the install's scope when All.
-type Selection struct {
-	Named     bool
-	Target    objects.Ref
-	Namespace string
-	All       bool
-	// ByLabels is set with All when the install's scope picks namespaces by their labels.
-	ByLabels bool
-}
-
-// Selection is ref k's selection, from its rows or else its parent's spec;
-// false when k is not a delegation ref.
-func (ix *Index) Selection(k RefKey) (Selection, bool) {
-	var as *objects.DelegationRef
-	if ids := ix.RefRows[k]; len(ids) > 0 {
-		as = &ix.DelegRows[ids[0]].RefAsWritten
-	} else if as = cutRef(ix, k); as == nil {
-		return Selection{}, false
-	}
-	switch {
-	case as.Mode == objects.DelegationName:
-		return Selection{Named: true, Target: objects.Ref{Group: objects.GatewayAPIGroup, Kind: "HTTPRoute", Namespace: as.Namespace, Name: as.Name}}, true
-	case as.Mode == objects.DelegationLabel && (!ix.wild.Known || as.Namespace == ix.wild.Value):
-		return Selection{All: true, ByLabels: ix.byLabels}, true
-	}
-	return Selection{Namespace: as.Namespace}, true
-}
 
 // Visible reports whether visible admits every ref of d; nil admits all.
 func (ix *Index) Visible(d DepSet, visible func(objects.Ref) bool) bool {

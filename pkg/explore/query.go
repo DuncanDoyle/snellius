@@ -365,7 +365,7 @@ func (ix *Index) queryRoutes(in Query, vw Viewer) (Page, int, error) {
 		if !q.common(r.Ref, st, func() string { return r.search }) ||
 			len(q.Kinds) > 0 && !slices.Contains(q.Kinds, gk) ||
 			backends != nil && !backends[id] ||
-			q.States != 0 && (shown && f&q.States == 0 || !shown && ix.rowFlags(id, visible, vw.Chains)&q.States == 0) ||
+			q.States != 0 && (shown && f&q.States == 0 || !shown && ix.viewerFlags(id, vw)&q.States == 0) ||
 			q.Listener == ListenerUnknown && !ix.unknownRef(id, *q.Parent, visible) ||
 			visible != nil && !visible(r.Ref) ||
 			q.Parent != nil && (q.Attachment != "" || visible != nil) && !ix.Under(id, *q.Parent, q.Attachment, visible) {
@@ -408,23 +408,21 @@ func (ix *Index) unknownRef(id RowID, parent objects.Ref, visible func(objects.R
 // dependencies of any one unknown parent visible, and dropped those of any
 // one flagging row (design §7.4 rule 6); disagrees is a finding (rule 9).
 func (ix *Index) RowFlags(id RowID, visible func(objects.Ref) bool) Flag {
-	return ix.rowFlags(id, visible, nil)
+	return ix.viewerFlags(id, Viewer{Visible: visible})
 }
 
-// rowFlags is RowFlags; with chains, dropped comes from the readable chains alone.
-func (ix *Index) rowFlags(id RowID, visible func(objects.Ref) bool, chains *Chains) Flag {
+// viewerFlags are RowFlags for vw. Without delegation analysis the dropped
+// flag never shows and nothing is asked about it (D-114).
+func (ix *Index) viewerFlags(id RowID, vw Viewer) Flag {
 	r := &ix.Routes[id]
 	f := r.Flags
-	if f&FlagListenerUnknown != 0 && !ix.anyVisible(r.UnknownDeps, visible) {
+	if vw.NoDelegation {
+		f &^= FlagDropped
+	}
+	if f&FlagListenerUnknown != 0 && !ix.anyVisible(r.UnknownDeps, vw.Visible) {
 		f &^= FlagListenerUnknown
 	}
-	switch {
-	case chains != nil:
-		f &^= FlagDropped
-		if chains.Dropped(r.Ref) {
-			f |= FlagDropped
-		}
-	case f&FlagDropped != 0 && !ix.anyVisible(r.DroppedDeps, visible):
+	if f&FlagDropped != 0 && !ix.anyVisible(r.DroppedDeps, vw.Visible) {
 		f &^= FlagDropped
 	}
 	return f
@@ -448,9 +446,6 @@ type DelegationQuery struct {
 	// Limit is 1–MaxLimit; 0 means DefaultLimit.
 	Limit  int
 	Cursor string
-	// Chains, when set, gives each row as a viewer of readable chains sees it:
-	// a row it leaves out is left out, and the outcome filter reads its outcome.
-	Chains *Chains
 }
 
 // rowOutcomes are the outcomes a delegation row can have (rules §5.5).
@@ -463,15 +458,15 @@ var rowOutcomes = []computed.RowOutcome{computed.OutcomeAttached, computed.Outco
 // zero-child rows and matches no outcome (our call, 2.4). A row whose child visible rejects is left out; a row with
 // no child never is (design §7.4 rule 3). The outcome filter matches a row
 // only when visible admits every ref of its Deps, which leave out the routes
-// on its paths (rules 4a, 4b); with q.Chains its readable-chain row decides. Both apply before Total and paging; nil
+// on its paths (rules 4a, 4b). Both apply before Total and paging; nil
 // admits every row.
 func (ix *Index) QueryDelegation(parent objects.Ref, q DelegationQuery, visible func(objects.Ref) bool) (Page, error) {
 	return ix.queryDelegation(parent, q, visible, false)
 }
 
 // QueryDelegationVisible is QueryDelegation without the restricted rows: no
-// selection-restricted row (negative ID), and no row whose dependencies, as
-// the outcome filter reads them, visible rejects; both are left out before Total and paging.
+// selection-restricted row (negative ID), and no row whose Deps visible
+// rejects; both are left out before Total and paging.
 func (ix *Index) QueryDelegationVisible(parent objects.Ref, q DelegationQuery, visible func(objects.Ref) bool) (Page, error) {
 	return ix.queryDelegation(parent, q, visible, true)
 }
@@ -522,18 +517,10 @@ func (ix *Index) queryDelegation(parent objects.Ref, q DelegationQuery, visible 
 				match = append(match, -1-i)
 			}
 		}
-		deps, outcome := r.Deps, r.Outcome
-		if q.Chains != nil {
-			cr, ok := q.Chains.Row(i)
-			if !ok {
-				continue
-			}
-			deps, outcome = nil, cr.Outcome
-		}
 		if hidden && k.Child == (objects.Ref{}) ||
-			len(q.Outcomes) > 0 && (!slices.Contains(q.Outcomes, outcome) || !ix.Visible(deps, visible)) ||
+			len(q.Outcomes) > 0 && (!slices.Contains(q.Outcomes, r.Outcome) || !ix.Visible(r.Deps, visible)) ||
 			visible != nil && k.Child != (objects.Ref{}) && !visible(k.Child) ||
-			omit && !ix.Visible(deps, visible) {
+			omit && !ix.Visible(r.Deps, visible) {
 			continue
 		}
 		match = append(match, i)

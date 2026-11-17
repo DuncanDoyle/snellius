@@ -58,8 +58,8 @@ func (h *handler) pathList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	t, proj, kept := h.pathModel(p, i)
 	v := h.view(r)
+	t, proj, kept := h.pathModel(p, i, v)
 	rows := pathScope(t, q.Scope)
 	prefetchPaths(v, i.Index, t, q.Scope, rows)
 	proj = proj.For(t, v.projectInput(p, i), v.scopedFilter(i, t, rows))
@@ -111,16 +111,17 @@ func prefetchRows(v *view, t *paths.Topology, want func(paths.Row) bool) {
 }
 
 // pathModel is install i's topology from the path memo and its projection
-// for p; kept is false when the topology is over the memo cap.
-func (h *handler) pathModel(p *engine.Published, i *engine.InstallModel) (t *paths.Topology, proj *paths.Projection, kept bool) {
+// for p; kept is false when the topology is over the memo cap. A caller of v
+// without delegation analysis gets the topology built without it (D-114).
+func (h *handler) pathModel(p *engine.Published, i *engine.InstallModel, v *view) (t *paths.Topology, proj *paths.Projection, kept bool) {
 	m, id := p.Model, i.Resolved.ID()
 	h.pathMemo.Prune(m)
-	key := paths.TopoKey{Install: id, Source: m.Snapshot.Source, Seq: m.Seq}
+	key := paths.TopoKey{Install: id, Source: m.Snapshot.Source, Seq: m.Seq, Withhold: v.noDelegation()}
 	if i.Computed != nil {
 		key.Views = i.Computed.Generation
 	}
 	t, kept = h.pathMemo.Topology(key, func() *paths.Topology {
-		in := paths.Input{Index: i.Index, Views: i.Computed, Delegates: i.Rules.Delegator() != nil}
+		in := paths.Input{Index: i.Index, Views: i.Computed, Delegates: i.Rules.Delegator() != nil, Withhold: key.Withhold}
 		if i.Index != nil {
 			in.Decode = indexViews{ix: i.Index}
 		}
@@ -258,7 +259,7 @@ func pathRow(l linker, titles map[titleKey]string, t *paths.Topology, proj *path
 		out.Routes[j] = l.linked(ref)
 	}
 	rule := t.Rule(r)
-	ds := proj.Delegation(t, r)
+	ds := t.Delegation(r)
 	out.Rule, out.Delegated, out.Note = rule.Index, len(chain) > 1, note(ds)
 	switch {
 	case out.Delegated && ds.Matches != nil:

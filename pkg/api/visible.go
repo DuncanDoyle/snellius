@@ -5,7 +5,6 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/DuncanDoyle/snellius/pkg/computed"
 	"github.com/DuncanDoyle/snellius/pkg/diagnose"
 	"github.com/DuncanDoyle/snellius/pkg/engine"
 	"github.com/DuncanDoyle/snellius/pkg/explore"
@@ -48,8 +47,6 @@ type view struct {
 	secure bool
 	// off are the projection steps turned off (rule tests only).
 	off projStep
-	// chains memoises each index's readable-chain view (paths).
-	chains map[*explore.Index]*explore.Chains
 	// projections memoises each install's projected report and diagnosis.
 	projections map[*engine.InstallModel]*projection
 	// listed memoises canList's cluster-wide answers.
@@ -73,8 +70,8 @@ const (
 	stepRowState
 	// stepCounts leaves hidden rows, counts and placeholders out (omits).
 	stepCounts
-	// stepPaths lets a hidden route on a delegation path hide what passes through it.
-	stepPaths
+	// stepDelegation withholds delegation analysis (D-114).
+	stepDelegation
 )
 
 // view returns the view of the caller of r. Under a full read, asked the
@@ -447,25 +444,9 @@ func (v *view) Ref(ref objects.Ref) bool { return v.can(ref) }
 // secure mode without the full read.
 func (v *view) projects() bool { return v.secure && v.off&stepFindings == 0 && !v.readsAll() }
 
-// paths reports whether delegation facts come from readable chains alone:
-// secure mode without the full read (D-113). Elsewhere a route on a path
-// never restricts them (D-024).
-func (v *view) paths() bool { return v.secure && v.off&stepPaths == 0 && !v.readsAll() }
-
-// chainsOf is ix's readable-chain view for the caller, memoised; nil unless v.paths().
-func (v *view) chainsOf(ix *explore.Index) *explore.Chains {
-	if ix == nil || !v.paths() {
-		return nil
-	}
-	if c := v.chains[ix]; c != nil {
-		return c
-	}
-	if v.chains == nil {
-		v.chains = map[*explore.Index]*explore.Chains{}
-	}
-	v.chains[ix] = ix.Chains(v.can, v.canList)
-	return v.chains[ix]
-}
+// noDelegation reports whether v withholds delegation analysis: secure mode
+// without the full read (D-114). Permissions alone decide it.
+func (v *view) noDelegation() bool { return v.secure && v.off&stepDelegation == 0 && !v.readsAll() }
 
 // shown reports whether the caller of v sees f: always under the full read
 // and outside secure mode, where D-013's restricted rows stay; else when
@@ -487,7 +468,7 @@ func (v *view) viewer(i *engine.InstallModel) explore.Viewer {
 // viewerIn is viewer for a list under scope. A scoped list projects the
 // checks alone, so no finding outside the scope is asked about.
 func (v *view) viewerIn(i *engine.InstallModel, scope []string) explore.Viewer {
-	vw := explore.Viewer{Visible: v.visible(), Chains: v.chainsOf(i.Index)}
+	vw := explore.Viewer{Visible: v.visible(), NoDelegation: v.noDelegation()}
 	switch {
 	case !v.secure || v.off&stepRowState != 0 || v.readsAll():
 	case scope == nil:
@@ -560,25 +541,7 @@ func (v *view) scopedFilter(i *engine.InstallModel, t *paths.Topology, rows func
 		shown[k] = slices.ContainsFunc(byKey[k], v.shown)
 		return shown[k]
 	}
-	return &paths.ProjectionFilter{Signal: signal, Endpoints: func(ns string) bool { return v.canList(endpointSlices, ns) }, Rows: rows, Deleg: v.delegRows(i.Index)}
-}
-
-// delegRows is the view C rows the caller sees, nil unless v.paths(): a
-// readable-chain row with its readable incompleteness and unknown (D-113).
-func (v *view) delegRows(ix *explore.Index) paths.ViewRow {
-	c := v.chainsOf(ix)
-	if c == nil {
-		return nil
-	}
-	return func(i int) (*computed.Row, bool) {
-		cr, ok := c.Row(i)
-		if !ok {
-			return nil, false
-		}
-		r := ix.DelegRows[i].Row
-		r.SomeNotComputed, r.Unknown = cr.SomeNotComputed, cr.Unknown
-		return &r, true
-	}
+	return &paths.ProjectionFilter{Signal: signal, Endpoints: func(ns string) bool { return v.canList(endpointSlices, ns) }, Rows: rows}
 }
 
 // requiredNotOK reports whether a required check of cs is not OK.

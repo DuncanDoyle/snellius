@@ -818,8 +818,12 @@ func (d *detail) ancestors(route objects.Ref) ([]AncestorPathDTO, bool) {
 
 // delegatedMatches are the distinct matches under which the hidden route
 // parent delegated to child, from view B's retained contexts whose other
-// dependencies the caller may view (design §7.4 rules 3, 4b).
+// dependencies the caller may view (design §7.4 rules 3, 4b); none without
+// delegation analysis (D-114).
 func (d *detail) delegatedMatches(parent, child objects.Ref) []MatchDTO {
+	if d.v.noDelegation() {
+		return nil
+	}
 	var ms []objects.Match
 	seen := map[string]bool{}
 	for _, i := range d.ix.Delegation[parent] {
@@ -829,7 +833,7 @@ func (d *detail) delegatedMatches(parent, child objects.Ref) []MatchDTO {
 		}
 		for j := range r.Contexts {
 			m := r.Contexts[j].ParentMatch
-			if key := matchKey(m); d.v.allowDeps(d.ix, r.ContextDepsOf(j, d.v.paths())) && !seen[key] {
+			if key := matchKey(m); d.v.allowDeps(d.ix, r.ContextDeps[j]) && !seen[key] {
 				seen[key] = true
 				ms = append(ms, m)
 			}
@@ -864,9 +868,12 @@ func matchKey(m objects.Match) string {
 // with no rows, such as one of a parent no root reaches, gets neither. A
 // selection-restricted ref's check is restricted and its zero-child rows
 // are left out; it still counts its visible children (our call, 2.4).
+// Without delegation analysis the ref gets neither (D-114).
 func (d *detail) refCounts(dto *DelegationRefDTO, k explore.RefKey) {
+	if d.v.noDelegation() {
+		return
+	}
 	ids := d.ix.RefRows[k]
-	chains := d.v.chainsOf(d.ix)
 	if len(ids) == 0 {
 		// The edge cap cut it before selection: too large, not empty (rules §5.7,
 		// D-025). An unknown scope wins over every other reason (rules §3.3).
@@ -876,17 +883,13 @@ func (d *detail) refCounts(dto *DelegationRefDTO, k explore.RefKey) {
 				reason = computed.UnknownScope
 			}
 			c := d.f.unknown(ruleDelegation, reason)
-			if chains != nil && chains.SelectionHidden(k) || chains == nil && d.ix.SelectionHidden(k, d.v.visible()) {
+			if d.ix.SelectionHidden(k, d.v.visible()) {
 				c = d.f.restricted()
 			}
 			if !d.f.omitted(c) {
 				dto.Computed = &c
 			}
 		}
-		return
-	}
-	// Readable chains: a hidden selection gives no rows, so no counts either.
-	if chains != nil && chains.SelectionHidden(k) {
 		return
 	}
 	hidden := d.ix.SelectionHidden(k, d.v.visible())
@@ -897,10 +900,7 @@ func (d *detail) refCounts(dto *DelegationRefDTO, k explore.RefKey) {
 	}
 	selected, attached, selKnown, attKnown := 0, 0, true, true
 	for _, i := range ids {
-		r := d.row(i)
-		if r == nil {
-			continue
-		}
+		r := &d.ix.DelegRows[i]
 		child := r.Key.Child != (objects.Ref{})
 		if child && !d.v.can(r.Key.Child) || hidden && !child {
 			continue
@@ -943,29 +943,22 @@ func (d *detail) refCounts(dto *DelegationRefDTO, k explore.RefKey) {
 // on a delegation row (design §7.4 rule 4). A parent no root reached has no
 // edge; when whether one could reach it is hidden, the caller gets the same
 // restricted edge as a reached one would give. inherit is the route's
-// inherit-parent-matcher annotation.
+// inherit-parent-matcher annotation. Without delegation analysis there is none (D-114).
 func (d *detail) effective(route objects.Ref, inherit bool) ([]EffectiveDTO, bool) {
-	e := d.ix.Effective[route]
-	// Readable chains alone give the edges, each with its readable contexts only.
-	var chained []*computed.EffectiveEdge
-	if c := d.v.chainsOf(d.ix); c != nil {
-		chained = c.Edges(route)
+	if d.v.noDelegation() {
+		return nil, false
 	}
+	e := d.ix.Effective[route]
 	out := make([]EffectiveDTO, 0, len(e.Edges))
 	for j := range e.Edges {
-		ed, deps := &e.Edges[j], e.EdgeDeps[j]
-		if chained != nil {
-			if ed, deps = chained[j], nil; ed == nil {
-				continue
-			}
-		}
+		ed := &e.Edges[j]
 		dto := EffectiveDTO{Parent: d.l.linked(ed.Parent), Mode: ed.Mode, ContextsTruncated: ed.ContextsTruncated,
-			Contexts: make([]EffectiveContext, 0, len(ed.Contexts)), Computed: d.f.effective(ed, deps)}
+			Contexts: make([]EffectiveContext, 0, len(ed.Contexts)), Computed: d.f.effective(ed, e.EdgeDeps[j])}
 		if d.f.omitted(dto.Computed) {
 			continue
 		}
 		for x := range ed.Contexts {
-			if chained == nil && !d.v.allowDeps(d.ix, e.ContextDeps[j][x]) {
+			if !d.v.allowDeps(d.ix, e.ContextDeps[j][x]) {
 				continue
 			}
 			c := &ed.Contexts[x]
@@ -1055,11 +1048,15 @@ func (h *handler) routeDelegation(w http.ResponseWriter, r *http.Request) {
 	if u, _ := d.open(w, ref); u == nil {
 		return
 	}
+	// Without delegation analysis no row is sent (D-114).
+	if d.v.noDelegation() {
+		writeJSON(w, Page[DelegationRow]{Install: d.i.Resolved.ID(), Items: []DelegationRow{}, CollectedAt: wireTime(d.p.ConfirmedAt)})
+		return
+	}
 	query := d.ix.QueryDelegation
 	if d.v.omits() {
 		query = d.ix.QueryDelegationVisible
 	}
-	q.Chains = d.v.chainsOf(d.ix)
 	pg, err := query(ref, q, d.v.visible())
 	if err != nil {
 		fail(w, err)
@@ -1072,24 +1069,10 @@ func (h *handler) routeDelegation(w http.ResponseWriter, r *http.Request) {
 			items = append(items, d.selectionRow(&d.ix.DelegRows[-1-id]))
 			continue
 		}
-		items = append(items, d.delegationRow(d.row(int(id)), pu, pv))
+		items = append(items, d.delegationRow(&d.ix.DelegRows[id], pu, pv))
 	}
 	writeJSON(w, Page[DelegationRow]{Install: d.i.Resolved.ID(), Items: items, Total: pg.Total, Next: pg.Next, Prev: pg.Prev,
 		CollectedAt: wireTime(d.p.ConfirmedAt)})
-}
-
-// row is DelegRows[i] as the caller sees it: from readable chains alone when
-// the view has them, nil when none reaches its parent.
-func (d *detail) row(i int) *explore.DelegRow {
-	c := d.v.chainsOf(d.ix)
-	if c == nil {
-		return &d.ix.DelegRows[i]
-	}
-	r, ok := c.Row(i)
-	if !ok {
-		return nil
-	}
-	return r
 }
 
 // delegationRow is view B row r of the parent stored as pu, pv for the
@@ -1112,7 +1095,7 @@ func (d *detail) delegationRow(r *explore.DelegRow, pu *unstructured.Unstructure
 		out.Observed.Entry = d.childEntry(child, r.ChildKey)
 	}
 	for j := range r.Contexts {
-		if !d.v.allowDeps(d.ix, r.ContextDepsOf(j, d.v.paths())) {
+		if !d.v.allowDeps(d.ix, r.ContextDeps[j]) {
 			continue
 		}
 		// Charge before building: a refused context must not materialize its path.
@@ -1139,7 +1122,7 @@ func (d *detail) selectionRow(r *explore.DelegRow) DelegationRow {
 
 // delegationContext is retained context j of row r, whose dependencies the
 // caller may view: routes on its path are named with their links, which is
-// none for a hidden one. Outside secure mode they never restrict it (D-024).
+// none for a hidden one, and never restrict it (design §7.4 rule 4b, D-024).
 func (d *detail) delegationContext(r *explore.DelegRow, j int) DelegationContext {
 	c := &r.Contexts[j]
 	pm := matchDTO(c.ParentMatch)

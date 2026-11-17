@@ -38,7 +38,7 @@ func (h *handler) linker(v *view, p *engine.Published, i *engine.InstallModel, t
 	l := linkerFor(v, p.Model, i)
 	listed := sync.OnceValue(func() func(objects.Ref, bool) bool {
 		if t == nil {
-			t, _, _ = h.pathModel(p, i)
+			t, _, _ = h.pathModel(p, i, v)
 		}
 		return h.listedBackends(p, i, v, t)
 	})

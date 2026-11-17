@@ -40,6 +40,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/install"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
+	"github.com/DuncanDoyle/snellius/pkg/paths"
 	"github.com/DuncanDoyle/snellius/pkg/platform"
 	"github.com/DuncanDoyle/snellius/pkg/scopeverify"
 )
@@ -1032,6 +1033,11 @@ var ruleSurfaces = []ruleSurface{
 	// A readable root with a fitting and a dropped child, and a hidden label selection that may turn uncertain.
 	{name: "delegation (uncertain root)", path: routePath(ns0, uncRoot, "/delegation"), changes: []string{"uncLabelled"}},
 	{name: "route detail (uncertain root)", path: routePath(ns0, uncRoot, ""), changes: []string{"uncLabelled"}},
+	// Codex re-review 5: the unconfirmable note and a child-entry class are computed install-wide.
+	{name: "/paths (unconfirmable root)", path: routePaths(unconfRoot), changes: []string{"unconfLabelled"}},
+	{name: "route detail (unconfirmable root)", path: routePath(ns0, unconfRoot, ""), changes: []string{"unconfLabelled"}},
+	{name: "/paths (entry root)", path: routePaths(entryRoot), changes: []string{"entryLabelled"}},
+	{name: "route detail (entry child)", path: routePath(ns0, entryChild, ""), changes: []string{"entryLabelled"}},
 	// A readable chain to shared-mid that a hidden root on gw0 may also reach.
 	{name: "delegation (shared mid)", path: routePath(ns0, sharedMid, "/delegation"), changes: []string{"hiddenSelectsFits", "hiddenSharedNarrows"}},
 	{name: "route detail (shared mid)", path: routePath(ns0, sharedMid, ""), changes: []string{"hiddenSelects", "hiddenSelectsFits", "hiddenSharedNarrows"}},
@@ -1048,6 +1054,11 @@ func routesPage2(t *testing.T, before, _ *httptest.Server) string {
 		t.Fatal("the restricted viewer's first routes page has no next cursor")
 	}
 	return page + "&cursor=" + url.QueryEscape(next)
+}
+
+// routePaths is the /paths of the rows whose chain holds the HTTPRoute ns0/name.
+func routePaths(name string) func(*testing.T, *httptest.Server, *httptest.Server) string {
+	return fixed("/paths?limit=200&route=" + objects.GatewayAPIGroup + "/HTTPRoute/" + ns0 + "/" + name)
 }
 
 // abs is the fixed path p outside the install's base.
@@ -1332,7 +1343,7 @@ var stepCases = []struct {
 	{step: "findings", user: restrictedUser, keys: [][2]string{{"/findings", "faulty"}, {"/diagnostics", "extension"}}},
 	{step: "rowState", user: restrictedUser, keys: [][2]string{{"/routes", "rejecting"}, {"/gateways", "extension"}}},
 	{step: "counts", user: restrictedUser, keys: [][2]string{{"/routes?namespaces=hidden", "created"}, {"/gateways", "gatewayAdded"}}},
-	{step: "paths", world: "hidden hop", user: nsReader, keys: [][2]string{{"delegation (hidden hop)", "hopMatchNarrows"}, {"/routes?state=dropped", "hopMatchDrops"}}},
+	{step: "delegation", world: "hidden hop", user: nsReader, keys: [][2]string{{"delegation (hidden hop)", "hopMatchNarrows"}, {"/routes?state=dropped", "hopMatchDrops"}}},
 }
 
 // TestRuleEachStepMatters: turning one projection step off breaks the
@@ -1379,11 +1390,19 @@ var extraWorlds = []extraWorld{
 	{name: "hidden root shares", add: func(s ruleSnap) { s.add(sharedRoutes()...); hiddenSelect(s, chainMatch(sharedRoot)) },
 		changes: []ruleChange{{name: "hiddenSharedNarrows", apply: func(s ruleSnap) { hiddenSelect(s, chainMatch(sharedRoot, sharedMid)) }}}, user: nsReader},
 	{name: "scope selections", add: scopeRoutes, changes: scopeChanges, user: nsReader},
-	{name: "uncertain selection", add: uncertainRoutes, changes: []ruleChange{{name: "uncLabelled", apply: func(s ruleSnap) {
-		u := routeTo(hiddenNS, "unc-labelled", hiddenGW("hidden-gw"), "", "", true)
-		u.SetLabels(map[string]string{objects.DelegationLabelKey: uncLabel})
+	{name: "uncertain selection", add: uncertainRoutes, changes: []ruleChange{labelled("uncLabelled", "unc-labelled", uncLabel)}, user: nsReader},
+	{name: "unconfirmable selection", add: unconfirmableRoutes, changes: []ruleChange{labelled("unconfLabelled", "unconf-labelled", unconfLabel)}, user: nsReader},
+	{name: "entry class selection", add: entryRoutes, changes: []ruleChange{labelled("entryLabelled", "entry-labelled", entryLabel)}, user: nsReader},
+}
+
+// labelled is change name: a hidden route on hidden-gw carrying label, which
+// an unreadable label selection may select while the wildcard namespace is unknown.
+func labelled(name, route, label string) ruleChange {
+	return ruleChange{name: name, apply: func(s ruleSnap) {
+		u := routeTo(hiddenNS, route, hiddenGW("hidden-gw"), "", "", true)
+		u.SetLabels(map[string]string{objects.DelegationLabelKey: label})
 		s.add(u)
-	}}}, user: nsReader},
+	}}
 }
 
 // uncRoot's rule 0 names uncChild, which fits; rule 1 names uncDropped,
@@ -1396,28 +1415,75 @@ const (
 	uncLabel   = "unc-team"
 )
 
-// uncertainRoutes adds selNS, uncRoot on gw0's listener l0 and its two
-// readable children, and leaves the controller's wildcard namespace unreadable.
-func uncertainRoutes(s ruleSnap) {
+// unknownWildcard adds selNS and leaves the controller's wildcard namespace unreadable.
+func unknownWildcard(s ruleSnap) {
 	s.Namespaces = append(s.Namespaces, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: selNS}})
 	d := s.deployment("kgw", "kgateway")
 	d.Spec.Template.Spec.Containers[0].Env = append(d.Spec.Template.Spec.Containers[0].Env, corev1.EnvVar{Name: install.WildcardEnv,
 		ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "cm"}, Key: "k"}}})
+}
+
+// selectingRoot is the HTTPRoute ns0/name on gw0's listener l0 with rules.
+func selectingRoot(name string, rules ...any) *unstructured.Unstructured {
 	l0 := gw0()[0]
 	l0.SectionName = "l0"
-	root := routeTo(ns0, uncRoot, []objects.ParentRef{l0}, "", "", true)
-	rule := func(path string, ref map[string]any) map[string]any {
-		return map[string]any{"matches": []any{map[string]any{"path": map[string]any{"type": "PathPrefix", "value": path}}}, "backendRefs": []any{ref}}
-	}
-	named := func(name string) map[string]any {
-		return map[string]any{"group": objects.GatewayAPIGroup, "kind": "HTTPRoute", "name": name, "namespace": ns0}
-	}
-	root.Object["spec"].(map[string]any)["rules"] = []any{
-		rule("/"+uncRoot, named(uncChild)),
-		rule("/"+uncRoot+"/x", named(uncDropped)),
-		rule("/"+uncRoot, map[string]any{"group": "delegation.kgateway.dev", "kind": "label", "name": uncLabel, "namespace": selNS}),
-	}
+	root := routeTo(ns0, name, []objects.ParentRef{l0}, "", "", true)
+	root.Object["spec"].(map[string]any)["rules"] = rules
+	return root
+}
+
+// delegRule is a rule matching the path prefix path that sends to ref.
+func delegRule(path string, ref map[string]any) map[string]any {
+	return map[string]any{"matches": []any{map[string]any{"path": map[string]any{"type": "PathPrefix", "value": path}}}, "backendRefs": []any{ref}}
+}
+
+// namedRef names the HTTPRoute ns0/name; labelRef selects label in selNS.
+func namedRef(name string) map[string]any {
+	return map[string]any{"group": objects.GatewayAPIGroup, "kind": "HTTPRoute", "name": name, "namespace": ns0}
+}
+
+func labelRef(label string) map[string]any {
+	return map[string]any{"group": "delegation.kgateway.dev", "kind": "label", "name": label, "namespace": selNS}
+}
+
+// uncertainRoutes adds selNS, uncRoot on gw0's listener l0 and its two
+// readable children, and leaves the controller's wildcard namespace unreadable.
+func uncertainRoutes(s ruleSnap) {
+	unknownWildcard(s)
+	root := selectingRoot(uncRoot, delegRule("/"+uncRoot, namedRef(uncChild)), delegRule("/"+uncRoot+"/x", namedRef(uncDropped)),
+		delegRule("/"+uncRoot, labelRef(uncLabel)))
 	s.add(root, child(ns0, uncChild, testutil.HTTPRouteRef(ns0, uncRoot)), child(ns0, uncDropped, testutil.HTTPRouteRef(ns0, uncRoot)))
+}
+
+// unconfRoot names unconfChild in rule 0, which fits, and in rule 1, which
+// drops it: rule 1's row is unconfirmable. Rule 2 selects label unconfLabel in selNS.
+const (
+	unconfRoot  = "unconf-root"
+	unconfChild = "unconf-child"
+	unconfLabel = "unconf-team"
+)
+
+// unconfirmableRoutes adds unconfRoot and unconfChild with the wildcard namespace unknown.
+func unconfirmableRoutes(s ruleSnap) {
+	unknownWildcard(s)
+	s.add(selectingRoot(unconfRoot, delegRule("/"+unconfRoot, namedRef(unconfChild)), delegRule("/"+unconfRoot+"/x", namedRef(unconfChild)),
+		delegRule("/"+unconfRoot, labelRef(unconfLabel))), child(ns0, unconfChild, testutil.HTTPRouteRef(ns0, unconfRoot)))
+}
+
+// entryRoot names entryChild, which fits but reports Accepted=False/UnsupportedValue
+// under it, so its child-entry check contradicts; rule 1 selects label entryLabel in selNS.
+const (
+	entryRoot  = "entry-root"
+	entryChild = "entry-child"
+	entryLabel = "entry-team"
+)
+
+// entryRoutes adds entryRoot and entryChild with the wildcard namespace unknown.
+func entryRoutes(s ruleSnap) {
+	unknownWildcard(s)
+	c := child(ns0, entryChild, testutil.HTTPRouteRef(ns0, entryRoot))
+	setParents(c, "Accepted", "UnsupportedValue")
+	s.add(selectingRoot(entryRoot, delegRule("/"+entryRoot, namedRef(entryChild)), delegRule("/"+entryRoot, labelRef(entryLabel))), c)
 }
 
 // scopeRoot's one rule selects every route of selNS, then scopeChild;
@@ -1621,13 +1687,16 @@ func TestRuleCRDGetterSeesCRDFields(t *testing.T) {
 	}
 }
 
-// TestRuleReadableChainShown: where a readable chain and a hidden one both
-// reach sharedMid, the namespace reader sees its rows with the readable
-// chain's context alone, the dropped flag on sharedDropped, and the full
-// viewer both contexts.
-func TestRuleReadableChainShown(t *testing.T) {
-	w := extraWorlds[slices.IndexFunc(extraWorlds, func(w extraWorld) bool { return w.name == "hidden root shares" })]
-	srv := w.pairs(t)[0].before
+// worldNamed is the extra world called name.
+func worldNamed(name string) extraWorld {
+	return extraWorlds[slices.IndexFunc(extraWorlds, func(w extraWorld) bool { return w.name == name })]
+}
+
+// TestRuleReadableChainNotChecked: where a readable chain and a hidden one
+// both reach sharedMid, the namespace reader gets no context and no dropped
+// flag, as delegation analysis is derived (D-114); the full viewer sees both chains.
+func TestRuleReadableChainNotChecked(t *testing.T) {
+	srv := worldNamed("hidden root shares").pairs(t)[0].before
 	path := ruleBase + "/routes/" + objects.GatewayAPIGroup + "/HTTPRoute/" + ns0 + "/" + sharedMid + "/delegation"
 	// roots are the distinct first routes of sharedLeaf's row contexts.
 	roots := func(user string) []string {
@@ -1645,27 +1714,31 @@ func TestRuleReadableChainShown(t *testing.T) {
 		slices.Sort(out)
 		return out
 	}
-	if got := roots(nsReader); !slices.Equal(got, []string{sharedRoot}) {
-		t.Errorf("namespace reader's context roots %v, want the readable chain's alone", got)
+	if got := roots(nsReader); len(got) > 0 {
+		t.Errorf("namespace reader's context roots %v, want none", got)
 	}
 	if got := roots(fullUser); !slices.Equal(got, []string{sharedRoot, hiddenSelector}) {
 		t.Errorf("full viewer's context roots %v, want both chains", got)
 	}
-	var names []string
-	for _, r := range decode[api.Page[api.RouteRow]](t, srv, nsReader, ruleBase+"/routes?limit=200&state=dropped").Items {
-		names = append(names, r.Ref.Name)
+	dropped := func(user string) []string {
+		var names []string
+		for _, r := range decode[api.Page[api.RouteRow]](t, srv, user, ruleBase+"/routes?limit=200&state=dropped").Items {
+			names = append(names, r.Ref.Name)
+		}
+		return names
 	}
-	if !slices.Contains(names, sharedDropped) {
-		t.Errorf("namespace reader's dropped routes %v, want %s", names, sharedDropped)
+	if got := dropped(nsReader); len(got) > 0 {
+		t.Errorf("namespace reader's dropped routes %v, want none", got)
+	}
+	if got := dropped(fullUser); !slices.Contains(got, sharedDropped) {
+		t.Errorf("full viewer's dropped routes %v, want %s", got, sharedDropped)
 	}
 }
 
-// TestRuleSelectionByListPermission: the namespace reader sees a later ref's
-// readable child only when it may list the HTTPRoutes an earlier selection
-// reads; the full viewer sees both children.
-func TestRuleSelectionByListPermission(t *testing.T) {
-	w := extraWorlds[slices.IndexFunc(extraWorlds, func(w extraWorld) bool { return w.name == "scope selections" })]
-	srv := w.pairs(t)[0].before
+// TestRuleSelectionNotChecked: the namespace reader sees no child under a
+// selecting root, whatever selections it may list (D-114); the full viewer sees every child.
+func TestRuleSelectionNotChecked(t *testing.T) {
+	srv := worldNamed("scope selections").pairs(t)[0].before
 	shows := func(user, root, childName string) bool {
 		path := ruleBase + "/routes/" + objects.GatewayAPIGroup + "/HTTPRoute/" + ns0 + "/" + root + "/delegation?limit=200"
 		return slices.ContainsFunc(decode[api.Page[api.DelegationRow]](t, srv, user, path).Items, func(r api.DelegationRow) bool {
@@ -1676,11 +1749,77 @@ func TestRuleSelectionByListPermission(t *testing.T) {
 		user, root, child string
 		want              bool
 	}{
-		{nsReader, openRoot, openChild, true}, {nsReader, scopeRoot, scopeChild, false}, {nsReader, labelRoot, labelChild, false},
-		{fullUser, scopeRoot, scopeChild, true}, {fullUser, labelRoot, labelChild, true},
+		{nsReader, openRoot, openChild, false}, {nsReader, scopeRoot, scopeChild, false}, {nsReader, labelRoot, labelChild, false},
+		{fullUser, openRoot, openChild, true}, {fullUser, scopeRoot, scopeChild, true}, {fullUser, labelRoot, labelChild, true},
 	} {
 		if got := shows(c.user, c.root, c.child); got != c.want {
 			t.Errorf("%s sees %s under %s: %v, want %v", c.user, c.child, c.root, got, c.want)
+		}
+	}
+}
+
+// TestRuleNoDelegationForProjectingViewer: no surface gives the namespace
+// reader anything the delegation traversal computes (D-114), and the full
+// viewer keeps all of it. The shared world has a readable chain with a
+// dropped child; the uncertain selection world, after uncLabelled, has notes
+// and delegation signals.
+func TestRuleNoDelegationForProjectingViewer(t *testing.T) {
+	shared := worldNamed("hidden root selects").pairs(t)[0].before
+	unc := worldNamed("uncertain selection").pairs(t)[0].after
+	route := func(name string) string {
+		return ruleBase + "/routes/" + objects.GatewayAPIGroup + "/HTTPRoute/" + ns0 + "/" + name
+	}
+	pathsOf := func(name string) string {
+		return ruleBase + "/paths?limit=200&route=" + objects.GatewayAPIGroup + "/HTTPRoute/" + ns0 + "/" + name
+	}
+	delegSignal := func(p api.ProblemDTO) bool {
+		return slices.ContainsFunc(p.Signals, func(s api.SignalDTO) bool { return s.Kind == paths.SignalDelegation })
+	}
+	delegated := func(rs []api.PathRowDTO) bool {
+		return slices.ContainsFunc(rs, func(r api.PathRowDTO) bool { return len(r.Routes) > 1 })
+	}
+	for _, user := range []string{nsReader, fullUser} {
+		want := user == fullUser
+		checks := map[string]func() bool{
+			"dropped routes": func() bool {
+				return len(decode[api.Page[api.RouteRow]](t, shared, user, ruleBase+"/routes?limit=200&state=dropped").Items) > 0
+			},
+			"dropped flag": func() bool {
+				return slices.ContainsFunc(decode[api.Page[api.RouteRow]](t, shared, user, ruleBase+"/routes?limit=200").Items,
+					func(r api.RouteRow) bool { return slices.Contains(r.Flags, "dropped") })
+			},
+			"ref counts and check": func() bool {
+				d := decode[api.RouteDetail](t, shared, user, route(sharedRoot)).Rules[0].BackendRefs[0].Delegation
+				return d.Computed != nil || d.Selected != nil || d.Attached != nil
+			},
+			"effective matches": func() bool { return len(decode[api.RouteDetail](t, shared, user, route(sharedMid)).Effective) > 0 },
+			"delegation rows": func() bool {
+				return len(decode[api.Page[api.DelegationRow]](t, shared, user, route(sharedMid)+"/delegation").Items) > 0
+			},
+			"delegated paths": func() bool { return delegated(decode[api.PathsResponse](t, shared, user, pathsOf(sharedRoot)).Rows) },
+			"child trace":     func() bool { return len(decode[api.RouteDetail](t, shared, user, route(sharedLeaf)).Serves) > 0 },
+			"exposure through a child": func() bool {
+				return delegated(decode[api.BackendDetail](t, shared, user, ruleBase+"/backends/"+kinds.KgatewayGroup+"/Backend/"+ns0+"/be-0000").Exposure.Rows)
+			},
+			"path notes and signals": func() bool {
+				return slices.ContainsFunc(decode[api.PathsResponse](t, unc, user, pathsOf(uncRoot)).Rows, func(r api.PathRowDTO) bool {
+					return r.Note != "" || delegSignal(r.Problem)
+				})
+			},
+			"trace signals": func() bool {
+				return slices.ContainsFunc(decode[api.RouteDetail](t, unc, user, route(uncRoot)).Rules, func(r api.RuleDTO) bool {
+					return slices.ContainsFunc(r.BackendRefs, func(b api.BackendRefDTO) bool { return b.Problem != nil && delegSignal(*b.Problem) })
+				})
+			},
+			"backend signals": func() bool {
+				return slices.ContainsFunc(decode[api.BackendsResponse](t, unc, user, ruleBase+"/backends?limit=200").Rows,
+					func(r api.BackendRowDTO) bool { return delegSignal(r.Problem) })
+			},
+		}
+		for name, has := range checks {
+			if got := has(); got != want {
+				t.Errorf("%s: %s %v, want %v", user, name, got, want)
+			}
 		}
 	}
 }

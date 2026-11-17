@@ -583,7 +583,7 @@ func TestBackendLinkAgreesWithBackendDetail(t *testing.T) {
 			}
 			services := 0
 			for pass := range 2 {
-				t2, _, _ := h.pathModel(p, i)
+				t2, _, _ := h.pathModel(p, i, v)
 				listed := h.listedBackends(p, i, v, t2)
 				for _, ref := range refs {
 					status, _ := raw(t, srv, listBase+backendDetailPath(ref))

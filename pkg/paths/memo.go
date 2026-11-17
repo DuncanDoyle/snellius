@@ -24,16 +24,24 @@ type TopoKey struct {
 	Views uint64
 	// Seq is the publication's Model.Seq; an older key never replaces a newer one.
 	Seq uint64
+	// Withhold is Input.Withhold: such a topology has an entry of its own.
+	Withhold bool
 }
 
 // same reports whether k and o name one generation, whatever their Seq.
 func (k *TopoKey) same(o *TopoKey) bool {
-	return k.Install == o.Install && k.Views == o.Views && k.Source.Equal(o.Source)
+	return k.Install == o.Install && k.Withhold == o.Withhold && k.Views == o.Views && k.Source.Equal(o.Source)
 }
 
-// Memo holds, per install, one topology generation and one projection of it
-// (design §4.3). It is viewer-independent; callers authorise every row per
-// request, memo hits included.
+// memoID names one memo entry: an install, with or without the delegation views.
+type memoID struct {
+	install  string
+	withhold bool
+}
+
+// Memo holds, per install and Withhold, one topology generation and one
+// projection of it (design §4.3). It is viewer-independent; callers authorise
+// every row per request, memo hits included.
 //
 // Invariant: the memo keeps no pointer to a Model, Snapshot, Index or object,
 // so an old publication is collectable as soon as the engine drops it. A
@@ -44,7 +52,7 @@ type Memo struct {
 	cap   int
 
 	mu       sync.Mutex
-	installs map[string]*memoEntry
+	installs map[memoID]*memoEntry
 	// pruned is the Seq of the last publication whose installs pruned the memo.
 	pruned uint64
 }
@@ -57,7 +65,7 @@ func NewMemoCap(c clock.PassiveClock, capBytes int) *Memo {
 	if c == nil {
 		c = clock.RealClock{}
 	}
-	return &Memo{clock: c, cap: capBytes, installs: map[string]*memoEntry{}}
+	return &Memo{clock: c, cap: capBytes, installs: map[memoID]*memoEntry{}}
 }
 
 // memoEntry is one install's generation. proj projects topo for the model
@@ -85,7 +93,7 @@ func (m *Memo) Prune(md *engine.Model) {
 	}
 	m.pruned = md.Seq
 	for id := range m.installs {
-		if !slices.ContainsFunc(md.Installs, func(i engine.InstallModel) bool { return i.Resolved.ID() == id }) {
+		if !slices.ContainsFunc(md.Installs, func(i engine.InstallModel) bool { return i.Resolved.ID() == id.install }) {
 			delete(m.installs, id)
 		}
 	}
@@ -96,7 +104,7 @@ func (m *Memo) Prune(md *engine.Model) {
 // A build for an older publication than the stored one is not kept.
 func (m *Memo) Topology(key TopoKey, build func() *Topology) (*Topology, bool) {
 	m.mu.Lock()
-	if e := m.installs[key.Install]; e != nil && e.key.same(&key) {
+	if e := m.installs[memoID{key.Install, key.Withhold}]; e != nil && e.key.same(&key) {
 		e.key.Seq = max(e.key.Seq, key.Seq)
 		t := e.topo
 		m.mu.Unlock()
@@ -106,16 +114,16 @@ func (m *Memo) Topology(key TopoKey, build func() *Topology) (*Topology, bool) {
 	t := build()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	e := m.installs[key.Install]
+	e := m.installs[memoID{key.Install, key.Withhold}]
 	newer := e == nil || e.key.Seq <= key.Seq
 	if t.Bytes() > m.cap {
 		if newer {
-			delete(m.installs, key.Install)
+			delete(m.installs, memoID{key.Install, key.Withhold})
 		}
 		return t, false
 	}
 	if newer {
-		m.installs[key.Install] = &memoEntry{key: key, topo: t}
+		m.installs[memoID{key.Install, key.Withhold}] = &memoEntry{key: key, topo: t}
 	}
 	return t, true
 }
@@ -130,7 +138,7 @@ func (m *Memo) Projection(pub *engine.Published, install string, t *Topology, pr
 	now := m.clock.Now()
 	m.mu.Lock()
 	seq := pub.Model.Seq
-	if e := m.installs[install]; e != nil && e.topo == t && e.proj != nil && e.seq == seq && !expired(e.proj, now) {
+	if e := m.installs[memoID{install, t.withhold}]; e != nil && e.topo == t && e.proj != nil && e.seq == seq && !expired(e.proj, now) {
 		p := e.proj
 		m.mu.Unlock()
 		return p
@@ -139,7 +147,7 @@ func (m *Memo) Projection(pub *engine.Published, install string, t *Topology, pr
 	p := project()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if e := m.installs[install]; e != nil && e.topo == t && (e.proj == nil || e.seq <= seq) {
+	if e := m.installs[memoID{install, t.withhold}]; e != nil && e.topo == t && (e.proj == nil || e.seq <= seq) {
 		e.seq, e.proj = seq, p
 	}
 	return p
@@ -154,7 +162,7 @@ func (m *Memo) Membership(pub *engine.Published, install string, t *Topology, bu
 	}
 	seq := pub.Model.Seq
 	m.mu.Lock()
-	if e := m.installs[install]; e != nil && e.topo == t && e.members != nil && e.membersSeq == seq {
+	if e := m.installs[memoID{install, t.withhold}]; e != nil && e.topo == t && e.members != nil && e.membersSeq == seq {
 		ms := e.members
 		m.mu.Unlock()
 		return ms
@@ -163,7 +171,7 @@ func (m *Memo) Membership(pub *engine.Published, install string, t *Topology, bu
 	ms := build()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if e := m.installs[install]; e != nil && e.topo == t && (e.members == nil || e.membersSeq <= seq) {
+	if e := m.installs[memoID{install, t.withhold}]; e != nil && e.topo == t && (e.members == nil || e.membersSeq <= seq) {
 		e.membersSeq, e.members = seq, ms
 	}
 	return ms

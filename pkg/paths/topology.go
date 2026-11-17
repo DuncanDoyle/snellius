@@ -115,6 +115,9 @@ type Input struct {
 	Decode objects.Decoder
 	// Delegates is true when the selection has a Delegator.
 	Delegates bool
+	// Withhold builds without the delegation traversal's results (D-114): a
+	// delegation row has no view C state, and no delegated route has rows.
+	Withhold bool
 }
 
 // attachment is one view A member with its resources resolved.
@@ -151,12 +154,12 @@ type Topology struct {
 	// ctxs are the rows' path contexts; unknowns the reasons they index.
 	ctxs     []pathCtx
 	unknowns []computed.UnknownReason
-	// srcs are, per context whose view C rows set a delegation state, those rows.
-	srcs map[int32]ctxSource
 	// deps are the dependency sets, each its length then its Refs indexes.
 	deps []int32
 	// delegates is Input.Delegates: whether a delegation backendRef delegates.
 	delegates bool
+	// withhold is Input.Withhold; the memo keeps such a topology apart.
+	withhold bool
 }
 
 // builder holds Build's lookup tables, which the Topology does not retain.
@@ -197,7 +200,7 @@ type listenerKey struct {
 // backendRef), one per rule with no backendRef, and one per RequestMirror,
 // then the same per view C context for delegated routes.
 func Build(in Input) *Topology {
-	t := &Topology{delegates: in.Delegates}
+	t := &Topology{delegates: in.Delegates, withhold: in.Withhold}
 	if in.Index == nil || in.Views == nil || in.Decode == nil {
 		return t
 	}
@@ -207,7 +210,9 @@ func Build(in Input) *Topology {
 	for i := range in.Views.Attachment.Members {
 		b.member(&in.Views.Attachment.Members[i])
 	}
-	b.delegated()
+	if !in.Withhold {
+		b.delegated()
+	}
 	t.number()
 	// The memo retains the tables, so they are copied to their length.
 	t.Rows, t.Refs, t.deps = slices.Clone(t.Rows), slices.Clone(t.Refs), slices.Clone(t.deps)
@@ -355,7 +360,10 @@ func (b *builder) rule(att, ctx int32, ri int, r *objects.Rule, base []int32) {
 			// A delegation is one row whose backend is the delegation, with its view C
 			// rows' state; delegated() adds the children's rows. Name mode names the
 			// child, so it is a dependency; the other modes reveal only the parent's spec.
-			row := Row{att: att, ctx: b.refState(ctx, r.Index, i), rule: rule, ref: ref, mirror: -1}
+			row := Row{att: att, ctx: ctx, rule: rule, ref: ref, mirror: -1}
+			if !b.in.Withhold {
+				row.ctx = b.refState(ctx, r.Index, i)
+			}
 			if br.Delegation.Mode == objects.DelegationName {
 				b.add(row, base, b.ref(br.Ref))
 			} else {
