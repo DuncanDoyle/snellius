@@ -119,6 +119,38 @@ Notes:
 - **Data stays closed for now.** Until per-user authorisation lands later in Phase 7, every `/api/` request answers `401` without a session and `503 secure-mode-incomplete` after sign-in. Main is a development build until `v0.8.0`.
 - **No secrets in the browser.** The client secret, the ID token, the refresh token and the user's bearer token never reach the browser or the logs. The browser holds only an opaque session cookie.
 
+#### What each user sees
+
+In secure mode each user sees only what their own Kubernetes RBAC lets them read. A user who may `list` every served kind cluster-wide has the full read and sees everything Snellius reads. Everyone else is a restricted viewer, and these rules apply to them:
+
+- **No trace of hidden objects.** Rows, counts, facets, summaries and health show only objects the user can read. There are no hidden counts, placeholders or "restricted" markers. A change to an object the user cannot read does not change what they see, apart from the exceptions below.
+- **Findings.** A finding about one object shows when the user can read that object and every object it names, such as a route's parents and backends. Findings that look across many objects need the full read: listener-count disagreement, version skew, proxy stats, process and probe findings, and every finding from an extension check.
+- **"Not checked".** In "What was checked", a check reads "Not checked" when the user cannot read everything it reads. It means Snellius did not show the result to this user, not that the check passed or failed. Collection failures, such as a watch Snellius may not run, show to every user with fixed text.
+- **Listener checks.** A listener's route-count check shows below the full read only when the user may `list` every route kind in every namespace the listener admits: its own namespace for `Same`, cluster-wide for `All` and `Selector`. A `Selector` listener also needs cluster-wide `list` on Namespaces. Otherwise the listener shows the count of routes the user can read, with no check.
+- **Processes and probes.** Process counts need `list` on Deployments and Pods in their namespace. Probe facts need `list` on Events cluster-wide, because Snellius caps Events across the cluster.
+- **Endpoints.** Endpoint counts need `list` on EndpointSlices in the Service's namespace. Without it, the Traffic and Backends pages say "You can't read the EndpointSlices in this namespace", with no counts.
+- **Installs.** Every signed-in user sees every install's ID (`<namespace>.<name>` of the controller Deployment) and a neutral name. Its GatewayClass names, controller readiness and version, and scope details show only when the user can read their source objects. Otherwise the header says "Details not visible to you". An install with nothing the user can read shows empty pages, never a 404.
+- **Times.** A response's `collectedAt` is the real snapshot time for every user. For a user without the full read, per-result times and the `/installs` `computedAt` are the time Snellius last confirmed the data, not the time it last computed the model.
+- **Permissions note.** The header shows "You see what your Kubernetes permissions allow." to a user without the full read, as text or, on a narrow window, as an icon with a tooltip. `/api/v1/meta` reports this as `limitedView`.
+
+Some things are install context and change what every user sees, even when the user cannot read the object that changed:
+
+- the install list and each install's ID;
+- the controller's settings: its scope, version and rule set;
+- install membership: which Gateways, ListenerSets, routes and policies belong to an install, decided by GatewayClasses, parent Gateways and ListenerSets, and Namespace labels;
+- collection failures, and which kinds Snellius itself can read, which follow Snellius's own RBAC;
+- the response's `collectedAt`, which moves when anything in the install changes.
+
+One more thing is visible to other users. A backend detail page shows when its endpoints were read, and Snellius keeps that read for 5 seconds. So a user can learn that someone else opened the same Service within the last 5 seconds. It never shows who, or anything from an object the user cannot read.
+
+#### Namespace scope
+
+The namespace selector in the header limits the list pages to the namespaces you choose. Rows, counts, facets and summaries then cover only objects in those namespaces, for every user. Findings without a namespace, such as one about a CRD, fall outside every scope. A dependency in another namespace, such as a route's Gateway, is still checked and shown when the user can read it.
+
+- **One setting per browser.** The choice is stored in the browser and applies to every install. While a scope is active, the header button names it, and on a narrow window its icon shows a count. An empty list under a scope says so and offers "Show all namespaces".
+- **Fewer checks.** A scoped list checks permissions only in the chosen namespaces. On a large cluster this cuts the checks for a cold page about tenfold.
+- **API.** The lists `/routes`, `/gateways`, `/listenersets`, `/paths`, `/backends`, `/findings` and `/processes` take `namespaces=a,b`, in both modes. Give it once, with up to 100 namespace names. An empty or invalid value answers `400`. `GET /api/v1/installs/{id}/namespaces` lists the namespaces that hold routes, Gateways or ListenerSets the user can see.
+
 ## Install
 
 ```sh
@@ -275,10 +307,11 @@ func extensions(clk clock.WithTicker) []extension.Option {
 
 The other options are `WithDetectors`, `WithScopeProvider`, `WithScopeVerifier` and `WithComputedRules`.
 
-- **Checks.** `WithChecks` takes a finding-code prefix, such as `ACME-`. It is a capital letter, then one to fifteen capitals or digits, then a dash. Each prefix registers once, and `KGWUI-` is reserved. A bad or repeated prefix makes `app.Build` fail.
-- **Endpoints.** `WithHandlers("acme", …)` serves its routes under `/api/ext/acme/`, so they never collide with API v1. `Deps.Current` returns the published model. Filter objects with `api.Visible`, and reply with `api.WriteJSON` and `api.WriteError`.
+- **Checks.** `WithChecks` takes a finding-code prefix, such as `ACME-`. It is a capital letter, then one to fifteen capitals or digits, then a dash. Each prefix registers once, and `KGWUI-` is reserved. A bad or repeated prefix makes `app.Build` fail. In secure mode, a user without the full read sees an extension check's results as "Not checked" and none of its findings.
+- **Endpoints.** `WithHandlers("acme", …)` serves its routes under `/api/ext/acme/`, so they never collide with API v1. `Deps.Current` returns the published model. Reply with `api.WriteJSON` and `api.WriteError`.
+- **What a caller may see.** A handler that serves cluster objects must filter them through `Deps.View(r)`, the caller's `api.Viewer`. It answers as the core handlers do: `api.VisibleTo` filters a list, `Can` decides a row or count, `CanNamed` a detail page's subject, `CanList` a kind in a namespace, and `Shown` a finding. Then a change to an object the caller cannot read never changes the response. Read an install's Backends with `Viewer.Backends`, not `Install.Owned.Backends`: which Backends an install owns depends on consumer routes the caller may not read. Only `pkg/api` implements `Viewer`, so new methods may be added to it.
 - **Collectors.** `WithCollectors` starts each collector with the app. It publishes values through `Deps.Publish(key, value, fingerprint, ttl)` or marks them failing with `Deps.Fail`. A check declares the keys it reads as `<collector>/<key>` in `Inputs().Collected` and reads them with `ctx.Collected(key)`. A new fingerprint triggers a recompute. An expired value, or one from a stopped collector, reads as unavailable.
-- **Capabilities.** `WithCapabilities` adds entries to `capabilityStates` in `/api/v1/meta`. A state is `on`, `off`, `denied` or `failing`. Names must not clash with core ones.
+- **Capabilities.** `WithCapabilities` adds entries to `capabilityStates` in `/api/v1/meta`. A state is `on`, `off`, `denied` or `failing`. Names must not clash with core ones. Every user gets the same states, so a source reports only the extension's own state, never anything read from cluster objects.
 
 Kinds added with `WithKinds`, and anything a collector reads, need matching rules in the chart's ClusterRole. Add them with `rbac.extraRules`, as [values-acme.yaml](examples/downstream/chart/values-acme.yaml) does. The chart also takes `extraEnv`, `extraVolumes`, `extraVolumeMounts` and `extraContainers`.
 
@@ -389,6 +422,13 @@ Saved theme choices carry over. Finding codes keep the `KGWUI-` prefix, so API v
   - New flags `--authz-max-in-flight`, `--authz-rate` and `--authz-burst` (chart `auth.authz.maxInFlight`, `rate` and `burst`, defaults 32, 100 and 500) limit checks across all users. See [Secure mode](#secure-mode).
   - The secure-mode ClusterRole gains `create` on `subjectaccessreviews`.
   - New metrics: `snellius_authz_checks_total{verb,outcome}`, `snellius_authz_check_seconds_total`, `snellius_authz_cache_total{result}` and `snellius_authz_identities`.
+- **Visibility everywhere (7.4).** See [What each user sees](#what-each-user-sees).
+  - In secure mode the API no longer sends `deniedInInstall`, `hidden`, `restricted` entries or the computed `restricted` state. Local mode is unchanged.
+  - Install IDs keep the controller's namespace and name in both modes, so install URLs and `--install` values stay the same.
+  - In secure mode `/api/v1/meta` asks for the full read. It answers `503 authz-unavailable` when that check fails, like the other routes, and gains `limitedView`.
+  - `/installs` and the install header gain `detailsHidden`. Endpoint summaries gain the state `not-permitted`, sent when the user may not list EndpointSlices in the Service's namespace.
+  - The seven list routes take `namespaces=`, and `GET /api/v1/installs/{id}/namespaces` is new. See [Namespace scope](#namespace-scope).
+  - Extensions: `Deps.View` gives a handler the caller's `api.Viewer`, and a handler that serves cluster objects must use it. Use `Viewer.Backends` in place of `Install.Owned.Backends`. See [Extending](#extending).
 - **Chart.**
   - New values `auth.mode`, `auth.allowedHosts` and `audit.levels`.
   - In local mode the pod gets the annotation `sidecar.istio.io/inject: "false"` and the label `istio.io/dataplane-mode: none`.

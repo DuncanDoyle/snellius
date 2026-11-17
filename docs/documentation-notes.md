@@ -97,3 +97,20 @@ Topics the user-facing documentation must cover when it is written. Each entry s
 - **Failing closed.** A failed check answers `503 authz-unavailable`, never a partial page or a 404, and writes a `security` audit record `authz-unavailable` with the reason (`check-failed`, `check-limit`, `full-read-failed`, `expired`, `identity-stale`). Explain the 1,000-check limit per request.
 - **RBAC.** Secure mode adds `create` on `subjectaccessreviews`. Say which kinds a user needs `list` on for the full-read path.
 - **Metrics.** `snellius_authz_checks_total{verb,outcome}`, `snellius_authz_check_seconds_total`, `snellius_authz_cache_total{result}`, `snellius_authz_identities`.
+
+## Visibility for restricted viewers (2026-11-17, Phase 7 sub-phase 7.4)
+
+- **The basis rule.** A finding about one object shows to a viewer without the full read only when they can read that object and every object it names (D-106). Findings decided by many objects (listener counts, skew, proxy stats, processes, probes, extension checks) need the full read. Give one example per class, so an application team knows why a platform-wide finding is missing for them. Say that the basis is decided per resource and analyzer, so a route rejected by a readable and a hidden parent shows no finding to that viewer (D-108 item 4).
+- **"Not checked".** What it means in "What was checked", and that it is never a pass. Collection failures still show to everyone, with fixed text.
+- **Below-full-read exceptions.** The listener check with a readable route population, process counts with `list` on Deployments and Pods, probe facts with cluster-wide `list` on Events, and endpoint counts with `list` on EndpointSlices (D-110). Give the RBAC rules a team needs for each.
+- **The permissions note.** The header note "You see what your Kubernetes permissions allow." shows to a viewer without the full read (`/api/v1/meta` `limitedView`). Say which permissions make up the full read, so a platform team can grant it.
+- **Install context.** List what every viewer sees regardless of RBAC: the install list and IDs (D-102, D-103), controller settings (D-106), membership (D-107), collection failures and Snellius's own RBAC (D-108), the response time (D-109). Say plainly that these are accepted exceptions.
+- **Times.** For a viewer without the full read, per-result times and `/installs` `computedAt` are the confirmation time (D-109).
+- **Backend detail read time.** Endpoint reads are kept for 5 s, so a backend detail page can show that someone opened the same Service just before. Document it as a known side channel that reveals no hidden object.
+
+## Namespace scope (2026-11-17, Phase 7 sub-phase 7.4)
+
+- **What it does.** The header selector limits rows, counts, facets and summaries to the chosen namespaces, for every viewer. Findings with no namespace fall outside every scope. Cross-namespace dependencies are still checked.
+- **Where it lives.** One browser setting for every install, kept across reloads. Explain the marker on the header and the scoped empty state with "Show all namespaces".
+- **Why use it.** A scoped page asks about a tenth of the permission checks on a large cluster. Give the measured numbers from the 7.4 bench.
+- **API.** `namespaces=` on the seven lists (at most 100 names, `400` on a bad value) and `GET /api/v1/installs/{id}/namespaces`.

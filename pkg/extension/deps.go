@@ -23,12 +23,12 @@ type Deps struct {
 	// Authorizer is the registry's; handlers filter objects through View, not with it directly.
 	Authorizer api.Authorizer
 	// View is the caller's api.Viewer, through the core handler's authoriser.
-	// A handler that serves cluster objects must use it (api.VisibleTo, Viewer.Shown),
-	// so a change to an object the caller cannot read never changes its response.
+	// A handler that serves cluster objects must use it (api.VisibleTo, Can, CanNamed,
+	// CanList, Shown), so a change to an object the caller cannot read never changes its response.
 	// Install.Owned.Backends depends on hidden consumer routes: use Viewer.Backends.
 	View func(r *http.Request) api.Viewer
 	// Capabilities returns the states every WithCapabilities source reports now,
-	// in registration order; /api/v1/meta lists the same.
+	// in registration order; /api/v1/meta lists the same to every viewer.
 	Capabilities func() []api.Capability
 	// Logger carries the extension's name.
 	Logger *slog.Logger
