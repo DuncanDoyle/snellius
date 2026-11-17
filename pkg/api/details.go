@@ -819,7 +819,7 @@ func (d *detail) delegatedMatches(parent, child objects.Ref) []MatchDTO {
 		}
 		for j := range r.Contexts {
 			m := r.Contexts[j].ParentMatch
-			if key := matchKey(m); d.v.allowDeps(d.ix, r.ContextDeps[j]) && !seen[key] {
+			if key := matchKey(m); d.v.allowDeps(d.ix, r.ContextDepsOf(j, d.v.paths())) && !seen[key] {
 				seen[key] = true
 				ms = append(ms, m)
 			}
@@ -932,12 +932,12 @@ func (d *detail) effective(route objects.Ref, inherit bool) ([]EffectiveDTO, boo
 	for j := range e.Edges {
 		ed := &e.Edges[j]
 		dto := EffectiveDTO{Parent: d.l.linked(ed.Parent), Mode: ed.Mode, ContextsTruncated: ed.ContextsTruncated,
-			Contexts: make([]EffectiveContext, 0, len(ed.Contexts)), Computed: d.f.effective(ed, e.EdgeDeps[j])}
+			Contexts: make([]EffectiveContext, 0, len(ed.Contexts)), Computed: d.f.effective(ed, e.EdgeDepsOf(j, d.v.paths()))}
 		if d.f.omitted(dto.Computed) {
 			continue
 		}
 		for x := range ed.Contexts {
-			if !d.v.allowDeps(d.ix, e.ContextDeps[j][x]) {
+			if !d.v.allowDeps(d.ix, e.ContextDepsOf(j, x, d.v.paths())) {
 				continue
 			}
 			c := &ed.Contexts[x]
@@ -991,7 +991,7 @@ func (d *detail) unreachedEdges(route objects.Ref, inherit bool, out *[]Effectiv
 	for _, i := range ids {
 		r := &d.ix.DelegRows[i]
 		p := r.Key.Parent
-		if d.v.allowDeps(d.ix, r.Deps) || slices.ContainsFunc(*out, func(e EffectiveDTO) bool { return e.Parent.Ref == p }) {
+		if d.v.allowDeps(d.ix, r.RowDeps(d.v.paths())) || slices.ContainsFunc(*out, func(e EffectiveDTO) bool { return e.Parent.Ref == p }) {
 			continue
 		}
 		*out = append(*out, EffectiveDTO{Parent: d.l.linked(p), Mode: mode, Contexts: []EffectiveContext{{Restricted: true}},
@@ -1069,7 +1069,7 @@ func (d *detail) delegationRow(r *explore.DelegRow, pu *unstructured.Unstructure
 		out.Observed.Entry = d.childEntry(child, r.ChildKey)
 	}
 	for j := range r.Contexts {
-		if !d.v.allowDeps(d.ix, r.ContextDeps[j]) {
+		if !d.v.allowDeps(d.ix, r.ContextDepsOf(j, d.v.paths())) {
 			continue
 		}
 		// Charge before building: a refused context must not materialize its path.
@@ -1096,7 +1096,7 @@ func (d *detail) selectionRow(r *explore.DelegRow) DelegationRow {
 
 // delegationContext is retained context j of row r, whose dependencies the
 // caller may view: routes on its path are named with their links, which is
-// none for a hidden one, and never restrict it (design §7.4 rule 4b, D-024).
+// none for a hidden one. Outside secure mode they never restrict it (D-024).
 func (d *detail) delegationContext(r *explore.DelegRow, j int) DelegationContext {
 	c := &r.Contexts[j]
 	pm := matchDTO(c.ParentMatch)

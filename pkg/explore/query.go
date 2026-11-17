@@ -408,15 +408,28 @@ func (ix *Index) unknownRef(id RowID, parent objects.Ref, visible func(objects.R
 // dependencies of any one unknown parent visible, and dropped those of any
 // one flagging row (design §7.4 rule 6); disagrees is a finding (rule 9).
 func (ix *Index) RowFlags(id RowID, visible func(objects.Ref) bool) Flag {
+	return ix.rowFlags(id, visible, false)
+}
+
+// rowFlags is RowFlags; with paths, dropped reads the sets that keep the routes on the paths.
+func (ix *Index) rowFlags(id RowID, visible func(objects.Ref) bool, paths bool) Flag {
 	r := &ix.Routes[id]
 	f := r.Flags
 	if f&FlagListenerUnknown != 0 && !ix.anyVisible(r.UnknownDeps, visible) {
 		f &^= FlagListenerUnknown
 	}
-	if f&FlagDropped != 0 && !ix.anyVisible(r.DroppedDeps, visible) {
+	if f&FlagDropped != 0 && !ix.anyVisible(r.DroppedSets(paths), visible) {
 		f &^= FlagDropped
 	}
 	return f
+}
+
+// DroppedSets are r's DroppedDeps, or its DroppedFullDeps with paths.
+func (r *RouteRow) DroppedSets(paths bool) []DepSet {
+	if paths {
+		return r.DroppedFullDeps
+	}
+	return r.DroppedDeps
 }
 
 // anyVisible reports whether visible admits every ref of some set in ds.
@@ -456,8 +469,8 @@ func (ix *Index) QueryDelegation(parent objects.Ref, q DelegationQuery, visible 
 }
 
 // QueryDelegationVisible is QueryDelegation without the restricted rows: no
-// selection-restricted row (negative ID), and no row whose Deps visible
-// rejects; both are left out before Total and paging.
+// selection-restricted row (negative ID), and no row whose FullDeps visible
+// rejects, so none through a hidden route; both are left out before Total and paging.
 func (ix *Index) QueryDelegationVisible(parent objects.Ref, q DelegationQuery, visible func(objects.Ref) bool) (Page, error) {
 	return ix.queryDelegation(parent, q, visible, true)
 }
@@ -508,10 +521,11 @@ func (ix *Index) queryDelegation(parent objects.Ref, q DelegationQuery, visible 
 				match = append(match, -1-i)
 			}
 		}
+		deps := r.RowDeps(omit)
 		if hidden && k.Child == (objects.Ref{}) ||
-			len(q.Outcomes) > 0 && (!slices.Contains(q.Outcomes, r.Outcome) || !ix.Visible(r.Deps, visible)) ||
+			len(q.Outcomes) > 0 && (!slices.Contains(q.Outcomes, r.Outcome) || !ix.Visible(deps, visible)) ||
 			visible != nil && k.Child != (objects.Ref{}) && !visible(k.Child) ||
-			omit && !ix.Visible(r.Deps, visible) {
+			omit && !ix.Visible(deps, visible) {
 			continue
 		}
 		match = append(match, i)

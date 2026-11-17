@@ -9,10 +9,12 @@ import (
 // admits population members; nil admits every one. Shown says which findings
 // the caller sees; nil means the precomputed states, flags and reasons, and
 // then Unknown is ignored. Unknown is the caller's install-wide unknown.
+// Paths makes the routes on a delegation path restrict its facts (secure mode).
 type Viewer struct {
 	Visible func(objects.Ref) bool
 	Shown   func(*health.Finding) bool
 	Unknown bool
+	Paths   bool
 }
 
 // WorstOf is ref's Worst over the findings vw shows.
@@ -109,7 +111,7 @@ func (ix *Index) RouteStateOf(id RowID, vw Viewer) (health.State, Flag, *health.
 // flags and no parent is asked about. The state never depends on them.
 func (ix *Index) routeState(id RowID, vw Viewer, links bool) (health.State, Flag, *health.RowReason) {
 	r := &ix.Routes[id]
-	f := ix.RowFlags(id, vw.Visible)
+	f := ix.rowFlags(id, vw.Visible, vw.Paths)
 	if vw.Shown == nil {
 		return r.State, f, ix.RouteReason(id)
 	}

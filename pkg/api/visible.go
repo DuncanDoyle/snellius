@@ -425,6 +425,11 @@ func (v *view) Ref(ref objects.Ref) bool { return v.can(ref) }
 // secure mode without the full read.
 func (v *view) projects() bool { return v.secure && !v.readsAll() }
 
+// paths reports whether a hidden route on a delegation path hides the
+// contexts, matches and flags through it: secure mode without the full read.
+// Elsewhere such a route never restricts them (D-024).
+func (v *view) paths() bool { return v.projects() }
+
 // shown reports whether the caller of v sees f: always under the full read
 // and outside secure mode, where D-013's restricted rows stay; else when
 // f.ShownTo the caller.
@@ -445,7 +450,7 @@ func (v *view) viewer(i *engine.InstallModel) explore.Viewer {
 // viewerIn is viewer for a list under scope. A scoped list projects the
 // checks alone, so no finding outside the scope is asked about.
 func (v *view) viewerIn(i *engine.InstallModel, scope []string) explore.Viewer {
-	vw := explore.Viewer{Visible: v.visible()}
+	vw := explore.Viewer{Visible: v.visible(), Paths: v.paths()}
 	switch {
 	case !v.projects():
 	case scope == nil:

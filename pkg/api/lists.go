@@ -148,7 +148,7 @@ func (ls *list) prefetchRouteRows(ids []explore.RowID) {
 				sets = append(sets, r.Computed[j].Deps)
 			}
 			sets = append(sets, r.UnknownDeps...)
-			sets = append(sets, r.DroppedDeps...)
+			sets = append(sets, r.DroppedSets(ls.vw.Paths)...)
 		}
 	})
 	ls.v.prefetch(func(add func(objects.Ref)) {

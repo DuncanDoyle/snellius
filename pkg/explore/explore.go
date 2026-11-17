@@ -170,8 +170,9 @@ type RouteRow struct {
 	UnknownDeps []DepSet
 	// DroppedDeps are the distinct Deps of the rows that set FlagDropped,
 	// which leave out the routes on their paths (D-024). The flag shows when
-	// any one of them is visible.
-	DroppedDeps []DepSet
+	// any one of them is visible. DroppedFullDeps are the rows' FullDeps,
+	// which keep the routes: a Viewer with Paths reads those.
+	DroppedDeps, DroppedFullDeps []DepSet
 	// search is the lower-cased "namespace/name" and hostnames.
 	search string
 	// rejectedBy are the Gateways with a KGWUI-001 that set FlagGatewayRejecting, in link order.
@@ -338,22 +339,55 @@ type ListenerFacts struct {
 // DelegRow is one view B row (rules §5.5) with its dependencies interned.
 // Deps and ContextDeps, index-aligned with Contexts, leave out the routes on
 // each context's path, which never restrict (design §7.4 rule 4b, D-024).
-// Check is the row's child-entry check, joined by (child, parent, ChildKey);
-// nil when none.
+// FullDeps and FullContextDeps keep them, for secure mode, where a hidden
+// route on a path hides what passes through it. Check is the row's
+// child-entry check, joined by (child, parent, ChildKey); nil when none.
 type DelegRow struct {
 	computed.Row
-	Deps        DepSet
-	ContextDeps []DepSet
-	Check       *computed.CheckResult
+	Deps, FullDeps               DepSet
+	ContextDeps, FullContextDeps []DepSet
+	Check                        *computed.CheckResult
+}
+
+// RowDeps is r's Deps, or its FullDeps with paths.
+func (r *DelegRow) RowDeps(paths bool) DepSet {
+	if paths {
+		return r.FullDeps
+	}
+	return r.Deps
+}
+
+// ContextDepsOf is context j's ContextDeps, or its FullContextDeps with paths.
+func (r *DelegRow) ContextDepsOf(j int, paths bool) DepSet {
+	if paths {
+		return r.FullContextDeps[j]
+	}
+	return r.ContextDeps[j]
 }
 
 // EffectiveEntry is view C of one child (rules §6). EdgeDeps are index-aligned
 // with Edges and ContextDeps with each edge's Contexts; both leave out the
-// routes on the paths, as DelegRow's do.
+// routes on the paths, as DelegRow's do. The Full forms keep them.
 type EffectiveEntry struct {
 	computed.ChildEffective
-	EdgeDeps    []DepSet
-	ContextDeps [][]DepSet
+	EdgeDeps, FullEdgeDeps       []DepSet
+	ContextDeps, FullContextDeps [][]DepSet
+}
+
+// EdgeDepsOf is edge j's EdgeDeps, or its FullEdgeDeps with paths.
+func (e *EffectiveEntry) EdgeDepsOf(j int, paths bool) DepSet {
+	if paths {
+		return e.FullEdgeDeps[j]
+	}
+	return e.EdgeDeps[j]
+}
+
+// ContextDepsOf is context x of edge j's ContextDeps, or its FullContextDeps with paths.
+func (e *EffectiveEntry) ContextDepsOf(j, x int, paths bool) DepSet {
+	if paths {
+		return e.FullContextDeps[j][x]
+	}
+	return e.ContextDeps[j][x]
 }
 
 // RefKey names one delegation ref of a parent route by rule and ref index.

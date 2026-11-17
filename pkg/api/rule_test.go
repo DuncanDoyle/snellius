@@ -62,6 +62,8 @@ const (
 	fullUser       = "full"
 	restrictedUser = "restricted"
 	routeReader    = "route-reader"
+	// nsReader is restricted plus the Namespaces, so a root in ns-000 is readable.
+	nsReader = "ns-reader"
 	// nobodyUser may read nothing; metaUser+"dcn" reads the controller Deployment, GatewayClasses and Namespaces.
 	nobodyUser = "nobody"
 	metaUser   = "meta-"
@@ -280,6 +282,51 @@ func child(ns, name string, parents ...objects.ParentRef) *unstructured.Unstruct
 	return u
 }
 
+// hop is an HTTPRoute ns/name delegated from parent under match, delegating
+// match to the HTTPRoute childNS/childName.
+func hop(ns, name string, parent objects.ParentRef, match, childNS, childName string) *unstructured.Unstructured {
+	u := testutil.HTTPRoute(ns, name, nil, testutil.AcceptedBy(parent, testutil.Controller))
+	u.Object["spec"].(map[string]any)["rules"] = []any{map[string]any{
+		"matches":     []any{map[string]any{"path": map[string]any{"type": "PathPrefix", "value": match}}},
+		"backendRefs": []any{map[string]any{"group": objects.GatewayAPIGroup, "kind": "HTTPRoute", "name": childName, "namespace": childNS}},
+	}}
+	return u
+}
+
+// The readable chain through a hidden route, which hopPairs adds: chainRoot
+// on gw0 delegates to hidden-hop, which delegates to chainMid, then chainLeaf.
+const (
+	chainRoot = "chain-root"
+	chainMid  = "chain-mid"
+	chainLeaf = "chain-leaf"
+	hiddenHop = "hidden-hop"
+)
+
+// chainMatch is the path prefix of the chain route named by steps.
+func chainMatch(steps ...string) string { return "/" + strings.Join(steps, "/") }
+
+// chainRoutes are the routes of the chain through hidden-hop.
+func chainRoutes() []*unstructured.Unstructured {
+	route := func(ns, name string) objects.ParentRef { return testutil.HTTPRouteRef(ns, name) }
+	// Listener l0 admits every namespace, so no Namespace object decides the root.
+	l0 := gw0()[0]
+	l0.SectionName = "l0"
+	root := delegating(ns0, chainRoot, []objects.ParentRef{l0}, hiddenNS, hiddenHop)
+	leaf := child(ns0, chainLeaf, route(ns0, chainMid))
+	// child matches /<parent>/<name>; the leaf's match spells the whole chain.
+	leaf.Object["spec"].(map[string]any)["rules"].([]any)[0].(map[string]any)["matches"] = []any{
+		map[string]any{"path": map[string]any{"type": "PathPrefix", "value": chainMatch(chainRoot, hiddenHop, chainMid, chainLeaf)}}}
+	return []*unstructured.Unstructured{root,
+		hop(hiddenNS, hiddenHop, route(ns0, chainRoot), chainMatch(chainRoot, hiddenHop), ns0, chainMid),
+		hop(ns0, chainMid, route(hiddenNS, hiddenHop), chainMatch(chainRoot, hiddenHop, chainMid), ns0, chainLeaf), leaf}
+}
+
+// setHopMatch sets hidden-hop's one match to the path prefix p.
+func setHopMatch(s ruleSnap, p string) {
+	rule := s.get("HTTPRoute", hiddenNS, hiddenHop).Object["spec"].(map[string]any)["rules"].([]any)[0].(map[string]any)
+	rule["matches"] = []any{map[string]any{"path": map[string]any{"type": "PathPrefix", "value": p}}}
+}
+
 // selectorPolicy is a TrafficPolicy ns/name selecting the HTTPRoutes labelled app=selected.
 func selectorPolicy(ns, name string) *unstructured.Unstructured {
 	u := testutil.TrafficPolicy(ns, name)
@@ -474,6 +521,15 @@ var ruleChanges = []ruleChange{
 	{name: "extension", apply: func(s ruleSnap) {
 		s.get("Backend", hiddenNS, "hidden-be").SetLabels(map[string]string{extLabel: "fail"})
 	}},
+}
+
+// hopChanges change only hidden-hop's matcher. The namespace reader is
+// the viewer they apply to: every root's view A reads its Namespace.
+var hopChanges = []ruleChange{
+	// hidden-hop narrows the match it delegates under; chain-mid still fits.
+	{name: "hopMatchNarrows", apply: func(s ruleSnap) { setHopMatch(s, chainMatch(chainRoot, hiddenHop, chainMid)) }},
+	// hidden-hop moves its match elsewhere, so it drops chain-mid.
+	{name: "hopMatchDrops", apply: func(s ruleSnap) { setHopMatch(s, chainMatch(chainRoot, "elsewhere")) }},
 }
 
 // extLabel marks the objects extCheck reports.
@@ -709,7 +765,8 @@ func ruleIdentity(ctx context.Context) (oidc.Identity, bool) {
 // ruleChecker allows the full viewer everything and the restricted one every
 // list and get in the first ten scale namespaces, apart from kindLimited in
 // kindLimitedNS, plus a get of namedOnly. routeReader is restricted plus every
-// route kind in every namespace and cluster-wide. nobody may read nothing;
+// route kind in every namespace and cluster-wide, nsReader restricted plus
+// the Namespaces. nobody may read nothing;
 // a metaUser reads only the install metadata sources its name lists.
 type ruleChecker struct{}
 
@@ -722,6 +779,9 @@ func (ruleChecker) Check(_ context.Context, id oidc.Identity, a sar.Attributes) 
 			strings.Contains(src, "c") && a.Resource == "gatewayclasses" || strings.Contains(src, "n") && a.Resource == "namespaces"), nil
 	}
 	if id.Username == fullUser || id.Username == routeReader && strings.HasSuffix(a.Resource, "routes") {
+		return true, nil
+	}
+	if id.Username == nsReader && a.Resource == "namespaces" {
 		return true, nil
 	}
 	if a.Verb == "get" && a.Namespace == hiddenNS && a.Name == namedOnly {
@@ -942,6 +1002,10 @@ var ruleSurfaces = []ruleSurface{
 	// An empty page before and after for the restricted viewer; without the projection the D-013 count moves.
 	{name: "/routes?namespaces=hidden", path: fixed("/routes?limit=200&namespaces=" + hiddenNS), changes: []string{"created", "deleted"}},
 	{name: "/namespaces", path: fixed("/namespaces"), changes: []string{"newNamespace"}},
+	// A readable chain through hidden-hop: delegation, effective matches and the dropped flag.
+	{name: "delegation (hidden hop)", path: routePath(ns0, chainMid, "/delegation"), changes: []string{"hopMatchNarrows", "hopMatchDrops"}},
+	{name: "route detail (hidden hop)", path: routePath(ns0, chainLeaf, ""), changes: []string{"hopMatchDrops"}},
+	{name: "/routes?state=dropped", path: fixed("/routes?limit=200&state=dropped"), changes: []string{"hopMatchDrops"}},
 }
 
 // abs is the fixed path p outside the install's base.
@@ -1210,6 +1274,48 @@ func TestRuleBypassBreaksInvariant(t *testing.T) {
 				t.Errorf("%s under %s holds without the projection; list it in ruleHeldBefore with a reason", s.name, c.name)
 			case differs && held:
 				t.Errorf("%s under %s fails without the projection, but ruleHeldBefore says %q", s.name, c.name, reason)
+			}
+		}
+	}
+}
+
+// hopPairs serves the base world with the chain through hidden-hop, and each of hopChanges, with opts.
+func hopPairs(t *testing.T, opts ...api.HandlerOption) []rulePair {
+	t.Helper()
+	world := func(c ruleChange) *httptest.Server {
+		s := ruleSnapshot(t)
+		s.add(chainRoutes()...)
+		return ruleServe(t, worldWith(t, s, c), opts...)
+	}
+	before := world(ruleChange{name: "base"})
+	var out []rulePair
+	for _, c := range hopChanges {
+		out = append(out, rulePair{change: c, before: before, after: world(c)})
+	}
+	return out
+}
+
+// TestRuleHiddenHopUnchanged: a change to hidden-hop's matcher alone leaves
+// every surface byte-equal for the namespace reader, though the chain's
+// root, middle and leaf are readable; it reaches the full viewer's chain
+// surfaces, and without the projection the namespace reader's too.
+func TestRuleHiddenHopUnchanged(t *testing.T) {
+	pairs := hopPairs(t)
+	for key, diff := range differences(t, pairs, nsReader, ruleMasks) {
+		t.Errorf("%s changed for the namespace reader under %s:\n%s", key[0], key[1], diff)
+	}
+	full, bypass := differences(t, pairs, fullUser, nil), differences(t, hopPairs(t, api.WithProjectionBypass()), nsReader, ruleMasks)
+	for _, c := range hopChanges {
+		for _, s := range ruleSurfaces {
+			if s.changes == nil || !s.asks(c.name) {
+				continue
+			}
+			key := [2]string{s.name, c.name}
+			if _, ok := full[key]; !ok {
+				t.Errorf("%s does not reach %s for the full viewer", c.name, s.name)
+			}
+			if _, ok := bypass[key]; !ok {
+				t.Errorf("%s under %s holds for the namespace reader without the projection", s.name, c.name)
 			}
 		}
 	}

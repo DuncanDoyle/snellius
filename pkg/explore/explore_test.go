@@ -1088,6 +1088,10 @@ func TestDelegationRowsOrder(t *testing.T) {
 	if len(r.ContextDeps) != 1 || !slices.Equal(refsOf(ix, r.ContextDeps[0]), []objects.Ref{gwObj}) {
 		t.Errorf("context deps %v", r.ContextDeps)
 	}
+	// The full forms keep them.
+	if !slices.Contains(refsOf(ix, r.FullDeps), dA) || !slices.Contains(refsOf(ix, r.FullContextDeps[0]), dA) {
+		t.Errorf("full deps %v, context %v", refsOf(ix, r.FullDeps), refsOf(ix, r.FullContextDeps[0]))
+	}
 	if r := &ix.DelegRows[ix.Delegation[dA][3]]; !slices.Equal(refsOf(ix, r.Deps), []objects.Ref{gwObj, shopNS}) {
 		t.Errorf("namespace row deps %v", refsOf(ix, r.Deps))
 	}
@@ -1182,6 +1186,11 @@ func TestFlagDropped(t *testing.T) {
 	}
 	if ix.RowFlags(id2, noA)&FlagDropped == 0 || ix.RowFlags(id1, noA)&FlagDropped == 0 {
 		t.Error("a hidden parent route hid the dropped flag (D-024)")
+	}
+	// With paths, hidden parent routes hide it: k1 is dropped under a and b.
+	noParents := func(r objects.Ref) bool { return r != dA && r != dB }
+	if ix.rowFlags(id1, noParents, true)&FlagDropped != 0 || ix.rowFlags(id1, noA, true)&FlagDropped == 0 {
+		t.Error("with paths, the dropped flag ignores the parent route's visibility")
 	}
 	for _, tc := range []struct {
 		visible func(objects.Ref) bool
