@@ -523,8 +523,9 @@ var ruleChanges = []ruleChange{
 	}},
 }
 
-// hopChanges change only hidden-hop's matcher. The namespace reader is
-// the viewer they apply to: every root's view A reads its Namespace.
+// hopChanges change only hidden-hop's matcher, in the hidden hop world
+// (extraWorlds). The namespace reader is the viewer they apply to: every
+// root's view A reads its Namespace.
 var hopChanges = []ruleChange{
 	// hidden-hop narrows the match it delegates under; chain-mid still fits.
 	{name: "hopMatchNarrows", apply: func(s ruleSnap) { setHopMatch(s, chainMatch(chainRoot, hiddenHop, chainMid)) }},
@@ -738,6 +739,8 @@ func (ruleKinds) Lookup(group, kind string) (sar.Kind, bool) {
 		return sar.Kind{Resource: "namespaces"}, true
 	case group == "discovery.k8s.io" && kind == "EndpointSlice":
 		return sar.Kind{Group: "discovery.k8s.io", Resource: "endpointslices", Namespaced: true}, true
+	case group == "apiextensions.k8s.io" && kind == "CustomResourceDefinition":
+		return sar.Kind{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions"}, true
 	}
 	for _, s := range testutil.ServedUpstream() {
 		if s.Group == group && s.Kind == kind {
@@ -1006,6 +1009,8 @@ var ruleSurfaces = []ruleSurface{
 	{name: "delegation (hidden hop)", path: routePath(ns0, chainMid, "/delegation"), changes: []string{"hopMatchNarrows", "hopMatchDrops"}},
 	{name: "route detail (hidden hop)", path: routePath(ns0, chainLeaf, ""), changes: []string{"hopMatchDrops"}},
 	{name: "/routes?state=dropped", path: fixed("/routes?limit=200&state=dropped"), changes: []string{"hopMatchDrops"}},
+	{name: "ListenerSet detail (rejected)", path: fixed("/listenersets/" + objects.GatewayAPIGroup + "/ListenerSet/" + ns0 + "/" + lsRejected),
+		changes: []string{"crdDefinesField", "crdChannel"}},
 }
 
 // abs is the fixed path p outside the install's base.
@@ -1279,46 +1284,91 @@ func TestRuleBypassBreaksInvariant(t *testing.T) {
 	}
 }
 
-// hopPairs serves the base world with the chain through hidden-hop, and each of hopChanges, with opts.
-func hopPairs(t *testing.T, opts ...api.HandlerOption) []rulePair {
+// extraWorld is the base world plus add, with changes no surface may show
+// user; ruleSurfaces name the changes they are asked about.
+type extraWorld struct {
+	name    string
+	add     func(s ruleSnap)
+	changes []ruleChange
+	user    string
+}
+
+var extraWorlds = []extraWorld{
+	{name: "hidden hop", add: func(s ruleSnap) { s.add(chainRoutes()...) }, changes: hopChanges, user: nsReader},
+	{name: "rejected ListenerSet", add: rejectedListenerSet, changes: crdChanges, user: restrictedUser},
+}
+
+// pairs serves w's world and each of its changes, with opts.
+func (w extraWorld) pairs(t *testing.T, opts ...api.HandlerOption) []rulePair {
 	t.Helper()
 	world := func(c ruleChange) *httptest.Server {
 		s := ruleSnapshot(t)
-		s.add(chainRoutes()...)
+		w.add(s)
 		return ruleServe(t, worldWith(t, s, c), opts...)
 	}
 	before := world(ruleChange{name: "base"})
 	var out []rulePair
-	for _, c := range hopChanges {
+	for _, c := range w.changes {
 		out = append(out, rulePair{change: c, before: before, after: world(c)})
 	}
 	return out
 }
 
-// TestRuleHiddenHopUnchanged: a change to hidden-hop's matcher alone leaves
-// every surface byte-equal for the namespace reader, though the chain's
-// root, middle and leaf are readable; it reaches the full viewer's chain
-// surfaces, and without the projection the namespace reader's too.
-func TestRuleHiddenHopUnchanged(t *testing.T) {
-	pairs := hopPairs(t)
-	for key, diff := range differences(t, pairs, nsReader, ruleMasks) {
-		t.Errorf("%s changed for the namespace reader under %s:\n%s", key[0], key[1], diff)
+// TestRuleExtraWorldsUnchanged: each extra world's changes leave every
+// surface byte-equal for its viewer; they reach the full viewer's surfaces
+// that ask them, and without the projection its viewer's too. The hidden hop:
+// hidden-hop's matcher alone changes, though the chain's root, middle and
+// leaf are readable. The rejected ListenerSet: only the Gateway CRD changes.
+func TestRuleExtraWorldsUnchanged(t *testing.T) {
+	for _, w := range extraWorlds {
+		t.Run(w.name, func(t *testing.T) {
+			pairs := w.pairs(t)
+			for key, diff := range differences(t, pairs, w.user, ruleMasks) {
+				t.Errorf("%s changed for %s under %s:\n%s", key[0], w.user, key[1], diff)
+			}
+			full, bypass := differences(t, pairs, fullUser, nil), differences(t, w.pairs(t, api.WithProjectionBypass()), w.user, ruleMasks)
+			for _, c := range w.changes {
+				for _, s := range ruleSurfaces {
+					if s.changes == nil || !s.asks(c.name) {
+						continue
+					}
+					key := [2]string{s.name, c.name}
+					if _, ok := full[key]; !ok {
+						t.Errorf("%s does not reach %s for the full viewer", c.name, s.name)
+					}
+					if _, ok := bypass[key]; !ok {
+						t.Errorf("%s under %s holds for %s without the projection", s.name, c.name, w.user)
+					}
+				}
+			}
+		})
 	}
-	full, bypass := differences(t, pairs, fullUser, nil), differences(t, hopPairs(t, api.WithProjectionBypass()), nsReader, ruleMasks)
-	for _, c := range hopChanges {
-		for _, s := range ruleSurfaces {
-			if s.changes == nil || !s.asks(c.name) {
-				continue
-			}
-			key := [2]string{s.name, c.name}
-			if _, ok := full[key]; !ok {
-				t.Errorf("%s does not reach %s for the full viewer", c.name, s.name)
-			}
-			if _, ok := bypass[key]; !ok {
-				t.Errorf("%s under %s holds for the namespace reader without the projection", s.name, c.name)
-			}
+}
+
+// lsRejected is a readable ListenerSet its readable parent, which sets no
+// allowedListeners, does not allow: the detail then reads the Gateway CRD.
+const lsRejected = "ls-rejected"
+
+// rejectedListenerSet adds lsRejected and its parent Gateway to s.
+func rejectedListenerSet(s ruleSnap) {
+	s.add(testutil.Gateway(ns0, lsRejected+"-gw", scale.Class, nil),
+		testutil.ListenerSet(ns0, lsRejected, testutil.GwRef(ns0, lsRejected+"-gw"), []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "NotAllowed")}))
+}
+
+// setGatewayCRD edits the Gateway CRD's metadata in s.
+func setGatewayCRD(s ruleSnap, edit func(c *cache.CRDMeta)) {
+	for i := range s.CRDs {
+		if s.CRDs[i].Name == "gateways."+objects.GatewayAPIGroup {
+			edit(&s.CRDs[i])
 		}
 	}
+}
+
+// crdChanges change only the Gateway CRD, which no restricted viewer may read.
+var crdChanges = []ruleChange{
+	// The bundle reaches the version that defines allowedListeners.
+	{name: "crdDefinesField", apply: func(s ruleSnap) { setGatewayCRD(s, func(c *cache.CRDMeta) { c.BundleVersion = "v1.5.1" }) }},
+	{name: "crdChannel", apply: func(s ruleSnap) { setGatewayCRD(s, func(c *cache.CRDMeta) { c.Channel = "experimental" }) }},
 }
 
 // checksOf is the "What was checked" list of /health and /diagnostics for user.

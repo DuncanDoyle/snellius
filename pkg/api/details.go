@@ -414,6 +414,16 @@ func servedListenerSet(m *engine.Model, group, kind string) (kinds.Served, bool)
 	return kinds.Served{}, false
 }
 
+// crdKind is the CustomResourceDefinition kind.
+var crdKind = objects.GroupKind{Group: "apiextensions.k8s.io", Kind: "CustomResourceDefinition"}
+
+// readsGatewayCRD reports whether the caller may read the Gateway CRD's
+// metadata: always unless v projects, else with get on it or list on CRDs.
+func (d *detail) readsGatewayCRD() bool {
+	ref := objects.Ref{Group: crdKind.Group, Kind: crdKind.Kind, Name: "gateways." + objects.GatewayAPIGroup}
+	return !d.v.projects() || d.v.canNamed(ref) || d.v.canList(crdKind, "")
+}
+
 // gatewayCRDField fills a's CRD fields from the watched Gateway CRD's channel
 // and bundle, when they tell whether it defines allowedListeners (§9.4).
 func gatewayCRDField(a *AllowedListenersDTO, snap *cache.Snapshot) {
@@ -485,7 +495,7 @@ func (h *handler) listenerSetDetail(w http.ResponseWriter, r *http.Request) {
 			al = objects.DecodeGateway(pu).AllowedListeners
 		}
 		out.ParentAllowedListeners = &AllowedListenersDTO{Set: al != nil, Value: al, CRDHint: al == nil}
-		if al == nil {
+		if al == nil && d.readsGatewayCRD() {
 			gatewayCRDField(out.ParentAllowedListeners, d.p.Model.Snapshot)
 		}
 	}
