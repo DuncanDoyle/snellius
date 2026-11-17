@@ -892,7 +892,10 @@ func (d *detail) refCounts(dto *DelegationRefDTO, k explore.RefKey) {
 	}
 	selected, attached, selKnown, attKnown := 0, 0, true, true
 	for _, i := range ids {
-		r := &d.ix.DelegRows[i]
+		r := d.row(i)
+		if r == nil {
+			continue
+		}
 		child := r.Key.Child != (objects.Ref{})
 		if child && !d.v.can(r.Key.Child) || hidden && !child {
 			continue
@@ -938,16 +941,26 @@ func (d *detail) refCounts(dto *DelegationRefDTO, k explore.RefKey) {
 // inherit-parent-matcher annotation.
 func (d *detail) effective(route objects.Ref, inherit bool) ([]EffectiveDTO, bool) {
 	e := d.ix.Effective[route]
+	// Readable chains alone give the edges, each with its readable contexts only.
+	var chained []*computed.EffectiveEdge
+	if c := d.v.chainsOf(d.ix); c != nil {
+		chained = c.Edges(route)
+	}
 	out := make([]EffectiveDTO, 0, len(e.Edges))
 	for j := range e.Edges {
-		ed := &e.Edges[j]
+		ed, deps := &e.Edges[j], e.EdgeDeps[j]
+		if chained != nil {
+			if ed, deps = chained[j], nil; ed == nil {
+				continue
+			}
+		}
 		dto := EffectiveDTO{Parent: d.l.linked(ed.Parent), Mode: ed.Mode, ContextsTruncated: ed.ContextsTruncated,
-			Contexts: make([]EffectiveContext, 0, len(ed.Contexts)), Computed: d.f.effective(ed, e.EdgeDepsOf(j, d.v.paths()))}
+			Contexts: make([]EffectiveContext, 0, len(ed.Contexts)), Computed: d.f.effective(ed, deps)}
 		if d.f.omitted(dto.Computed) {
 			continue
 		}
 		for x := range ed.Contexts {
-			if !d.v.allowDeps(d.ix, e.ContextDepsOf(j, x, d.v.paths())) {
+			if chained == nil && !d.v.allowDeps(d.ix, e.ContextDeps[j][x]) {
 				continue
 			}
 			c := &ed.Contexts[x]
@@ -1001,7 +1014,7 @@ func (d *detail) unreachedEdges(route objects.Ref, inherit bool, out *[]Effectiv
 	for _, i := range ids {
 		r := &d.ix.DelegRows[i]
 		p := r.Key.Parent
-		if d.v.allowDeps(d.ix, r.RowDeps(d.v.paths())) || slices.ContainsFunc(*out, func(e EffectiveDTO) bool { return e.Parent.Ref == p }) {
+		if d.v.allowDeps(d.ix, r.Deps) || slices.ContainsFunc(*out, func(e EffectiveDTO) bool { return e.Parent.Ref == p }) {
 			continue
 		}
 		*out = append(*out, EffectiveDTO{Parent: d.l.linked(p), Mode: mode, Contexts: []EffectiveContext{{Restricted: true}},
@@ -1041,7 +1054,7 @@ func (h *handler) routeDelegation(w http.ResponseWriter, r *http.Request) {
 	if d.v.omits() {
 		query = d.ix.QueryDelegationVisible
 	}
-	q.Paths = d.v.paths()
+	q.Chains = d.v.chainsOf(d.ix)
 	pg, err := query(ref, q, d.v.visible())
 	if err != nil {
 		fail(w, err)
@@ -1054,10 +1067,24 @@ func (h *handler) routeDelegation(w http.ResponseWriter, r *http.Request) {
 			items = append(items, d.selectionRow(&d.ix.DelegRows[-1-id]))
 			continue
 		}
-		items = append(items, d.delegationRow(&d.ix.DelegRows[id], pu, pv))
+		items = append(items, d.delegationRow(d.row(int(id)), pu, pv))
 	}
 	writeJSON(w, Page[DelegationRow]{Install: d.i.Resolved.ID(), Items: items, Total: pg.Total, Next: pg.Next, Prev: pg.Prev,
 		CollectedAt: wireTime(d.p.ConfirmedAt)})
+}
+
+// row is DelegRows[i] as the caller sees it: from readable chains alone when
+// the view has them, nil when none reaches its parent.
+func (d *detail) row(i int) *explore.DelegRow {
+	c := d.v.chainsOf(d.ix)
+	if c == nil {
+		return &d.ix.DelegRows[i]
+	}
+	r, ok := c.Row(i)
+	if !ok {
+		return nil
+	}
+	return r
 }
 
 // delegationRow is view B row r of the parent stored as pu, pv for the

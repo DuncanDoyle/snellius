@@ -365,7 +365,7 @@ func (ix *Index) queryRoutes(in Query, vw Viewer) (Page, int, error) {
 		if !q.common(r.Ref, st, func() string { return r.search }) ||
 			len(q.Kinds) > 0 && !slices.Contains(q.Kinds, gk) ||
 			backends != nil && !backends[id] ||
-			q.States != 0 && (shown && f&q.States == 0 || !shown && ix.rowFlags(id, visible, vw.Paths)&q.States == 0) ||
+			q.States != 0 && (shown && f&q.States == 0 || !shown && ix.rowFlags(id, visible, vw.Chains)&q.States == 0) ||
 			q.Listener == ListenerUnknown && !ix.unknownRef(id, *q.Parent, visible) ||
 			visible != nil && !visible(r.Ref) ||
 			q.Parent != nil && (q.Attachment != "" || visible != nil) && !ix.Under(id, *q.Parent, q.Attachment, visible) {
@@ -408,28 +408,26 @@ func (ix *Index) unknownRef(id RowID, parent objects.Ref, visible func(objects.R
 // dependencies of any one unknown parent visible, and dropped those of any
 // one flagging row (design §7.4 rule 6); disagrees is a finding (rule 9).
 func (ix *Index) RowFlags(id RowID, visible func(objects.Ref) bool) Flag {
-	return ix.rowFlags(id, visible, false)
+	return ix.rowFlags(id, visible, nil)
 }
 
-// rowFlags is RowFlags; with paths, dropped reads the sets that keep the routes on the paths.
-func (ix *Index) rowFlags(id RowID, visible func(objects.Ref) bool, paths bool) Flag {
+// rowFlags is RowFlags; with chains, dropped comes from the readable chains alone.
+func (ix *Index) rowFlags(id RowID, visible func(objects.Ref) bool, chains *Chains) Flag {
 	r := &ix.Routes[id]
 	f := r.Flags
 	if f&FlagListenerUnknown != 0 && !ix.anyVisible(r.UnknownDeps, visible) {
 		f &^= FlagListenerUnknown
 	}
-	if f&FlagDropped != 0 && !ix.anyVisible(r.DroppedSets(paths), visible) {
+	switch {
+	case chains != nil:
+		f &^= FlagDropped
+		if chains.Dropped(r.Ref) {
+			f |= FlagDropped
+		}
+	case f&FlagDropped != 0 && !ix.anyVisible(r.DroppedDeps, visible):
 		f &^= FlagDropped
 	}
 	return f
-}
-
-// DroppedSets are r's DroppedDeps, or its DroppedFullDeps with paths.
-func (r *RouteRow) DroppedSets(paths bool) []DepSet {
-	if paths {
-		return r.DroppedFullDeps
-	}
-	return r.DroppedDeps
 }
 
 // anyVisible reports whether visible admits every ref of some set in ds.
@@ -450,8 +448,9 @@ type DelegationQuery struct {
 	// Limit is 1–MaxLimit; 0 means DefaultLimit.
 	Limit  int
 	Cursor string
-	// Paths makes rows read their FullDeps: a hidden route on a path then hides them (secure mode).
-	Paths bool
+	// Chains, when set, gives each row as a viewer of readable chains sees it:
+	// a row it leaves out is left out, and the outcome filter reads its outcome.
+	Chains *Chains
 }
 
 // rowOutcomes are the outcomes a delegation row can have (rules §5.5).
@@ -464,7 +463,7 @@ var rowOutcomes = []computed.RowOutcome{computed.OutcomeAttached, computed.Outco
 // zero-child rows and matches no outcome (our call, 2.4). A row whose child visible rejects is left out; a row with
 // no child never is (design §7.4 rule 3). The outcome filter matches a row
 // only when visible admits every ref of its Deps, which leave out the routes
-// on its paths (rules 4a, 4b), or of its FullDeps with q.Paths. Both apply before Total and paging; nil
+// on its paths (rules 4a, 4b); with q.Chains its readable-chain row decides. Both apply before Total and paging; nil
 // admits every row.
 func (ix *Index) QueryDelegation(parent objects.Ref, q DelegationQuery, visible func(objects.Ref) bool) (Page, error) {
 	return ix.queryDelegation(parent, q, visible, false)
@@ -523,9 +522,16 @@ func (ix *Index) queryDelegation(parent objects.Ref, q DelegationQuery, visible 
 				match = append(match, -1-i)
 			}
 		}
-		deps := r.RowDeps(q.Paths)
+		deps, outcome := r.Deps, r.Outcome
+		if q.Chains != nil {
+			cr, ok := q.Chains.Row(i)
+			if !ok {
+				continue
+			}
+			deps, outcome = nil, cr.Outcome
+		}
 		if hidden && k.Child == (objects.Ref{}) ||
-			len(q.Outcomes) > 0 && (!slices.Contains(q.Outcomes, r.Outcome) || !ix.Visible(deps, visible)) ||
+			len(q.Outcomes) > 0 && (!slices.Contains(q.Outcomes, outcome) || !ix.Visible(deps, visible)) ||
 			visible != nil && k.Child != (objects.Ref{}) && !visible(k.Child) ||
 			omit && !ix.Visible(deps, visible) {
 			continue

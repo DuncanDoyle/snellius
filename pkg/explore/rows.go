@@ -810,7 +810,8 @@ func compareRowKeys(a, b *computed.RowKey) int {
 func (b *builder) delegation(ix *Index, n *interner, v *computed.Views) {
 	d := &v.Delegation
 	ix.DelegationCap = d.Cap
-	el, full := eligibility(n, v, false), eligibility(n, v, true)
+	el := eligibility(n, v)
+	chainGraph(ix, n, v)
 	for _, u := range d.Uncertain {
 		// Any compute cap marks a cut ref too-large; only a ref with no rows reads it.
 		if k := (RefKey{u.Route, u.Rule, u.Ref}); u.Reason == computed.UnknownTooLarge && u.Ref >= 0 {
@@ -821,19 +822,18 @@ func (b *builder) delegation(ix *Index, n *interner, v *computed.Views) {
 		}
 	}
 	if len(d.Rows) > 0 {
-		delegRows(ix, n, d.Rows, v.Checks, el, full)
+		delegRows(ix, n, d.Rows, v.Checks, el)
 	}
 	if len(d.Rows) > 0 || len(ix.TooLarge) > 0 {
 		b.refScopes(ix, n)
 	}
 	if len(d.Effective) > 0 {
-		effective(ix, n, d.Effective, el, full)
+		effective(ix, n, d.Effective, el)
 	}
 }
 
-// delegRows copies rows into ix.DelegRows, sorted, and indexes them. el and
-// full are the root eligibility without and with the routes on the way.
-func delegRows(ix *Index, n *interner, src []computed.Row, checks []computed.CheckResult, el, full *eligible) {
+// delegRows copies rows into ix.DelegRows, sorted, and indexes them.
+func delegRows(ix *Index, n *interner, src []computed.Row, checks []computed.CheckResult, el *eligible) {
 	// The views list rows in RowKey order, which agrees with ours; sort only when not.
 	order := make([]int, len(src))
 	for i := range order {
@@ -892,7 +892,7 @@ func delegRows(ix *Index, n *interner, src []computed.Row, checks []computed.Che
 		} else if nx := &rows[i+1].Key; nx.Rule != k.Rule || nx.Ref != k.Ref {
 			ix.RefRows[RefKey{k.Parent, k.Rule, k.Ref}] = order[rLo : i+1 : i+1]
 		}
-		r.Deps, r.FullDeps = el.with(n.offPath(r.Row.Deps), k.Parent), full.with(n.deps(r.Row.Deps), k.Parent)
+		r.Deps = el.with(n.offPath(r.Row.Deps), k.Parent)
 		if isUnreached(r) && len(r.Deps) > 0 && k.Child != (objects.Ref{}) {
 			if ix.Unreached == nil {
 				ix.Unreached = map[objects.Ref][]int{}
@@ -910,6 +910,12 @@ func delegRows(ix *Index, n *interner, src []computed.Row, checks []computed.Che
 			continue
 		}
 		r.Check = byKey[checkKey{k.Child, k.Parent, r.ChildKey}]
+		if owned {
+			if ix.flaggers == nil {
+				ix.flaggers = map[objects.Ref][]int{}
+			}
+			ix.flaggers[k.Child] = append(ix.flaggers[k.Child], i)
+		}
 		switch r.Outcome {
 		case computed.OutcomeDropped, computed.OutcomeForbidden, computed.OutcomeRejectedHostnames:
 			if id, ok := ix.Row(k.Child); ok && owned {
@@ -917,9 +923,6 @@ func delegRows(ix *Index, n *interner, src []computed.Row, checks []computed.Che
 				c.Flags |= FlagDropped
 				if !slices.ContainsFunc(c.DroppedDeps, func(d DepSet) bool { return slices.Equal(d, r.Deps) }) {
 					c.DroppedDeps = append(c.DroppedDeps, r.Deps)
-				}
-				if !slices.ContainsFunc(c.DroppedFullDeps, func(d DepSet) bool { return slices.Equal(d, r.FullDeps) }) {
-					c.DroppedFullDeps = append(c.DroppedFullDeps, r.FullDeps)
 				}
 			}
 		}
@@ -937,9 +940,7 @@ func isUnreached(r *DelegRow) bool {
 // route that reaches it in the reach graph, itself included (rules §8.5).
 // Whether a route is a root at all can depend on a hidden Namespace or
 // target, so every row and edge below it carries them (design §7.4 rule 4,
-// our call, 2.4). A full eligible also keeps the routes, the reaching ones
-// included, so a hidden route on the way hides the rows below it (secure
-// mode). Sets are sorted and interned by content.
+// our call, 2.4). Sets are sorted and interned by content.
 type eligible struct {
 	at map[objects.Ref]DepSet
 	// merged caches with per (source set, eligibility set).
@@ -963,8 +964,8 @@ func keyOf(d DepSet) depKey32 {
 // eligibility builds eligible from view A's outcomes and the reach graph. The
 // sets flow forward from each top-level route along reach edges until none
 // grows; each grows at most once per distinct dependency, so the work is
-// O(edges × dependencies), once per recompute. full keeps the routes.
-func eligibility(n *interner, v *computed.Views, full bool) *eligible {
+// O(edges × dependencies), once per recompute.
+func eligibility(n *interner, v *computed.Views) *eligible {
 	el := &eligible{at: map[objects.Ref]DepSet{}, merged: map[[2]depKey32]DepSet{}, intern: map[string]DepSet{}}
 	reach, outs := v.Delegation.Reach, v.Attachment.Outcomes
 	if len(v.Delegation.Rows) == 0 && len(v.Delegation.Effective) == 0 {
@@ -1010,21 +1011,13 @@ func eligibility(n *interner, v *computed.Views, full bool) *eligible {
 		}
 	}
 	for i := range outs {
-		if full {
-			push(id[outs[i].Route], sortedDeps(n.deps(outs[i].Deps)))
-		} else {
-			push(id[outs[i].Route], sortedDeps(n.offPath(outs[i].Deps)))
-		}
+		push(id[outs[i].Route], sortedDeps(n.offPath(outs[i].Deps)))
 	}
 	for len(queue) > 0 {
 		p := queue[0]
 		queue, queued[p] = queue[1:], false
-		add := sets[p]
-		if full {
-			add = mergeSorted(add, DepSet{n.ref(refs[p])})
-		}
 		for _, c := range kids[lo[p]:hi[p]] {
-			push(c, add)
+			push(c, sets[p])
 		}
 	}
 	for i, d := range sets {
@@ -1033,6 +1026,28 @@ func eligibility(n *interner, v *computed.Views, full bool) *eligible {
 		}
 	}
 	return el
+}
+
+// chainGraph keeps what Chains walks: each route's reach parents, the view A
+// deps of each of its parentRefs, and the uncertain points (rules §8.5).
+func chainGraph(ix *Index, n *interner, v *computed.Views) {
+	d := &v.Delegation
+	ix.reachParents = make(map[objects.Ref][]objects.Ref, len(d.Reach))
+	for _, e := range d.Reach {
+		ix.reachParents[e.Child] = append(ix.reachParents[e.Child], e.Parent)
+	}
+	outs := v.Attachment.Outcomes
+	ix.rootDeps = make(map[objects.Ref][]DepSet, len(outs))
+	for i := range outs {
+		ix.rootDeps[outs[i].Route] = append(ix.rootDeps[outs[i].Route], n.deps(outs[i].Deps))
+	}
+	ix.closureAll = d.Cap == computed.CapEdges
+	for _, u := range d.Uncertain {
+		if ix.uncertain == nil {
+			ix.uncertain = map[objects.Ref]bool{}
+		}
+		ix.uncertain[u.Route] = true
+	}
 }
 
 // with is d, in any order, united with the eligibility deps of parent.
@@ -1186,7 +1201,7 @@ func cutRef(ix *Index, k RefKey) *objects.DelegationRef {
 
 // effective fills ix.Effective from view C. Children are interned in row
 // order, so the dependency table does not depend on map order.
-func effective(ix *Index, n *interner, src map[objects.Ref]computed.ChildEffective, el, full *eligible) {
+func effective(ix *Index, n *interner, src map[objects.Ref]computed.ChildEffective, el *eligible) {
 	ne, nc := 0, 0
 	for _, ce := range src {
 		ne += len(ce.Edges)
@@ -1194,7 +1209,7 @@ func effective(ix *Index, n *interner, src map[objects.Ref]computed.ChildEffecti
 			nc += len(ce.Edges[j].Contexts)
 		}
 	}
-	edges, outer, inner := make([]DepSet, 2*ne), make([][]DepSet, 2*ne), make([]DepSet, 2*nc)
+	edges, outer, inner := make([]DepSet, ne), make([][]DepSet, 2*ne), make([]DepSet, 2*nc)
 	ix.Effective = make(map[objects.Ref]EffectiveEntry, len(src))
 	add := func(child objects.Ref) {
 		ce, ok := src[child]
@@ -1202,11 +1217,11 @@ func effective(ix *Index, n *interner, src map[objects.Ref]computed.ChildEffecti
 			return
 		}
 		k := len(ce.Edges)
-		e := EffectiveEntry{ChildEffective: ce, EdgeDeps: edges[:k:k], FullEdgeDeps: edges[k : 2*k : 2*k], ContextDeps: outer[:k:k], FullContextDeps: outer[k : 2*k : 2*k]}
-		edges, outer = edges[2*k:], outer[2*k:]
+		e := EffectiveEntry{ChildEffective: ce, EdgeDeps: edges[:k:k], ContextDeps: outer[:k:k], FullContextDeps: outer[k : 2*k : 2*k]}
+		edges, outer = edges[k:], outer[2*k:]
 		for j := range ce.Edges {
 			ed := &ce.Edges[j]
-			e.EdgeDeps[j], e.FullEdgeDeps[j] = el.with(n.offPath(ed.Deps), ed.Parent), full.with(n.deps(ed.Deps), ed.Parent)
+			e.EdgeDeps[j] = el.with(n.offPath(ed.Deps), ed.Parent)
 			c := len(ed.Contexts)
 			e.ContextDeps[j], e.FullContextDeps[j], inner = inner[:c:c], inner[c:2*c:2*c], inner[2*c:]
 			for x := range ed.Contexts {

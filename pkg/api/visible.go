@@ -47,6 +47,8 @@ type view struct {
 	secure bool
 	// off are the projection steps turned off (rule tests only).
 	off projStep
+	// chains memoises each index's readable-chain view (paths).
+	chains map[*explore.Index]*explore.Chains
 	// projections memoises each install's projected report and diagnosis.
 	projections map[*engine.InstallModel]*projection
 	// listed memoises canList's cluster-wide answers.
@@ -444,10 +446,25 @@ func (v *view) Ref(ref objects.Ref) bool { return v.can(ref) }
 // secure mode without the full read.
 func (v *view) projects() bool { return v.secure && v.off&stepFindings == 0 && !v.readsAll() }
 
-// paths reports whether a hidden route on a delegation path hides the
-// contexts, matches and flags through it: secure mode without the full read.
-// Elsewhere such a route never restricts them (D-024).
+// paths reports whether delegation facts come from readable chains alone:
+// secure mode without the full read (D-113). Elsewhere a route on a path
+// never restricts them (D-024).
 func (v *view) paths() bool { return v.secure && v.off&stepPaths == 0 && !v.readsAll() }
+
+// chainsOf is ix's readable-chain view for the caller, memoised; nil unless v.paths().
+func (v *view) chainsOf(ix *explore.Index) *explore.Chains {
+	if ix == nil || !v.paths() {
+		return nil
+	}
+	if c := v.chains[ix]; c != nil {
+		return c
+	}
+	if v.chains == nil {
+		v.chains = map[*explore.Index]*explore.Chains{}
+	}
+	v.chains[ix] = ix.Chains(v.can)
+	return v.chains[ix]
+}
 
 // shown reports whether the caller of v sees f: always under the full read
 // and outside secure mode, where D-013's restricted rows stay; else when
@@ -469,7 +486,7 @@ func (v *view) viewer(i *engine.InstallModel) explore.Viewer {
 // viewerIn is viewer for a list under scope. A scoped list projects the
 // checks alone, so no finding outside the scope is asked about.
 func (v *view) viewerIn(i *engine.InstallModel, scope []string) explore.Viewer {
-	vw := explore.Viewer{Visible: v.visible(), Paths: v.paths()}
+	vw := explore.Viewer{Visible: v.visible(), Chains: v.chainsOf(i.Index)}
 	switch {
 	case !v.secure || v.off&stepRowState != 0 || v.readsAll():
 	case scope == nil:

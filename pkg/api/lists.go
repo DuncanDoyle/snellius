@@ -148,7 +148,16 @@ func (ls *list) prefetchRouteRows(ids []explore.RowID) {
 				sets = append(sets, r.Computed[j].Deps)
 			}
 			sets = append(sets, r.UnknownDeps...)
-			sets = append(sets, r.DroppedSets(ls.vw.Paths)...)
+			if ls.vw.Chains == nil {
+				sets = append(sets, r.DroppedDeps...)
+			}
+		}
+		if ls.vw.Chains != nil {
+			refs := make([]objects.Ref, 0, len(ids))
+			for _, id := range ids {
+				refs = append(refs, ix.Routes[id].Ref)
+			}
+			ls.vw.Chains.Prefetch(refs, add)
 		}
 	})
 	ls.v.prefetch(func(add func(objects.Ref)) {

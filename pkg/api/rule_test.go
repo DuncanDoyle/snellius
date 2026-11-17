@@ -1009,12 +1009,16 @@ var ruleSurfaces = []ruleSurface{
 	// A readable chain through hidden-hop: delegation, effective matches and the dropped flag.
 	{name: "delegation (hidden hop)", path: routePath(ns0, chainMid, "/delegation"), changes: []string{"hopMatchNarrows", "hopMatchDrops"}},
 	{name: "route detail (hidden hop)", path: routePath(ns0, chainLeaf, ""), changes: []string{"hopMatchDrops"}},
-	{name: "/routes?state=dropped", path: fixed("/routes?limit=200&state=dropped"), changes: []string{"hopMatchDrops"}},
+	{name: "/routes?state=dropped", path: fixed("/routes?limit=200&state=dropped"), changes: []string{"hopMatchDrops", "hiddenSelects"}},
 	{name: "/routes?state=accepted", path: fixed("/routes?limit=200&state=accepted"), changes: []string{"created", "listenerCount"}},
 	// Page 2 through the cursor the restricted viewer's page 1 returns.
 	{name: "/routes page 2", path: routesPage2, changes: []string{"created", "listenerCount"}},
 	{name: "ListenerSet detail (rejected)", path: fixed("/listenersets/" + objects.GatewayAPIGroup + "/ListenerSet/" + ns0 + "/" + lsRejected),
 		changes: []string{"crdDefinesField", "crdChannel"}},
+	// A readable chain to shared-mid that a hidden root on gw0 may also reach.
+	{name: "delegation (shared mid)", path: routePath(ns0, sharedMid, "/delegation"), changes: []string{"hiddenSelectsFits", "hiddenSharedNarrows"}},
+	{name: "route detail (shared mid)", path: routePath(ns0, sharedMid, ""), changes: []string{"hiddenSelects", "hiddenSelectsFits", "hiddenSharedNarrows"}},
+	{name: "route detail (shared leaf)", path: routePath(ns0, sharedLeaf, ""), changes: []string{"hiddenSelectsFits"}},
 }
 
 // routesPage2 is the routes list after the next cursor of the restricted
@@ -1353,6 +1357,51 @@ var extraWorlds = []extraWorld{
 	{name: "hidden hop", add: func(s ruleSnap) { s.add(chainRoutes()...) }, changes: hopChanges, user: nsReader},
 	{name: "rejected ListenerSet", add: rejectedListenerSet, changes: crdChanges, user: restrictedUser},
 	{name: "memo cap", add: func(ruleSnap) {}, changes: []ruleChange{{name: "memoCap", apply: overMemoCap}}, user: restrictedUser},
+	{name: "hidden root selects", add: func(s ruleSnap) { s.add(sharedRoutes()...) }, changes: selectChanges, user: nsReader},
+	{name: "hidden root shares", add: func(s ruleSnap) { s.add(sharedRoutes()...); hiddenSelect(s, chainMatch(sharedRoot)) },
+		changes: []ruleChange{{name: "hiddenSharedNarrows", apply: func(s ruleSnap) { hiddenSelect(s, chainMatch(sharedRoot, sharedMid)) }}}, user: nsReader},
+}
+
+// A readable chain sharedRoot → sharedMid → sharedLeaf and sharedDropped on gw0's listener l0,
+// and hiddenSelector, a hidden root on the same listener that selects nothing.
+const (
+	sharedRoot     = "direct-root"
+	sharedMid      = "shared-mid"
+	sharedLeaf     = "shared-leaf"
+	sharedDropped  = "shared-dropped"
+	hiddenSelector = "hidden-selector"
+)
+
+// sharedRoutes are the routes of the shared world.
+func sharedRoutes() []*unstructured.Unstructured {
+	l0 := gw0()[0]
+	l0.SectionName = "l0"
+	root := delegating(ns0, sharedRoot, []objects.ParentRef{l0}, ns0, sharedMid)
+	leaf := child(ns0, sharedLeaf, testutil.HTTPRouteRef(ns0, sharedMid))
+	leaf.Object["spec"].(map[string]any)["rules"].([]any)[0].(map[string]any)["matches"] = []any{
+		map[string]any{"path": map[string]any{"type": "PathPrefix", "value": chainMatch(sharedRoot, sharedMid, sharedLeaf)}}}
+	// sharedMid also delegates to sharedDropped, whose match never fits: a readable dropped flag.
+	mid := hop(ns0, sharedMid, testutil.HTTPRouteRef(ns0, sharedRoot), chainMatch(sharedRoot, sharedMid), ns0, sharedLeaf)
+	rule := mid.Object["spec"].(map[string]any)["rules"].([]any)[0].(map[string]any)
+	rule["backendRefs"] = append(rule["backendRefs"].([]any), map[string]any{"group": objects.GatewayAPIGroup, "kind": "HTTPRoute", "name": sharedDropped, "namespace": ns0})
+	dropped := child(ns0, sharedDropped, testutil.HTTPRouteRef(ns0, sharedMid))
+	return []*unstructured.Unstructured{root, mid, leaf, dropped, routeTo(hiddenNS, hiddenSelector, []objects.ParentRef{l0}, "", "", true)}
+}
+
+// hiddenSelect makes hiddenSelector delegate the path prefix p to sharedMid.
+func hiddenSelect(s ruleSnap, p string) {
+	s.get("HTTPRoute", hiddenNS, hiddenSelector).Object["spec"].(map[string]any)["rules"] = []any{map[string]any{
+		"matches":     []any{map[string]any{"path": map[string]any{"type": "PathPrefix", "value": p}}},
+		"backendRefs": []any{map[string]any{"group": objects.GatewayAPIGroup, "kind": "HTTPRoute", "name": sharedMid, "namespace": ns0}},
+	}}
+}
+
+// selectChanges change only hiddenSelector's rules: it starts to select sharedMid.
+var selectChanges = []ruleChange{
+	// Its match does not hold sharedMid's, so it drops sharedMid.
+	{name: "hiddenSelects", apply: func(s ruleSnap) { hiddenSelect(s, "/"+hiddenSelector) }},
+	// Its match holds sharedMid's: a second chain reaches sharedLeaf.
+	{name: "hiddenSelectsFits", apply: func(s ruleSnap) { hiddenSelect(s, chainMatch(sharedRoot)) }},
 }
 
 // overMemoCap adds hidden routes on hidden-gw until the path topology is
@@ -1407,6 +1456,45 @@ func TestRuleExtraWorldsUnchanged(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRuleReadableChainShown: where a readable chain and a hidden one both
+// reach sharedMid, the namespace reader sees its rows with the readable
+// chain's context alone, the dropped flag on sharedDropped, and the full
+// viewer both contexts.
+func TestRuleReadableChainShown(t *testing.T) {
+	w := extraWorlds[slices.IndexFunc(extraWorlds, func(w extraWorld) bool { return w.name == "hidden root shares" })]
+	srv := w.pairs(t)[0].before
+	path := ruleBase + "/routes/" + objects.GatewayAPIGroup + "/HTTPRoute/" + ns0 + "/" + sharedMid + "/delegation"
+	// roots are the distinct first routes of sharedLeaf's row contexts.
+	roots := func(user string) []string {
+		var out []string
+		for _, r := range decode[api.Page[api.DelegationRow]](t, srv, user, path).Items {
+			if r.Child == nil || r.Child.Name != sharedLeaf {
+				continue
+			}
+			for _, c := range r.Contexts {
+				if len(c.Path) > 0 && !slices.Contains(out, c.Path[0].Ref.Name) {
+					out = append(out, c.Path[0].Ref.Name)
+				}
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	if got := roots(nsReader); !slices.Equal(got, []string{sharedRoot}) {
+		t.Errorf("namespace reader's context roots %v, want the readable chain's alone", got)
+	}
+	if got := roots(fullUser); !slices.Equal(got, []string{sharedRoot, hiddenSelector}) {
+		t.Errorf("full viewer's context roots %v, want both chains", got)
+	}
+	var names []string
+	for _, r := range decode[api.Page[api.RouteRow]](t, srv, nsReader, ruleBase+"/routes?limit=200&state=dropped").Items {
+		names = append(names, r.Ref.Name)
+	}
+	if !slices.Contains(names, sharedDropped) {
+		t.Errorf("namespace reader's dropped routes %v, want %s", names, sharedDropped)
 	}
 }
 

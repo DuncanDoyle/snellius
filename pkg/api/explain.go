@@ -515,11 +515,11 @@ func joinNotes(a, b string) string {
 }
 
 // delegation is a view B row's Computed for the caller: restricted when a
-// dependency is hidden, outside secure mode one other than the routes on its
-// paths (design §7.4 rules 4, 4b); unknown with the row's reason; else its child-entry check,
+// dependency other than the routes on its paths is hidden (design §7.4 rules
+// 4, 4b; a readable-chain row has none); unknown with the row's reason; else its child-entry check,
 // with the row's own note (PF14).
 func (f facts) delegation(r *explore.DelegRow) Computed {
-	if !f.v.allowDeps(f.ix, r.RowDeps(f.v.paths())) {
+	if !f.v.allowDeps(f.ix, r.Deps) {
 		return f.restricted()
 	}
 	var c Computed
