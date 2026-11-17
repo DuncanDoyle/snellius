@@ -162,9 +162,10 @@ func (o *ownedSet) digest(f *Finding) ([sha256.Size]byte, bool) {
 	return sha256.Sum256(p), true
 }
 
-// find is the index of f's key among those registered under d, or -1.
+// find is the index of f's key among those registered under d, or -1. A nil
+// key and an empty one differ, as they would in a print.
 func (o *ownedSet) find(d [sha256.Size]byte, f *Finding) int {
-	return slices.IndexFunc(o.keys[d], func(k []string) bool { return slices.Equal(k, f.Key) })
+	return slices.IndexFunc(o.keys[d], func(k []string) bool { return (k == nil) == (f.Key == nil) && slices.Equal(k, f.Key) })
 }
 
 // rekey runs rewrite, which changes only f's Key; a registered own-object

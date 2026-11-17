@@ -339,11 +339,30 @@ func TestOwnCopyChangedIsDerived(t *testing.T) {
 	assigned.Basis = &b
 	rekeyed := f
 	rekeyed.Key = []string{"derived-from-hidden-input"}
-	got, _ := confine(conditionsCheck{}, []Finding{rekeyed, copied, assigned, f}, CheckResult{}, owned)
-	for i, want := range []Class{ClassDerived, ClassDerived, ClassDerived, ClassOwn} {
+	unkeyed := f // registered with a nil key; a copy with an empty one is not the same finding
+	unkeyed.Key = nil
+	owned.add(unkeyed)
+	emptyKeyed := unkeyed
+	emptyKeyed.Key = []string{}
+	in := []Finding{rekeyed, copied, assigned, emptyKeyed, unkeyed, f}
+	before := make([]string, len(in))
+	for i := range in {
+		before[i], _ = deepString(in[i])
+	}
+	got, _ := confine(conditionsCheck{}, in, CheckResult{}, owned)
+	for i, want := range []Class{ClassDerived, ClassDerived, ClassDerived, ClassDerived, ClassOwn, ClassOwn} {
 		if got[i].class != want {
 			t.Errorf("finding %d: class %d, want %d", i, got[i].class, want)
 		}
+	}
+	// confine returns changed copies; the check's own findings keep their class and basis.
+	for i := range in {
+		if after, _ := deepString(in[i]); after != before[i] {
+			t.Errorf("finding %d changed in place: %s, was %s", i, after, before[i])
+		}
+	}
+	if d := f.Derived(); d.class != ClassDerived || d.Basis != nil || f.class != ClassOwn || f.Basis == nil {
+		t.Errorf("Derived: copy class %d basis %v, source class %d basis %v", d.class, d.Basis, f.class, f.Basis)
 	}
 	// Nothing registered: no finding keeps ClassOwn.
 	if got, _ := confine(conditionsCheck{}, []Finding{f}, CheckResult{}, nil); got[0].class != ClassDerived {
@@ -365,15 +384,21 @@ func TestOwnRefsEvidenceCopyIsDerived(t *testing.T) {
 	group := "forged.example"
 	withGroup, withUnknown := *ev, *ev
 	withGroup.Group, withUnknown.Unknown = &group, !ev.Unknown
-	g, u := f, f
-	g.Facts, u.Facts = &withGroup, &withUnknown
-	got, _ := confine(conditionsCheck{}, []Finding{g, u, f}, CheckResult{}, owned)
-	for i, want := range []Class{ClassDerived, ClassDerived, ClassOwn} {
+	look := lookalikeRefs(*ev) // the same fields under another type
+	g, u, l := f, f, f
+	g.Facts, u.Facts, l.Facts = &withGroup, &withUnknown, &look
+	got, _ := confine(conditionsCheck{}, []Finding{g, u, l, f}, CheckResult{}, owned)
+	for i, want := range []Class{ClassDerived, ClassDerived, ClassDerived, ClassOwn} {
 		if got[i].class != want {
 			t.Errorf("finding %d: class %d, want %d", i, got[i].class, want)
 		}
 	}
 }
+
+// lookalikeRefs has RefsEvidence's fields under another type.
+type lookalikeRefs RefsEvidence
+
+func (*lookalikeRefs) EvidenceKind() string { return EvidenceRefs }
 
 // deepPrint sees unexported fields behind pointers and interfaces, ignores
 // map order, and fails on content it cannot print.

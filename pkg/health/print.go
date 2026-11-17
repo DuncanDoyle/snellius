@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,9 +17,32 @@ const maxPrintDepth = 64
 // timeType is time.Time, which deepPrint prints through its public methods.
 var timeType = reflect.TypeFor[time.Time]()
 
+// typeInfo is what deepPrint reads of a type, decided once per type.
+type typeInfo struct {
+	// id is unique to the type in this process, so two prints of interfaces
+	// match only when their dynamic types are the same type.
+	id     uint64
+	sealed bool
+}
+
+var (
+	typeInfos sync.Map // reflect.Type → *typeInfo
+	typeIDs   atomic.Uint64
+)
+
+// infoOf is t's typeInfo.
+func infoOf(t reflect.Type) *typeInfo {
+	if i, ok := typeInfos.Load(t); ok {
+		return i.(*typeInfo)
+	}
+	i := &typeInfo{id: typeIDs.Add(1), sealed: t.Kind() == reflect.Struct && sealed(t)}
+	got, _ := typeInfos.LoadOrStore(t, i)
+	return got.(*typeInfo)
+}
+
 // deepPrint appends v to b with every field, exported or not, in order,
-// through pointers, interfaces (with their dynamic type), slices, arrays and
-// maps (keys sorted). Strings print length-prefixed, so a print is
+// through pointers, interfaces (with their dynamic type's process-unique id),
+// slices, arrays and maps (keys sorted). Prints are compared only within one process. Strings print length-prefixed, so a print is
 // unambiguous without escaping. A time.Time prints as its UTC instant, offset and zone
 // name; no other standard library type is read through unexported fields. It
 // reports false for anything it cannot print that way, a func or channel,
@@ -48,9 +73,10 @@ func deepPrint(b []byte, v reflect.Value, depth int) ([]byte, bool) {
 		if v.IsNil() {
 			return append(b, "nil"...), true
 		}
-		return deepPrint(appendString(b, v.Elem().Type().String()), v.Elem(), depth+1)
+		b = strconv.AppendUint(append(b, 'T'), infoOf(v.Elem().Type()).id, 10)
+		return deepPrint(append(b, ':'), v.Elem(), depth+1)
 	case reflect.Struct:
-		if sealed(v.Type()) {
+		if infoOf(v.Type()).sealed {
 			return b, false
 		}
 		return printFields(b, v, -1, depth)
