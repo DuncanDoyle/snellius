@@ -1674,3 +1674,17 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** Accept this cost for 7.4. The timing-regression gate is waived for PR #50 only; it stays at +15 % for every later PR, measured against `main` after the merge. Reducing the cost is a tracked follow-up: one shared route walk inside package `own` that keeps each analyzer's findings and wake times separate, then a cheaper provenance check than content hashing, only with equivalent enforcement.
 
 **Consequences:** About 10–16 ms more per warm recompute at Large on the reference machine, within the absolute budgets. Later PRs compare against the slower `main`, so this cost no longer shows in an A/B; the follow-up carries acceptance criteria instead: the four benchmarks above within +15 % of `main` before Phase 7 ([`39c47c9`](https://github.com/DuncanDoyle/snellius/commit/39c47c93e494fbf7012e4e77eeebb08d2411cbbd)) on the reference machine. The registry stays: it stops a changed or copied finding from keeping own-object visibility.
+
+## D-116 — Permission checks admit a few requests at a time (2026-11-17, Phase 7)
+**Status:** accepted by the user (2026-11-17): "Few loads at a time (Recommended)". Codex recommended it (`phases/phase-7/reviews/7.5-load-codex.md`).
+
+**Context:** D-100 item 6 queues permission checks (SARs) one by one, FIFO, under one global rate. Each request sends its checks from 8 workers, so concurrent cold requests share the rate about evenly and none finishes before the whole backlog drains. On the load bench (50 cold namespace-grants viewers, Large, default limits) no viewer got a 200 from `/paths` (all `503 expired`) or `/backends` (all `503 check-limit`) in 6 minutes; `/routes` survived at 97 %. Allowed answers live 60 s from the check's start (item 2), so a request's first answers expire before its last check.
+
+**Decision:**
+1. A request that needs at least one uncached check waits for admission. Requests are admitted in arrival order, at most K at a time; K is the in-flight limit divided by the per-request parallelism (32 ÷ 8 = 4 by default), so admitted requests can fill every permit. No new setting.
+2. A request whose checks are all cached is never queued.
+3. An admitted request keeps its admission until its response is committed: full read, dependency rounds and a rebuild at commit. Answers read before the wait are not relied on; validity at commit (item 4) is unchanged.
+4. Waiting requests are bounded globally and per viewer; above either bound the answer is `503 overloaded`, as for the 1,024-waiter backstop, which stays. A cancelled request leaves the queue at once.
+5. Unchanged: both TTLs, the 1,000-check cap per request across rebuilds, 32 in flight, the rate and burst.
+
+**Consequences:** Under a cold storm, page loads finish one after another instead of all failing: the last of 50 cold viewers waits about their total checks ÷ the rate. A poll that needs a refresh (its allows are older than 60 s) queues behind cold loads and is slower meanwhile, but answers. Sustained demand above the rate still sheds load with `503 overloaded`.

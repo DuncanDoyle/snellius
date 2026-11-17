@@ -739,8 +739,9 @@ Computed here, exposed in 7.5 (design §8.1). Nothing reaches the wire in 7.4.
 
 ## Sub-phase 7.5 — Two signals (the gate opens)
 
+0. Load (before the gate): request admission per D-116 in `pkg/auth/sar`, held through commit in `pkg/api`; the load bench runs on `/routes`, `/paths` and `/backends` with the brief's assertions. Then the D-115 follow-up (one route walk in `pkg/health/own`).
 1. `pkg/explore`: `config` and `path` per route row; `path.incomplete`; legacy `health` per the compatibility matrix (design §8.3); `path-incomplete` reason kind.
-2. API: route list, route detail, Gateway and ListenerSet route tables; state filters for both signals; golden-v1 stays byte-equal for full-read viewers on existing fields.
+2. API: route list, route detail, Gateway and ListenerSet route tables; filters `config=` and `path=` (values `healthy`, `warning`, `error`, `unknown`; repeated values OR, the two parameters AND); golden-v1 stays byte-equal for full-read viewers on existing fields.
 3. Web: Configuration and Traffic path columns, route header badges, problem strip, map route nodes via the path signal; wording picker.
 4. Open the gate: `WithSecureMode(complete: true)`, with the 7.4 rule tests extended to the new fields.
 
