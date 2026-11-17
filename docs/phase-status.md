@@ -13,8 +13,8 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 - [x] 7.1 Modes and groundwork — closed 2026-11-14, phases/phase-7/phase-7.1-complete.md (local branch, not pushed)
 - [x] 7.2 Identity and sessions — closed 2026-11-15, phases/phase-7/phase-7.2-complete.md (kind-secure green on PR #50 after D-097)
 - [x] 7.3 Authoriser — closed 2026-11-16, phases/phase-7/phase-7.3-complete.md (D-099, D-100, D-101)
-- [x] 7.4 Visibility everywhere — closed 2026-11-17, phases/phase-7/phase-7.4-complete.md (D-102 to D-114; #52, #53)
-- [ ] 7.5 Two signals (gate opens) ← NEXT; first item: the P2 load cliff on /paths and /backends (7.4 complete, Deferred)
+- [x] 7.4 Visibility everywhere — closed 2026-11-17, phases/phase-7/phase-7.4-complete.md (D-102 to D-115; #52, #53)
+- [ ] 7.5 Two signals (gate opens) ← NEXT; first item: the P2 load cliff on /paths and /backends (7.4 complete, Deferred); also the P3 engine cost of D-115
 - [ ] 7.6 Audit, docs, release
 - [-] 7.7 Claim-mapping fallback — dropped (D-098); see #51
 
