@@ -73,6 +73,7 @@ export function ExposureSection({ installId, backend, exposure, consumers }: Exp
       total: exposure.summary.paths,
       next: exposure.next,
       prev: exposure.prev,
+      delegationNotChecked: exposure.delegationNotChecked,
       collectedAt: exposure.collectedAt,
     }),
     [exposure],

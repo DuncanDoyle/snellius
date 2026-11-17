@@ -228,9 +228,15 @@ export function MapTab({ installId, gateway, stylesOverride }: MapTabProps) {
   const page = useMemo<Page<PathRow> | undefined>(
     () =>
       paths.collectedAt
-        ? { install: installId, items: paths.rows, total: paths.rows.length, collectedAt: paths.collectedAt }
+        ? {
+            install: installId,
+            items: paths.rows,
+            total: paths.rows.length,
+            delegationNotChecked: paths.delegationNotChecked,
+            collectedAt: paths.collectedAt,
+          }
         : undefined,
-    [installId, paths.rows, paths.collectedAt],
+    [installId, paths.rows, paths.delegationNotChecked, paths.collectedAt],
   );
   const filtered = ["state", "kind", "namespace", "q"].some((k) => params.has(k));
   const [selected, setSelected] = useState<string>();

@@ -1,14 +1,16 @@
-import { useMeta } from "../api/hooks";
-import { isSecureMode } from "../auth/mode";
+import { createContext, useContext } from "react";
 import { diagnosticsCopy } from "../copy/explorer";
 import { NotChecked } from "../health/NotChecked";
 
 // region Helpers
-/** False when secure mode withholds delegation analysis from this viewer (D-114); /meta's limitedView alone decides. */
-export function useDelegationChecked(): boolean {
-  const { data } = useMeta();
-  return !(isSecureMode() && data?.limitedView);
-}
+/**
+ * True under a response that says delegationNotChecked (D-114). The page that renders the response provides it,
+ * so each poll decides it, never a cached /meta.
+ */
+export const DelegationNotCheckedView = createContext(false);
+
+/** Whether the response being rendered withholds delegation analysis. */
+export const useDelegationNotChecked = () => useContext(DelegationNotCheckedView);
 
 // region Component
 /** "Not checked" in place of a delegation result the viewer's permissions do not cover. */

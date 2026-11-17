@@ -6,7 +6,6 @@ import restrictedGolden from "../../../../../../pkg/api/testdata/golden/paths-re
 import type { PathRow, PathsResponse } from "../../api/types";
 import { diagnosticsCopy } from "../../copy/explorer";
 import { cellCopy } from "../../copy/traffic";
-import { meta } from "../../test/fixtures";
 import { renderWithTheme } from "../../test/render";
 import { matchSummary, shareText } from "./pathText";
 import { TrafficPage } from "./TrafficPage";
@@ -391,30 +390,14 @@ it("a backend cell opens its backend detail", async () => {
   expect(link.getAttribute("href")?.split("?")[0]).toBe(`/i/${ID}/backends/-/Service/shop/cart-svc`);
 });
 
-it("a delegation row says Not checked to a secure viewer without the full read (D-114)", async () => {
-  document.documentElement.dataset.authMode = "secure";
-  try {
-    for (const limitedView of [true, false]) {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (url: string) => {
-          const u = new URL(url, "http://ui");
-          if (u.pathname === "/api/v1/meta")
-            return new Response(JSON.stringify({ ...meta, limitedView }), { status: 200 });
-          if (u.pathname === `/api/v1/installs/${ID}/paths`)
-            return new Response(JSON.stringify(golden()), { status: 200 });
-          return new Response("{}", { status: 404 });
-        }),
-      );
-      const m = mount();
-      const target = await within(table()).findByText(cellCopy.delegateTo("shop/child"));
-      const row = target.closest("tr") as HTMLElement;
-      const why = row.querySelector('td[data-col="why"]') as HTMLElement;
-      if (limitedView) await waitFor(() => expect(why).toHaveTextContent(diagnosticsCopy.notChecked));
-      else expect(why).not.toHaveTextContent(diagnosticsCopy.notChecked);
-      m.unmount();
-    }
-  } finally {
-    delete document.documentElement.dataset.authMode;
+it("a delegation row says Not checked when its response withholds delegation analysis (D-114)", async () => {
+  for (const delegationNotChecked of [true, false]) {
+    serve(() => ({ ...golden(), delegationNotChecked }));
+    const m = mount();
+    const target = await within(table()).findByText(cellCopy.delegateTo("shop/child"));
+    const why = (target.closest("tr") as HTMLElement).querySelector('td[data-col="why"]') as HTMLElement;
+    if (delegationNotChecked) expect(why).toHaveTextContent(diagnosticsCopy.notChecked);
+    else expect(why).not.toHaveTextContent(diagnosticsCopy.notChecked);
+    m.unmount();
   }
 });

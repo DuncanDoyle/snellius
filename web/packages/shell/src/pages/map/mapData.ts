@@ -34,6 +34,8 @@ export interface MapPaths {
   truncated: boolean;
   /** The result kept changing during the walk, so these rows are the last result that held still (or the last walk). */
   inconsistent: boolean;
+  /** A page says it withholds delegation analysis (D-114). */
+  delegationNotChecked: boolean;
   /** The /paths URL these rows answer; it lags the page URL until a new query's rows arrive. */
   query?: string;
 }
@@ -197,6 +199,7 @@ export function useMapPaths(
       inconsistent,
       query: answers,
       walking: isValidating,
+      delegationNotChecked: !!pages?.some((p) => p.delegationNotChecked),
     };
   }, [current, inconsistent, installId, error, answers, isValidating]);
 }

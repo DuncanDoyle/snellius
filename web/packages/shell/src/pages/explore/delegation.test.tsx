@@ -715,10 +715,7 @@ it("rows are a table whose cells sit under named column headers", async () => {
   expect(cells[2]).toHaveTextContent(delegationCopy.outcomes.dropped);
 });
 
-describe("a secure viewer without the full read (D-114)", () => {
-  afterEach(() => {
-    delete document.documentElement.dataset.authMode;
-  });
+describe("a response that withholds delegation analysis (D-114)", () => {
   /** mid as the server sends it to that viewer: no counts, checks, effective matches or paths through parents. */
   const limited = () => {
     const d = detail(routeGolden);
@@ -727,12 +724,12 @@ describe("a secure viewer without the full read (D-114)", () => {
         if (b.delegation)
           b.delegation = { ...b.delegation, computed: undefined, selected: undefined, attached: undefined };
     d.parentRefs = [{ group: GW, kind: "HTTPRoute", namespace: "shop", name: "root" }];
-    return { ...d, effective: undefined, serves: [] };
+    return { ...d, effective: undefined, serves: [], delegationNotChecked: true };
   };
 
   it("says Not checked for refs, effective matches and serves, and fetches no rows", async () => {
-    document.documentElement.dataset.authMode = "secure";
-    serve(api({ name: "mid", d: limited(), meta: { ...meta, limitedView: true } }));
+    // /meta says the full read: the response alone decides.
+    serve(api({ name: "mid", d: limited() }));
     const first = mount(`${page("shop/mid")}?open=1`);
     await loaded();
     const declared = screen.getByTestId("backend-declared");
@@ -752,11 +749,45 @@ describe("a secure viewer without the full read (D-114)", () => {
   });
 
   it("a full reader keeps the counts", async () => {
-    document.documentElement.dataset.authMode = "secure";
     serve(api({ name: "mid", d: detail(routeGolden) }));
     mount(`${page("shop/mid")}?open=1`);
     await loaded();
     expect(within(screen.getByTestId("backend-declared")).getByTestId("ref-counts")).toBeInTheDocument();
     expect(screen.queryByTestId("not-checked")).toBeNull();
+  });
+
+  it("a polled detail that flips the marker switches the view both ways while /meta stays a full read", async () => {
+    let withheld = false;
+    serve(api({ name: "mid", d: withheld ? limited() : detail(routeGolden) }));
+    // The detail is chosen per poll: a permission change lands on the next one. /meta never changes.
+    vi.mocked(fetch).mockImplementation(async (url) => {
+      const u = new URL(String(url), "http://ui");
+      const r = api({ name: "mid", d: withheld ? limited() : detail(routeGolden) })(u);
+      return r === undefined
+        ? new Response(JSON.stringify({ error: "not found" }), { status: 404 })
+        : new Response(JSON.stringify(r), { status: 200 });
+    });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mount(`${page("shop/mid")}?open=1`);
+      await loaded();
+      const declared = () => screen.getByTestId("backend-declared");
+      expect(within(declared()).getByTestId("ref-counts")).toBeInTheDocument();
+      const poll = () =>
+        act(async () => {
+          await vi.advanceTimersByTimeAsync(POLL_MS + 100);
+        });
+      withheld = true;
+      await poll();
+      await waitFor(() => expect(within(declared()).getByTestId("not-checked")).toBeInTheDocument());
+      expect(within(declared()).queryByTestId("ref-counts")).toBeNull();
+      expect(screen.getByRole("region", { name: effective })).toHaveTextContent(diagnosticsCopy.notChecked);
+      withheld = false;
+      await poll();
+      await waitFor(() => expect(within(declared()).getByTestId("ref-counts")).toBeInTheDocument());
+      expect(screen.queryByTestId("not-checked")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

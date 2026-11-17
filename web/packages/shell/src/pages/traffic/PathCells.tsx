@@ -3,7 +3,7 @@ import { useContext } from "react";
 import type { LinkedRef, PathRow } from "../../api/types";
 import { columnCopy, diagnosticsCopy, routeCopy } from "../../copy/explorer";
 import { actionCopy, cellCopy, noteCopy, shareCopy } from "../../copy/traffic";
-import { useDelegationChecked } from "../../explore/DelegationNotChecked";
+import { useDelegationNotChecked } from "../../explore/DelegationNotChecked";
 import { backendPath, linkTarget } from "../../explore/objectPath";
 import { HealthIcon } from "../../health/HealthIcon";
 import { StaleView, useShownState } from "../../health/staleView";
@@ -170,10 +170,10 @@ export function ShareCell({ r }: { r: PathRow }) {
  * A delegation row says Not checked to a viewer without delegation analysis (D-114).
  */
 export function WhyCell({ r }: { r: Pick<PathRow, "problem" | "note"> & Partial<Pick<PathRow, "action">> }) {
-  const checked = useDelegationChecked();
+  const withheld = useDelegationNotChecked();
   if (useContext(StaleView)) return null;
   const note = r.note ? [noteCopy[r.note]] : [];
-  const unchecked = !checked && r.action === "delegate";
+  const unchecked = withheld && r.action === "delegate";
   const lines = [...signalLines(r), ...note, ...(unchecked ? [diagnosticsCopy.notChecked] : [])];
   const details = [...signalDetails(r), ...note, ...(unchecked ? [diagnosticsCopy.notCheckedReason] : [])];
   return lines.length ? (

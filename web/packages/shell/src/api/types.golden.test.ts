@@ -624,6 +624,7 @@ const pageKeys = {
   next: "?",
   prev: "?",
   deniedInInstall: "?",
+  delegationNotChecked: "?",
   collectedAt: "!",
 } as const satisfies Spec<Page<unknown>>;
 const page = (items: Shape) => shape<Page<unknown>>(pageKeys, { items });
@@ -999,6 +1000,7 @@ const routeDetail = shape<RouteDetail>(
     ancestorsTruncated: "!",
     childCount: "!",
     declaredCount: "!",
+    delegationNotChecked: "?",
     collectedAt: "!",
   },
   {
@@ -1309,7 +1311,16 @@ const pathRow = shape<PathRow>(
   },
 );
 const pathsResponse = shape<PathsResponse>(
-  { install: "!", revision: "?", rows: "!", next: "?", prev: "?", summary: "!", collectedAt: "!" },
+  {
+    install: "!",
+    revision: "?",
+    rows: "!",
+    next: "?",
+    prev: "?",
+    summary: "!",
+    delegationNotChecked: "?",
+    collectedAt: "!",
+  },
   {
     rows: pathRow,
     summary: shape<PathSummary>(
@@ -1344,7 +1355,16 @@ const pathsResponse = shape<PathsResponse>(
 );
 // Backends (sub-phase 6.3).
 const backendsResponse = shape<BackendsResponse>(
-  { install: "!", rows: "!", next: "?", prev: "?", hidden: "?", facets: "?", collectedAt: "!" },
+  {
+    install: "!",
+    rows: "!",
+    next: "?",
+    prev: "?",
+    hidden: "?",
+    facets: "?",
+    delegationNotChecked: "?",
+    collectedAt: "!",
+  },
   {
     facets: shape<BackendFacets>(
       { gateways: "!", namespaces: "!" },
@@ -1383,6 +1403,7 @@ const backendDetail = shape<BackendDetail>(
     explanations: "!",
     service: "?",
     conditions: "?",
+    delegationNotChecked: "?",
     collectedAt: "!",
   },
   {

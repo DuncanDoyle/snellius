@@ -45,6 +45,7 @@ const toPage = (d: PathsResponse): Page<PathRow> => ({
   total: d.summary.paths,
   next: d.next,
   prev: d.prev,
+  delegationNotChecked: d.delegationNotChecked,
   collectedAt: d.collectedAt,
 });
 

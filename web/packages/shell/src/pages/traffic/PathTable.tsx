@@ -3,6 +3,7 @@ import { useCallback, useMemo } from "react";
 import type { LinkedRef, Page, PathRow } from "../../api/types";
 import { columnCopy } from "../../copy/explorer";
 import { cellCopy, endpointCopy, noteCopy, pathColumnCopy, trafficCopy } from "../../copy/traffic";
+import { DelegationNotCheckedView } from "../../explore/DelegationNotChecked";
 import type { SortState } from "../../explore/listQuery";
 import { type ObjectColumn, ObjectTable } from "../../explore/ObjectTable";
 import { Muted, OneLine } from "../explore/listParts";
@@ -144,27 +145,30 @@ export function PathTable({
   const keys = useMemo(() => keyRows(page?.items ?? []), [page]);
   // Stable between data changes: a new rowKey rebuilds the table's cell renderers, which remounts every cell.
   const rowKey = useCallback((r: PathRow) => keys.get(r) ?? baseKey(r), [keys]);
+  // The Why cells read the page's own delegation marker (D-114).
   return (
-    <ObjectTable
-      label={label}
-      installId={installId}
-      noun={trafficCopy.noun}
-      columns={cols}
-      rowRef={rowRef}
-      rowKey={rowKey}
-      page={page}
-      loading={!page}
-      busy={busy}
-      emptyTitle={emptyTitle}
-      onClearFilters={onClearFilters}
-      clearLabel={clearLabel}
-      sort={sort}
-      onSort={onSort}
-      onPage={onPage}
-      showDenied={false}
-      collapseEmptyFooter={!sortable}
-      stylesOverride={stylesOverride}
-    />
+    <DelegationNotCheckedView.Provider value={!!page?.delegationNotChecked}>
+      <ObjectTable
+        label={label}
+        installId={installId}
+        noun={trafficCopy.noun}
+        columns={cols}
+        rowRef={rowRef}
+        rowKey={rowKey}
+        page={page}
+        loading={!page}
+        busy={busy}
+        emptyTitle={emptyTitle}
+        onClearFilters={onClearFilters}
+        clearLabel={clearLabel}
+        sort={sort}
+        onSort={onSort}
+        onPage={onPage}
+        showDenied={false}
+        collapseEmptyFooter={!sortable}
+        stylesOverride={stylesOverride}
+      />
+    </DelegationNotCheckedView.Provider>
   );
 }
 

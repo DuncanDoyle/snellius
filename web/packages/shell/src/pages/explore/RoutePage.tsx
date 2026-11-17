@@ -7,7 +7,7 @@ import { useInstallFeature } from "../../api/hooks";
 import type { LinkedRef, ParentRef, RouteDetail } from "../../api/types";
 import { detailCopy, routeCopy, traceCopy } from "../../copy/explorer";
 import { trafficCopy } from "../../copy/traffic";
-import { useDelegationChecked } from "../../explore/DelegationNotChecked";
+import { DelegationNotCheckedView } from "../../explore/DelegationNotChecked";
 import { firstFailing } from "../../explore/ProblemStrip";
 import { useInstallId } from "../../shell/extension";
 import { useTwoColumns } from "../../shell/layout";
@@ -83,8 +83,9 @@ export function RoutePage({ stylesOverride }: RoutePageProps = {}) {
   const hasDelegation = !!data?.rules.some((r) => r.backendRefs.some((b) => b.delegation));
   // Delegation copy and blocks need a rule set that computes it and an HTTPRoute; the tab is the kgateway web pack's.
   const delegation = useInstallFeature(id, "delegation") !== false && kind === "HTTPRoute";
-  // A child's paths and effective matches are delegation analysis, which a limited viewer does not get (D-114).
-  const notChecked = !useDelegationChecked() && delegation && !!data && isChild(data);
+  // The detail says when it withholds delegation analysis (D-114); a child's paths and effective matches are part of it.
+  const withheld = !!data?.delegationNotChecked;
+  const notChecked = withheld && delegation && !!data && isChild(data);
   const unlisted = useMemo(() => (data ? unlistedRefs(data) : []), [data]);
   // The parents and up-chain this page links decide the links of the same objects in the trail.
   const trailRefs = useMemo(() => (data ? linkedRefs(data) : undefined), [data]);
@@ -194,11 +195,13 @@ export function RoutePage({ stylesOverride }: RoutePageProps = {}) {
             <h2 id="route-rules">
               {routeCopy.rules} <span className="note">{data.rules.length}</span>
             </h2>
-            {data.rules.length ? (
-              <RuleTable installId={id} kind={kind} rules={data.rules} serves={data.serves} />
-            ) : (
-              <RuleList installId={id} kind={kind} rules={data.rules} serves={data.serves} />
-            )}
+            <DelegationNotCheckedView.Provider value={withheld}>
+              {data.rules.length ? (
+                <RuleTable installId={id} kind={kind} rules={data.rules} serves={data.serves} />
+              ) : (
+                <RuleList installId={id} kind={kind} rules={data.rules} serves={data.serves} />
+              )}
+            </DelegationNotCheckedView.Provider>
           </Section>
           {delegation && (data.effective?.length || notChecked) ? (
             <EffectiveMatches

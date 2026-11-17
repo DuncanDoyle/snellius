@@ -42,6 +42,8 @@ export interface Page<T> {
   next?: string;
   prev?: string;
   deniedInInstall?: number;
+  /** The caller gets no delegation analysis here (D-114). */
+  delegationNotChecked?: boolean;
   collectedAt: string;
 }
 
@@ -372,6 +374,8 @@ export interface RouteDetail {
   ancestorsTruncated: boolean;
   childCount: number;
   declaredCount: number;
+  /** The caller gets no delegation analysis (D-114). */
+  delegationNotChecked?: boolean;
   collectedAt: string;
 }
 
@@ -585,6 +589,8 @@ export interface PathsResponse {
   next?: string;
   prev?: string;
   summary: PathSummary;
+  /** The caller gets no paths through parent routes (D-114). */
+  delegationNotChecked?: boolean;
   collectedAt: string;
 }
 
@@ -613,6 +619,8 @@ export interface BackendsResponse {
   hidden?: boolean;
   /** The Gateways and namespaces of the visible backends, each counted with every filter but its own. */
   facets?: BackendFacets;
+  /** The caller gets no paths through parent routes (D-114). */
+  delegationNotChecked?: boolean;
   collectedAt: string;
 }
 /** A Gateway and the backends it has a visible path to. */
@@ -681,5 +689,7 @@ export interface BackendDetail {
   explanations: RefExplanation[];
   service?: ServiceFact;
   conditions?: Condition[];
+  /** The caller gets no paths through parent routes (D-114). */
+  delegationNotChecked?: boolean;
   collectedAt: string;
 }
