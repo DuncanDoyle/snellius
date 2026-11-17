@@ -90,6 +90,56 @@ func TestStateOfAllShownEqualsPrecomputed(t *testing.T) {
 	}
 }
 
+// TestQueryRoutesAsAsksParentsOnlyForStates: without a state filter the scan
+// asks no parent's visibility (each is one SAR, outside any prefetch round);
+// with one, the status flags still come from visible parents only (D-085).
+func TestQueryRoutesAsAsksParentsOnlyForStates(t *testing.T) {
+	i := scaleInstall(t)
+	ix := i.Index
+	// Refs the scan may ask without a state filter: routes and RowFlags' dependency sets.
+	need := map[objects.Ref]bool{}
+	parents := map[objects.Ref]bool{}
+	for k := range ix.Routes {
+		r := &ix.Routes[k]
+		need[r.Ref] = true
+		for _, ds := range [][]explore.DepSet{r.UnknownDeps, r.DroppedDeps} {
+			for _, d := range ds {
+				for _, x := range d {
+					need[ix.Ref(x)] = true
+				}
+			}
+		}
+		for _, p := range r.Parents {
+			parents[p.Target] = true
+		}
+	}
+	scan := func(q explore.Query) map[objects.Ref]bool {
+		asked := map[objects.Ref]bool{}
+		vw := explore.Viewer{Visible: func(r objects.Ref) bool { asked[r] = true; return true },
+			Shown: func(*health.Finding) bool { return true }, Unknown: unknownOf(i.Health)}
+		if _, err := ix.QueryRoutesAs(q, vw); err != nil {
+			t.Fatal(err)
+		}
+		return asked
+	}
+	for _, q := range []explore.Query{{Limit: 50}, {Sort: explore.Sort{Key: "health", Desc: true}, Limit: 50}, {Health: []health.State{health.StateError}, Limit: 50}} {
+		for r := range scan(q) {
+			if !need[r] {
+				t.Errorf("query %+v asks parent %s", q, r)
+			}
+		}
+	}
+	asked, n := scan(explore.Query{States: explore.FlagAccepted, Limit: 50}), 0
+	for p := range parents {
+		if !need[p] && asked[p] {
+			n++
+		}
+	}
+	if n == 0 {
+		t.Error("a state filter asks no parent: its flags would not depend on parent visibility")
+	}
+}
+
 // TestMemberCountAsVisible: the As counts count visible member routes only;
 // nil counts every member, as the precomputed counts do.
 func TestMemberCountAsVisible(t *testing.T) {

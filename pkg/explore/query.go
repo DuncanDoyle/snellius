@@ -359,7 +359,8 @@ func (ix *Index) queryRoutes(in Query, vw Viewer) (Page, int, error) {
 			if visible != nil && !visible(r.Ref) {
 				continue
 			}
-			st, f, _ = ix.RouteStateOf(id, vw)
+			// Status flags only under a state filter: they ask each parent, one SAR at a time.
+			st, f, _ = ix.routeState(id, vw, q.States != 0)
 		}
 		if !q.common(r.Ref, st, func() string { return r.search }) ||
 			len(q.Kinds) > 0 && !slices.Contains(q.Kinds, gk) ||

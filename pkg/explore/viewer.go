@@ -102,6 +102,12 @@ const linkFlags = FlagAccepted | FlagNotAccepted | FlagRefsUnresolved | FlagNotP
 // backend; disagrees only from a shown KGWUI-012; status flags only from
 // links to parents vw.Visible admits. Flags pass RowFlags first.
 func (ix *Index) RouteStateOf(id RowID, vw Viewer) (health.State, Flag, *health.RowReason) {
+	return ix.routeState(id, vw, true)
+}
+
+// routeState is RouteStateOf; without links its flags leave out the status
+// flags and no parent is asked about. The state never depends on them.
+func (ix *Index) routeState(id RowID, vw Viewer, links bool) (health.State, Flag, *health.RowReason) {
 	r := &ix.Routes[id]
 	f := ix.RowFlags(id, vw.Visible)
 	if vw.Shown == nil {
@@ -111,7 +117,7 @@ func (ix *Index) RouteStateOf(id RowID, vw Viewer) (health.State, Flag, *health.
 	// a hidden parent's existence or status never shows on the row.
 	f &^= linkFlags | FlagGatewayRejecting | FlagBackendProblem | FlagDisagrees
 	for k := range r.Parents {
-		if l := &r.Parents[k]; vw.Visible == nil || vw.Visible(l.Target) {
+		if l := &r.Parents[k]; links && (vw.Visible == nil || vw.Visible(l.Target)) {
 			f |= l.flags &^ FlagGatewayRejecting
 		}
 	}
