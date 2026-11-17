@@ -19,6 +19,7 @@ type Chains struct {
 	// reached and incomplete memoise per route: 1 yes, -1 no, 2 being decided.
 	reached, incomplete map[objects.Ref]int8
 	rows                map[int]*chainRow
+	selections          map[RefKey]bool
 	edges               map[objects.Ref][]*computed.EffectiveEdge
 }
 
@@ -31,7 +32,7 @@ type chainRow struct {
 // Chains returns the readable-chain view of ix for visible, which is never nil.
 func (ix *Index) Chains(visible func(objects.Ref) bool) *Chains {
 	return &Chains{ix: ix, visible: visible, reached: map[objects.Ref]int8{}, incomplete: map[objects.Ref]int8{},
-		rows: map[int]*chainRow{}, edges: map[objects.Ref][]*computed.EffectiveEdge{}}
+		rows: map[int]*chainRow{}, selections: map[RefKey]bool{}, edges: map[objects.Ref][]*computed.EffectiveEdge{}}
 }
 
 // Reached reports whether a readable chain reaches route in the reach graph,
@@ -90,8 +91,25 @@ func (c *Chains) walkFrom(memo map[objects.Ref]int8, route objects.Ref, seed fun
 	return false, open
 }
 
+// SelectionHidden reports whether a route that ref k's selection reads is
+// hidden: its own scope's, or an earlier ref's of the same rule, whose
+// children the controller hands on to the later refs (rules §5.2, quirk 1).
+func (c *Chains) SelectionHidden(k RefKey) bool {
+	if h, ok := c.selections[k]; ok {
+		return h
+	}
+	h := false
+	for j := 0; j <= k.Ref && !h; j++ {
+		if d, ok := c.ix.RefScope[RefKey{k.Parent, k.Rule, j}]; ok {
+			h = !c.ix.Visible(d, c.visible)
+		}
+	}
+	c.selections[k] = h
+	return h
+}
+
 // Row is DelegRows[i] as the viewer sees it, and false when no readable
-// chain reaches its parent. Its contexts are the readable retained ones and
+// chain reaches its parent or its ref's selection reads a hidden route. Its contexts are the readable retained ones and
 // its outcome is theirs (rules §5.5); a row whose contexts were cut by a
 // compute bound is unknown too-large. It has no child-entry check, which
 // compares every chain with the controller, and its Deps are empty.
@@ -100,7 +118,7 @@ func (c *Chains) Row(i int) (*DelegRow, bool) {
 		return &cr.row, cr.ok
 	}
 	src := &c.ix.DelegRows[i]
-	cr := &chainRow{ok: c.Reached(src.Key.Parent)}
+	cr := &chainRow{ok: c.Reached(src.Key.Parent) && !c.SelectionHidden(RefKey{src.Key.Parent, src.Key.Rule, src.Key.Ref})}
 	c.rows[i] = cr
 	if !cr.ok {
 		return nil, false

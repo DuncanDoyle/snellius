@@ -884,6 +884,10 @@ func (d *detail) refCounts(dto *DelegationRefDTO, k explore.RefKey) {
 		}
 		return
 	}
+	// Readable chains: a selection that reads a hidden route gives no rows, so no counts either.
+	if c := d.v.chainsOf(d.ix); c != nil && c.SelectionHidden(k) {
+		return
+	}
 	hidden := d.ix.SelectionHidden(k, d.v.visible())
 	var c *Computed
 	if hidden {

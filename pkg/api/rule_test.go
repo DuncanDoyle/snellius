@@ -1020,6 +1020,10 @@ var ruleSurfaces = []ruleSurface{
 	{name: "/routes page 2", path: routesPage2, changes: []string{"created", "listenerCount"}},
 	{name: "ListenerSet detail (rejected)", path: fixed("/listenersets/" + objects.GatewayAPIGroup + "/ListenerSet/" + ns0 + "/" + lsRejected),
 		changes: []string{"crdDefinesField", "crdChannel"}},
+	// A readable root whose one rule delegates to a readable and a hidden sibling.
+	{name: "delegation (sibling root)", path: routePath(ns0, sibRoot, "/delegation"), changes: []string{"siblingCreated", "siblingCreatedFits"}},
+	{name: "route detail (sibling root)", path: routePath(ns0, sibRoot, ""), changes: []string{"siblingCreated", "siblingCreatedFits"}},
+	{name: "route detail (sibling child)", path: routePath(ns0, sibChild, ""), changes: []string{}},
 	// A readable chain to shared-mid that a hidden root on gw0 may also reach.
 	{name: "delegation (shared mid)", path: routePath(ns0, sharedMid, "/delegation"), changes: []string{"hiddenSelectsFits", "hiddenSharedNarrows"}},
 	{name: "route detail (shared mid)", path: routePath(ns0, sharedMid, ""), changes: []string{"hiddenSelects", "hiddenSelectsFits", "hiddenSharedNarrows"}},
@@ -1362,9 +1366,41 @@ var extraWorlds = []extraWorld{
 	{name: "hidden hop", add: func(s ruleSnap) { s.add(chainRoutes()...) }, changes: hopChanges, user: nsReader},
 	{name: "rejected ListenerSet", add: rejectedListenerSet, changes: crdChanges, user: restrictedUser},
 	{name: "memo cap", add: func(ruleSnap) {}, changes: []ruleChange{{name: "memoCap", apply: overMemoCap}}, user: restrictedUser},
+	{name: "sibling refs", add: func(s ruleSnap) { s.add(siblingRoutes()...) }, changes: siblingChanges, user: nsReader},
 	{name: "hidden root selects", add: func(s ruleSnap) { s.add(sharedRoutes()...) }, changes: selectChanges, user: nsReader},
 	{name: "hidden root shares", add: func(s ruleSnap) { s.add(sharedRoutes()...); hiddenSelect(s, chainMatch(sharedRoot)) },
 		changes: []ruleChange{{name: "hiddenSharedNarrows", apply: func(s ruleSnap) { hiddenSelect(s, chainMatch(sharedRoot, sharedMid)) }}}, user: nsReader},
+}
+
+// sibRoot's one rule delegates to sibChild, then to sibHidden in hiddenNS;
+// the controller hands sibChild to the later ref's selection too.
+const (
+	sibRoot   = "sib-root"
+	sibChild  = "sib-child"
+	sibHidden = "sib-hidden"
+)
+
+// siblingRoutes are sibRoot on gw0's listener l0 and its readable child.
+func siblingRoutes() []*unstructured.Unstructured {
+	l0 := gw0()[0]
+	l0.SectionName = "l0"
+	root := delegating(ns0, sibRoot, []objects.ParentRef{l0}, ns0, sibChild)
+	rule := root.Object["spec"].(map[string]any)["rules"].([]any)[0].(map[string]any)
+	rule["backendRefs"] = append(rule["backendRefs"].([]any), map[string]any{"group": objects.GatewayAPIGroup, "kind": "HTTPRoute", "name": sibHidden, "namespace": hiddenNS})
+	return []*unstructured.Unstructured{root, child(ns0, sibChild, testutil.HTTPRouteRef(ns0, sibRoot))}
+}
+
+// siblingChanges create only sibHidden, a child of sibRoot.
+var siblingChanges = []ruleChange{
+	// Its match does not fit sibRoot's.
+	{name: "siblingCreated", apply: func(s ruleSnap) {
+		u := child(hiddenNS, sibHidden, testutil.HTTPRouteRef(ns0, sibRoot))
+		u.Object["spec"].(map[string]any)["rules"].([]any)[0].(map[string]any)["matches"] = []any{
+			map[string]any{"path": map[string]any{"type": "PathPrefix", "value": "/elsewhere"}}}
+		s.add(u)
+	}},
+	// Its match fits.
+	{name: "siblingCreatedFits", apply: func(s ruleSnap) { s.add(child(hiddenNS, sibHidden, testutil.HTTPRouteRef(ns0, sibRoot))) }},
 }
 
 // A readable chain sharedRoot → sharedMid → sharedLeaf and sharedDropped on gw0's listener l0,
