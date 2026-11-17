@@ -156,6 +156,8 @@ type walker struct {
 	sigDeps   []computed.DepAcc
 	sigIdx    map[sigKey]int
 	uncertain []computed.Uncertain
+	// possibleBy names the uncertain selection behind each possible point.
+	possibleBy []computed.PossibleBy
 }
 
 // delegation computes views B and C (rules §5): selection and permission for
@@ -194,7 +196,7 @@ func (w *walker) result() computed.DelegationResult {
 	for i := range w.signals {
 		w.signals[i].Deps = w.acc.deps.Finish(&w.sigDeps[i])
 	}
-	res := computed.DelegationResult{Signals: w.signals, Reach: w.reach(), Uncertain: w.sortedUncertain(),
+	res := computed.DelegationResult{Signals: w.signals, Reach: w.reach(), Uncertain: w.sortedUncertain(), PossibleBy: computed.SortedPossible(w.possibleBy),
 		UncertainKeys: uncertainKeys(w.in.Roots), Cap: w.cap}
 	res.Complete = computed.NewCompleteness(res)
 	res.Rows = w.acc.rows(res.Complete.Incomplete)
@@ -284,6 +286,7 @@ func (w *walker) selectAll() {
 							i, _ := w.index(r)
 							sel.possible = append(sel.possible, int32(i)) //nolint:gosec // route counts fit in int32
 							w.uncertain = append(w.uncertain, computed.Uncertain{Route: r, Rule: computed.UncertainPossible, Ref: -1, Reason: unknown})
+							w.possibleBy = append(w.possibleBy, computed.PossibleBy{Route: r, Parent: p.Ref, Rule: sel.rule, Ref: sel.ref})
 						}
 					}
 				}

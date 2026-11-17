@@ -1044,9 +1044,15 @@ func chainGraph(ix *Index, n *interner, v *computed.Views) {
 	ix.closureAll = d.Cap == computed.CapEdges
 	for _, u := range d.Uncertain {
 		if ix.uncertain == nil {
-			ix.uncertain = map[objects.Ref]bool{}
+			ix.uncertain = map[objects.Ref][]computed.Uncertain{}
 		}
-		ix.uncertain[u.Route] = true
+		ix.uncertain[u.Route] = append(ix.uncertain[u.Route], u)
+	}
+	for _, p := range d.PossibleBy {
+		if ix.possibleBy == nil {
+			ix.possibleBy = map[objects.Ref][]RefKey{}
+		}
+		ix.possibleBy[p.Route] = append(ix.possibleBy[p.Route], RefKey{p.Parent, p.Rule, p.Ref})
 	}
 }
 

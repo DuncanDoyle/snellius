@@ -308,10 +308,12 @@ type Index struct {
 	noDelegation bool
 	// reachParents, rootDeps, uncertain and closureAll are the delegation
 	// graph Chains walks: reach edges by child, each route's view A deps per
-	// parentRef, the uncertain points' routes, and whether the edge cap hit.
+	// parentRef, the uncertain points per route, and whether the edge cap hit.
+	// possibleBy names, per possible route, the uncertain selections behind it.
 	reachParents map[objects.Ref][]objects.Ref
 	rootDeps     map[objects.Ref][]DepSet
-	uncertain    map[objects.Ref]bool
+	uncertain    map[objects.Ref][]computed.Uncertain
+	possibleBy   map[objects.Ref][]RefKey
 	closureAll   bool
 	// flaggers are, per child, the DelegRows indexes whose owned parent may set its dropped flag.
 	flaggers map[objects.Ref][]int

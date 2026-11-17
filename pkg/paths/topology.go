@@ -151,6 +151,8 @@ type Topology struct {
 	// ctxs are the rows' path contexts; unknowns the reasons they index.
 	ctxs     []pathCtx
 	unknowns []computed.UnknownReason
+	// srcs are, per context whose view C rows set a delegation state, those rows.
+	srcs map[int32]ctxSource
 	// deps are the dependency sets, each its length then its Refs indexes.
 	deps []int32
 	// delegates is Input.Delegates: whether a delegation backendRef delegates.

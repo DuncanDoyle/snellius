@@ -110,6 +110,8 @@ type DelegationResult struct {
 	Reach []Edge
 	// Uncertain are the uncertain points of rules §8.5, sorted by (Route, Rule, Ref).
 	Uncertain []Uncertain
+	// PossibleBy names the uncertain selection behind each UncertainPossible point, sorted.
+	PossibleBy []PossibleBy
 	// UncertainKeys are each root's Root.UncertainKeys, sorted: a check under
 	// one of them makes no negative expectation (rules §8.5).
 	UncertainKeys []RouteKey
@@ -199,6 +201,20 @@ type Uncertain struct {
 	Route     objects.Ref
 	Rule, Ref int
 	Reason    UnknownReason
+}
+
+// PossibleBy is a Route that the uncertain selection of Parent's rule Rule, ref Ref, might select.
+type PossibleBy struct {
+	Route, Parent objects.Ref
+	Rule, Ref     int
+}
+
+// SortedPossible sorts ps by route, then selection, and drops duplicates.
+func SortedPossible(ps []PossibleBy) []PossibleBy {
+	slices.SortFunc(ps, func(a, b PossibleBy) int {
+		return cmp.Or(a.Route.Compare(b.Route), a.Parent.Compare(b.Parent), cmp.Compare(a.Rule, b.Rule), cmp.Compare(a.Ref, b.Ref))
+	})
+	return slices.Compact(ps)
 }
 
 // FitClause names the clause of the default-mode fit that dropped a child

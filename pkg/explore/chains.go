@@ -48,7 +48,27 @@ func (c *Chains) Reached(route objects.Ref) bool {
 // incompleteAt reports whether route is in a reach closure over readable
 // chains: the edge cap hit, or a readable uncertain point reaches it (rules §8.5).
 func (c *Chains) incompleteAt(route objects.Ref) bool {
-	return c.ix.closureAll || c.walk(c.incomplete, route, func(r objects.Ref) bool { return c.ix.uncertain[r] })
+	return c.ix.closureAll || c.walk(c.incomplete, route, c.seeded)
+}
+
+// seeded reports whether an uncertain point on the readable route r counts
+// for the viewer: a root's always; a selection's only when the selection is
+// readable; a possible route's only when a readable parent's readable
+// selection is behind it. Readability is SelectionHidden's, by permissions.
+func (c *Chains) seeded(r objects.Ref) bool {
+	for _, u := range c.ix.uncertain[r] {
+		switch {
+		case u.Rule == computed.UncertainRoot:
+			return true
+		case u.Rule == computed.UncertainPossible:
+			if slices.ContainsFunc(c.ix.possibleBy[r], func(k RefKey) bool { return c.visible(k.Parent) && !c.SelectionHidden(k) }) {
+				return true
+			}
+		case !c.SelectionHidden(RefKey{r, u.Rule, u.Ref}):
+			return true
+		}
+	}
+	return false
 }
 
 // walk reports whether route is visible and seed holds for it or a visible

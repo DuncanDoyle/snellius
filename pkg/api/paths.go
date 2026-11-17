@@ -258,7 +258,7 @@ func pathRow(l linker, titles map[titleKey]string, t *paths.Topology, proj *path
 		out.Routes[j] = l.linked(ref)
 	}
 	rule := t.Rule(r)
-	ds := t.Delegation(r)
+	ds := proj.Delegation(t, r)
 	out.Rule, out.Delegated, out.Note = rule.Index, len(chain) > 1, note(ds)
 	switch {
 	case out.Delegated && ds.Matches != nil:

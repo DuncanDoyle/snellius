@@ -122,10 +122,10 @@ func (p *projector) digest(r Row, id uint64, out *Projection, i int) uint64 {
 			h.str(dl.Label)
 		}
 	}
-	c := &t.ctxs[r.ctx]
-	h.num(int64(c.flags))
-	if c.unknown > 0 {
-		h.str(string(t.unknowns[c.unknown-1]))
+	unknown, flags := t.state(r.ctx, p.deleg())
+	h.num(int64(flags))
+	if unknown != "" {
+		h.str(string(unknown))
 	}
 	pr := out.Problems[i]
 	h.str(string(pr.State))

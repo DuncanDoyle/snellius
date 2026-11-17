@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/DuncanDoyle/snellius/pkg/computed"
 	"github.com/DuncanDoyle/snellius/pkg/diagnose"
 	"github.com/DuncanDoyle/snellius/pkg/engine"
 	"github.com/DuncanDoyle/snellius/pkg/explore"
@@ -559,7 +560,25 @@ func (v *view) scopedFilter(i *engine.InstallModel, t *paths.Topology, rows func
 		shown[k] = slices.ContainsFunc(byKey[k], v.shown)
 		return shown[k]
 	}
-	return &paths.ProjectionFilter{Signal: signal, Endpoints: func(ns string) bool { return v.canList(endpointSlices, ns) }, Rows: rows}
+	return &paths.ProjectionFilter{Signal: signal, Endpoints: func(ns string) bool { return v.canList(endpointSlices, ns) }, Rows: rows, Deleg: v.delegRows(i.Index)}
+}
+
+// delegRows is the view C rows the caller sees, nil unless v.paths(): a
+// readable-chain row with its readable incompleteness and unknown (D-113).
+func (v *view) delegRows(ix *explore.Index) paths.ViewRow {
+	c := v.chainsOf(ix)
+	if c == nil {
+		return nil
+	}
+	return func(i int) (*computed.Row, bool) {
+		cr, ok := c.Row(i)
+		if !ok {
+			return nil, false
+		}
+		r := ix.DelegRows[i].Row
+		r.SomeNotComputed, r.Unknown = cr.SomeNotComputed, cr.Unknown
+		return &r, true
+	}
 }
 
 // requiredNotOK reports whether a required check of cs is not OK.

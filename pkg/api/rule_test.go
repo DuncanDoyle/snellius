@@ -1029,6 +1029,9 @@ var ruleSurfaces = []ruleSurface{
 	{name: "route detail (scope root)", path: routePath(ns0, scopeRoot, ""), changes: []string{"scopeFirstFits", "scopeFirstDrops"}},
 	{name: "delegation (label root)", path: routePath(ns0, labelRoot, "/delegation"), changes: []string{"labelFirst"}},
 	{name: "route detail (label root)", path: routePath(ns0, labelRoot, ""), changes: []string{"labelFirst"}},
+	// A readable root with a fitting and a dropped child, and a hidden label selection that may turn uncertain.
+	{name: "delegation (uncertain root)", path: routePath(ns0, uncRoot, "/delegation"), changes: []string{"uncLabelled"}},
+	{name: "route detail (uncertain root)", path: routePath(ns0, uncRoot, ""), changes: []string{"uncLabelled"}},
 	// A readable chain to shared-mid that a hidden root on gw0 may also reach.
 	{name: "delegation (shared mid)", path: routePath(ns0, sharedMid, "/delegation"), changes: []string{"hiddenSelectsFits", "hiddenSharedNarrows"}},
 	{name: "route detail (shared mid)", path: routePath(ns0, sharedMid, ""), changes: []string{"hiddenSelects", "hiddenSelectsFits", "hiddenSharedNarrows"}},
@@ -1376,6 +1379,45 @@ var extraWorlds = []extraWorld{
 	{name: "hidden root shares", add: func(s ruleSnap) { s.add(sharedRoutes()...); hiddenSelect(s, chainMatch(sharedRoot)) },
 		changes: []ruleChange{{name: "hiddenSharedNarrows", apply: func(s ruleSnap) { hiddenSelect(s, chainMatch(sharedRoot, sharedMid)) }}}, user: nsReader},
 	{name: "scope selections", add: scopeRoutes, changes: scopeChanges, user: nsReader},
+	{name: "uncertain selection", add: uncertainRoutes, changes: []ruleChange{{name: "uncLabelled", apply: func(s ruleSnap) {
+		u := routeTo(hiddenNS, "unc-labelled", hiddenGW("hidden-gw"), "", "", true)
+		u.SetLabels(map[string]string{objects.DelegationLabelKey: uncLabel})
+		s.add(u)
+	}}}, user: nsReader},
+}
+
+// uncRoot's rule 0 names uncChild, which fits; rule 1 names uncDropped,
+// which does not; rule 2 selects label uncLabel in selNS. With the wildcard
+// namespace unknown, a route labelled uncLabel elsewhere makes rule 2 uncertain.
+const (
+	uncRoot    = "unc-root"
+	uncChild   = "unc-child"
+	uncDropped = "unc-dropped"
+	uncLabel   = "unc-team"
+)
+
+// uncertainRoutes adds selNS, uncRoot on gw0's listener l0 and its two
+// readable children, and leaves the controller's wildcard namespace unreadable.
+func uncertainRoutes(s ruleSnap) {
+	s.Namespaces = append(s.Namespaces, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: selNS}})
+	d := s.deployment("kgw", "kgateway")
+	d.Spec.Template.Spec.Containers[0].Env = append(d.Spec.Template.Spec.Containers[0].Env, corev1.EnvVar{Name: install.WildcardEnv,
+		ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "cm"}, Key: "k"}}})
+	l0 := gw0()[0]
+	l0.SectionName = "l0"
+	root := routeTo(ns0, uncRoot, []objects.ParentRef{l0}, "", "", true)
+	rule := func(path string, ref map[string]any) map[string]any {
+		return map[string]any{"matches": []any{map[string]any{"path": map[string]any{"type": "PathPrefix", "value": path}}}, "backendRefs": []any{ref}}
+	}
+	named := func(name string) map[string]any {
+		return map[string]any{"group": objects.GatewayAPIGroup, "kind": "HTTPRoute", "name": name, "namespace": ns0}
+	}
+	root.Object["spec"].(map[string]any)["rules"] = []any{
+		rule("/"+uncRoot, named(uncChild)),
+		rule("/"+uncRoot+"/x", named(uncDropped)),
+		rule("/"+uncRoot, map[string]any{"group": "delegation.kgateway.dev", "kind": "label", "name": uncLabel, "namespace": selNS}),
+	}
+	s.add(root, child(ns0, uncChild, testutil.HTTPRouteRef(ns0, uncRoot)), child(ns0, uncDropped, testutil.HTTPRouteRef(ns0, uncRoot)))
 }
 
 // scopeRoot's one rule selects every route of selNS, then scopeChild;

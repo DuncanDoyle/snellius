@@ -1307,6 +1307,40 @@ func TestSelectionAllAsksClusterList(t *testing.T) {
 	}
 }
 
+// An uncertain point counts for a viewer only through a selection it may read:
+// p's own label selection, or q's wildcard behind possible route r.
+func TestSeededByReadableSelection(t *testing.T) {
+	p, q, r := routeRef("shop", "p"), routeRef("shop", "q"), routeRef("shop", "r")
+	ix := &Index{
+		uncertain: map[objects.Ref][]computed.Uncertain{
+			p: {{Route: p, Rule: 1, Ref: 0, Reason: computed.UnknownSetting}},
+			r: {{Route: r, Rule: computed.UncertainPossible, Ref: -1, Reason: computed.UnknownSetting}},
+		},
+		possibleBy: map[objects.Ref][]RefKey{r: {{q, 0, 0}}},
+		RefRows:    map[RefKey][]int{{p, 1, 0}: {0}, {q, 0, 0}: {1}},
+		DelegRows: []DelegRow{
+			{Row: computed.Row{RefAsWritten: objects.DelegationRef{Mode: objects.DelegationLabel, Namespace: "team", Label: "l"}}},
+			{Row: computed.Row{RefAsWritten: objects.DelegationRef{Mode: objects.DelegationWildcard, Namespace: "team"}}},
+		},
+		wild: install.Setting{Value: install.WildcardAll, Known: true},
+	}
+	for _, tc := range []struct {
+		name         string
+		team, seeQ   bool
+		wantP, wantR bool
+	}{
+		{"team unlistable", false, true, false, false},
+		{"team listable", true, true, true, true},
+		{"selecting parent hidden", true, false, true, false},
+	} {
+		list := func(_ objects.GroupKind, ns string) bool { return ns != "team" || tc.team }
+		c := ix.Chains(func(x objects.Ref) bool { return x != q || tc.seeQ }, list)
+		if c.seeded(p) != tc.wantP || c.seeded(r) != tc.wantR {
+			t.Errorf("%s: seeded p %v r %v, want %v %v", tc.name, c.seeded(p), c.seeded(r), tc.wantP, tc.wantR)
+		}
+	}
+}
+
 // rejects001 is an active KGWUI-001 on Gateway ref.
 func rejects001(ref objects.Ref) health.Finding {
 	return health.Finding{Code: health.CodeXDSRejected, Severity: health.SeverityError, Resource: &ref, Message: "Proxies reject this Gateway's config"}

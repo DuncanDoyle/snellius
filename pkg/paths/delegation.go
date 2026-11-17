@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/DuncanDoyle/snellius/pkg/computed"
+	"github.com/DuncanDoyle/snellius/pkg/explore"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
 
@@ -45,13 +46,14 @@ const (
 type stateKey struct{ ctx, rule, ref int32 }
 
 // Delegation is the row's delegation state.
-func (t *Topology) Delegation(r Row) DelegState {
-	p := &t.ctxs[r.ctx]
-	d := DelegState{Matches: p.matches, Unconfirmable: p.flags&flagUnconfirmable != 0,
-		NotComputed: p.flags&flagNotComputed != 0, Truncated: p.flags&flagTruncated != 0}
-	if p.unknown > 0 {
-		d.Unknown = t.unknowns[p.unknown-1]
-	}
+func (t *Topology) Delegation(r Row) DelegState { return t.DelegationFor(r, nil) }
+
+// DelegationFor is the row's delegation state from the view C rows row
+// shows; a nil row shows every row.
+func (t *Topology) DelegationFor(r Row, row ViewRow) DelegState {
+	unknown, flags := t.state(r.ctx, row)
+	d := DelegState{Matches: t.ctxs[r.ctx].matches, Unknown: unknown, Unconfirmable: flags&flagUnconfirmable != 0,
+		NotComputed: flags&flagNotComputed != 0, Truncated: flags&flagTruncated != 0}
 	if c := t.chain(r); len(c) > 1 {
 		d.Provenance = make([]objects.Ref, len(c)-1)
 		for i, ri := range c[:len(c)-1] {
@@ -110,15 +112,67 @@ func (b *builder) refState(ctx int32, rule, ref int) int32 {
 		unknown = cmp.Or(unknown, rows[i].Unknown)
 	}
 	idx := ctx
-	if flags&^p.flags != 0 || (p.unknown == 0 && unknown != "") {
+	// A context of its own whenever the rows set a state, so a viewer's rows can decide it again.
+	if flags != 0 || unknown != "" {
 		p.flags |= flags
 		if p.unknown == 0 {
 			p.unknown = b.unknown(unknown)
 		}
 		idx = b.ctx(p)
+		b.source(idx, ctxSource{base: ctx, rows: b.in.Index.RefRows[explore.RefKey{Parent: parent, Rule: rule, Ref: ref}]})
 	}
 	b.states[k] = idx
 	return idx
+}
+
+// ctxSource is the view C rows a path context's delegation state comes
+// from: base's state, if base is not -1, then rows (Index.DelegRows), then
+// context, the unknown of a context that did not attach.
+type ctxSource struct {
+	base       int32
+	rows       []int
+	context    computed.UnknownReason
+	unattached bool
+}
+
+// source records s as context ctx's source.
+func (b *builder) source(ctx int32, s ctxSource) {
+	if b.t.srcs == nil {
+		b.t.srcs = map[int32]ctxSource{}
+	}
+	b.t.srcs[ctx] = s
+}
+
+// ViewRow is Index.DelegRows[i] as one viewer sees it, false when hidden.
+type ViewRow func(i int) (*computed.Row, bool)
+
+// state is context ctx's unknown and flags; with row, from the rows row
+// shows, as the topology built them from every row.
+func (t *Topology) state(ctx int32, row ViewRow) (computed.UnknownReason, uint8) {
+	pc := &t.ctxs[ctx]
+	s, ok := t.srcs[ctx]
+	if row == nil || !ok {
+		if pc.unknown == 0 {
+			return "", pc.flags
+		}
+		return t.unknowns[pc.unknown-1], pc.flags
+	}
+	var unknown, ru computed.UnknownReason
+	var flags uint8
+	if s.base >= 0 {
+		unknown, flags = t.state(s.base, row)
+	}
+	for _, i := range s.rows {
+		if r, ok := row(i); ok {
+			flags |= rowFlags(r)
+			ru = cmp.Or(ru, r.Unknown)
+		}
+	}
+	unknown = cmp.Or(unknown, ru)
+	if s.unattached {
+		unknown = cmp.Or(s.context, unknown, computed.UnknownContext)
+	}
+	return unknown, flags
 }
 
 // reach is a child reached under one context path, through one or more
@@ -129,6 +183,8 @@ type reach struct {
 	c       *computed.Context
 	flags   uint8
 	unknown computed.UnknownReason
+	// rows are the Index.DelegRows the flags and unknown come from.
+	rows []int
 }
 
 type reachKey struct {
@@ -171,6 +227,9 @@ func (b *builder) delegated() {
 			}
 			r.flags |= rowFlags(&vr.Row)
 			r.unknown = cmp.Or(r.unknown, vr.Unknown)
+			if len(r.rows) == 0 || r.rows[len(r.rows)-1] != i {
+				r.rows = append(r.rows, i)
+			}
 		}
 	}
 	for _, r := range order {
@@ -219,6 +278,7 @@ func (b *builder) context(r *reach) {
 		// The child's effective rules are unknown, so every written rule may be on the path.
 		p.unknown = b.unknown(cmp.Or(r.c.Unknown, r.unknown, computed.UnknownContext))
 		ctx := b.ctx(p)
+		b.source(ctx, ctxSource{base: -1, rows: r.rows, context: r.c.Unknown, unattached: true})
 		for ri := range rules {
 			b.childRule(atts, ctx, ri, &rules[ri], extra)
 		}
@@ -229,7 +289,11 @@ func (b *builder) context(r *reach) {
 			continue
 		}
 		p.matches = er.Matches
-		b.childRule(atts, b.ctx(p), er.Index, &rules[er.Index], extra)
+		ctx := b.ctx(p)
+		if r.flags != 0 || r.unknown != "" {
+			b.source(ctx, ctxSource{base: -1, rows: r.rows})
+		}
+		b.childRule(atts, ctx, er.Index, &rules[er.Index], extra)
 	}
 }
 
@@ -261,4 +325,13 @@ func (b *builder) childRule(atts []rootAtt, ctx int32, ri int, r *objects.Rule, 
 		b.base = append(append(b.base[:0], a.base...), extra...)
 		b.rule(a.att, ctx, ri, r, b.base)
 	}
+}
+
+// Delegation is row r of t's delegation state as p's viewer sees it.
+func (p *Projection) Delegation(t *Topology, r Row) DelegState {
+	var row ViewRow
+	if p.filter != nil {
+		row = p.filter.Deleg
+	}
+	return t.DelegationFor(r, row)
 }
