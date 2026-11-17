@@ -24,10 +24,12 @@ import (
 	clocktesting "k8s.io/utils/clock/testing"
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
+	"github.com/DuncanDoyle/snellius/internal/testutil/scale"
 	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/auth/sar"
 	"github.com/DuncanDoyle/snellius/pkg/auth/session"
+	"github.com/DuncanDoyle/snellius/pkg/explore"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/obs"
 )
@@ -237,33 +239,22 @@ func (p page) mark(n int64) string {
 // Large against D-100 item 7. Report-only: it logs and never fails on a number.
 func TestBudgetSARDeniedList(t *testing.T) {
 	build, m := api.LargeHandlers(t)
-	ix := m.Installs[0].Index
 	base := "/api/v1/installs/" + m.Installs[0].Resolved.ID()
-	deepest, depth := api.DeepestChild(ix, canView)
-	var svc objects.Ref
-	for r, uses := range ix.ByBackend {
-		if r.Kind == "Service" && canView(r) && (svc.Name == "" || len(uses) > len(ix.ByBackend[svc]) ||
-			len(uses) == len(ix.ByBackend[svc]) && r.String() < svc.String()) {
-			svc = r
-		}
-	}
-	if depth == 0 || svc.Name == "" {
-		t.Fatalf("no visible deepest child (%s, depth %d) or Service (%s)", deepest, depth, svc)
-	}
-	t.Logf("deepest visible child %s at depth %d; backend detail %s with %d uses", deepest, depth, svc, len(ix.ByBackend[svc]))
+	route, svc := detailPages(t, m.Installs[0].Index, base)
 	pages := []page{
 		{"/routes", base + "/routes", 400},
 		{"/gateways", base + "/gateways", 400},
 		{"/listenersets", base + "/listenersets", 400},
 		{"/backends", base + "/backends", 550},
 		{"/paths", base + "/paths", 400},
-		{"route detail", base + "/routes/" + deepest.Group + "/" + deepest.Kind + "/" + deepest.Namespace + "/" + deepest.Name, 0},
-		{"backend detail", base + "/backends/-/Service/" + svc.Namespace + "/" + svc.Name, 0},
+		{"/findings", base + "/findings", 400},
+		{"/diagnostics", base + "/diagnostics", 0},
+		{"/installs", "/api/v1/installs", 0},
+		{"/meta", "/api/v1/meta", 0},
+		{"route detail", route, 0},
+		{"backend detail", svc, 0},
 	}
-	// The commit clock is the authoriser's, so allows dated on a fake clock are judged on it.
-	secure := func(az api.Authorizer, now func() time.Time, opts ...api.HandlerOption) http.Handler {
-		return build(az, append([]api.HandlerOption{api.WithSecureMode(true), api.WithCommitClock(now)}, opts...)...)
-	}
+	secure := secureWith(build)
 	fake := func(v viewer, opts ...func(*sar.Options)) (*fakeChecker, *clocktesting.FakeClock, http.Handler) {
 		c, clk := &fakeChecker{allow: v.allow}, clocktesting.NewFakeClock(t0)
 		return c, clk, secure(newAuthz(c, clk, nil, append([]func(*sar.Options){lifted}, opts...)...), clk.Now)
@@ -274,7 +265,7 @@ func TestBudgetSARDeniedList(t *testing.T) {
 	for _, p := range pages {
 		r := get(fh, fc, "operator", p.path)
 		msg := fmt.Sprintf("full-read %-15s %d, %d B buffered, %d SARs", p.name, r.code, r.body, r.sars)
-		if p.name[0] == '/' {
+		if p.limit > 0 {
 			l := get(fh, fc, "operator", p.path+"?limit=200")
 			msg += fmt.Sprintf("; ?limit=200 %d, %d B buffered", l.code, l.body)
 		}
@@ -289,6 +280,25 @@ func TestBudgetSARDeniedList(t *testing.T) {
 				warm := get(h, c, "u", p.path)
 				t.Logf("%s %-15s cold %d SARs → %d (%s); warm %d SARs → %d",
 					v.name, p.name, cold.sars, cold.code, p.mark(cold.sars), warm.sars, warm.code)
+			}
+		}
+	})
+
+	t.Run("scoped", func(t *testing.T) {
+		// One allowed namespace (D-100 item 8): every list's cold SARs against its unscoped count and target.
+		lists := append(slices.Clone(pages[:6]), page{"/processes", base + "/processes", 400})
+		for _, v := range viewers {
+			for _, p := range lists {
+				c, _, h := fake(v)
+				all := get(h, c, "u", p.path)
+				c, _, h = fake(v)
+				scoped := get(h, c, "u", p.path+"?namespaces=ns-000")
+				verdict := "below unscoped"
+				if scoped.sars >= all.sars {
+					verdict = "⚠ NOT below unscoped"
+				}
+				t.Logf("scoped %s %-13s cold unscoped %d SARs → %d (%s); namespaces=ns-000 %d SARs → %d (%s, %s)",
+					v.name, p.name, all.sars, all.code, p.mark(all.sars), scoped.sars, scoped.code, p.mark(scoped.sars), verdict)
 			}
 		}
 	})
@@ -546,6 +556,87 @@ func TestScopedFewerColdChecksLarge(t *testing.T) {
 		t.Logf("%-14s cold SARs unscoped %d → %d, scoped to ns-000 %d → %d", p, all.sars, all.code, scoped.sars, scoped.code)
 		if p == "/routes" && (scoped.code != 200 || scoped.sars >= all.sars) {
 			t.Errorf("/routes scoped asked %d SARs (%d), unscoped %d", scoped.sars, scoped.code, all.sars)
+		}
+	}
+}
+
+// secureWith builds secure-mode handlers whose commit clock is the authoriser's,
+// so allows dated on a fake clock are judged on it.
+func secureWith(build func(api.Authorizer, ...api.HandlerOption) http.Handler) func(api.Authorizer, func() time.Time, ...api.HandlerOption) http.Handler {
+	return func(az api.Authorizer, now func() time.Time, opts ...api.HandlerOption) http.Handler {
+		return build(az, append([]api.HandlerOption{api.WithSecureMode(true), api.WithCommitClock(now)}, opts...)...)
+	}
+}
+
+// detailPages are the detail paths of the deepest visible route and the most used visible Service.
+func detailPages(t *testing.T, ix *explore.Index, base string) (route, svc string) {
+	t.Helper()
+	deepest, depth := api.DeepestChild(ix, canView)
+	var s objects.Ref
+	for r, uses := range ix.ByBackend {
+		if r.Kind == "Service" && canView(r) && (s.Name == "" || len(uses) > len(ix.ByBackend[s]) ||
+			len(uses) == len(ix.ByBackend[s]) && r.String() < s.String()) {
+			s = r
+		}
+	}
+	if depth == 0 || s.Name == "" {
+		t.Fatalf("no visible deepest child (%s, depth %d) or Service (%s)", deepest, depth, s)
+	}
+	t.Logf("deepest visible child %s at depth %d; backend detail %s with %d uses", deepest, depth, s, len(ix.ByBackend[s]))
+	return base + "/routes/" + deepest.Group + "/" + deepest.Kind + "/" + deepest.Namespace + "/" + deepest.Name,
+		base + "/backends/-/Service/" + s.Namespace + "/" + s.Name
+}
+
+// TestBudgetSARNobodyInstalls reports /installs for a viewer allowed nothing on
+// Large and Extreme: the full read plus the findings-basis buckets, with no
+// reachability check (D-103), against the per-request cap. Report-only.
+func TestBudgetSARNobodyInstalls(t *testing.T) {
+	nobody := func(sar.Attributes) bool { return false }
+	for _, tier := range []scale.Tier{scale.Large, scale.Extreme} {
+		build, m := api.TierHandlers(t, tier)
+		c, clk := &fakeChecker{allow: nobody}, clocktesting.NewFakeClock(t0)
+		h := secureWith(build)(newAuthz(c, clk, nil, lifted), clk.Now)
+		cold := get(h, c, "nobody", "/api/v1/installs")
+		warm := get(h, c, "nobody", "/api/v1/installs")
+		verdict := map[bool]string{true: fmt.Sprintf("✅ ≤ %d", api.CheckLimit), false: fmt.Sprintf("❌ > %d", api.CheckLimit)}[cold.sars <= api.CheckLimit]
+		t.Logf("nobody %-8s /installs (%d installs, %d findings) cold %d SARs (%d list, %d get) → %d (%s); warm %d SARs → %d",
+			tier.Name, len(m.Installs), len(m.Installs[0].Health.Findings), cold.sars, c.lists.Load(), c.gets.Load(), cold.code, verdict, warm.sars, warm.code)
+	}
+}
+
+// TestBudgetProjectionCost reports one warm request's time and allocation in
+// secure mode on large-paths, a namespace-grants viewer (projected per request)
+// against a full reader (memoised). The SAR cache is warm on a frozen clock, so
+// the difference is the per-viewer projection and row state. Report-only.
+func TestBudgetProjectionCost(t *testing.T) {
+	build, m := api.TierHandlers(t, scale.Large.Paths())
+	base := "/api/v1/installs/" + m.Installs[0].Resolved.ID()
+	route, svc := detailPages(t, m.Installs[0].Index, base)
+	pages := []page{
+		{name: "/paths", path: base + "/paths"},
+		{name: "/backends", path: base + "/backends"},
+		{name: "backend detail", path: svc},
+		{name: "route detail", path: route},
+		{name: "/routes", path: base + "/routes"},
+		{name: "/meta", path: "/api/v1/meta"},
+	}
+	for _, v := range []viewer{{"namespace-grants", nsGrants}, {"full-read", fullRead}} {
+		c, clk := &fakeChecker{allow: v.allow}, clocktesting.NewFakeClock(t0)
+		h := secureWith(build)(newAuthz(c, clk, nil, lifted), clk.Now)
+		for _, p := range pages {
+			if r := get(h, c, "u", p.path); r.code != http.StatusOK {
+				t.Fatalf("%s %s: %d", v.name, p.name, r.code)
+			}
+			req := request("u", p.path)
+			n := c.total()
+			res := testing.Benchmark(func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					h.ServeHTTP(httptest.NewRecorder(), req)
+				}
+			})
+			t.Logf("projection %-16s %-15s warm %v, %.2f MB, %d allocs per request (%d runs, %d SARs)",
+				v.name, p.name, time.Duration(res.NsPerOp()).Round(time.Microsecond), float64(res.AllocedBytesPerOp())/1e6, res.AllocsPerOp(), res.N, c.total()-n)
 		}
 	}
 }

@@ -25,14 +25,19 @@ import (
 // LargeHandlers computes the Large tier once and returns a builder of
 // backendHandler-like handlers over it under authz, after opts.
 func LargeHandlers(tb testing.TB) (func(authz Authorizer, opts ...HandlerOption) http.Handler, *engine.Model) {
+	return TierHandlers(tb, scale.Large)
+}
+
+// TierHandlers is LargeHandlers over tier.
+func TierHandlers(tb testing.TB, tier scale.Tier) (func(authz Authorizer, opts ...HandlerOption) http.Handler, *engine.Model) {
 	tb.Helper()
-	snap := scale.Snapshot(scale.Large, 1)
+	snap := scale.Snapshot(tier, 1)
 	for _, objs := range snap.Objects {
 		slices.SortFunc(objs, func(x, y *unstructured.Unstructured) int {
 			return strings.Compare(x.GetNamespace()+"/"+x.GetName(), y.GetNamespace()+"/"+y.GetName())
 		})
 	}
-	e, m := snapshotEngine(snap, scale.Large)
+	e, m := snapshotEngine(snap, tier)
 	return func(authz Authorizer, opts ...HandlerOption) http.Handler {
 		r := endpoints.Bounded(synthReader{snap: m.Snapshot, n: endpoints.DefaultBounds.MaxEndpoints}, endpoints.DefaultBounds, testutil.FakeClock())
 		base := []HandlerOption{withPathMemo(paths.NewMemo(clocktesting.NewFakeClock(m.ComputedAt))), WithScopedReader(r),
