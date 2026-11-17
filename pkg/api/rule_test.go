@@ -1379,12 +1379,16 @@ type extraWorld struct {
 	add     func(s ruleSnap)
 	changes []ruleChange
 	user    string
+	// opts serve each world; overCap says the changes take /paths over the memo cap.
+	opts    []api.HandlerOption
+	overCap bool
 }
 
 var extraWorlds = []extraWorld{
 	{name: "hidden hop", add: func(s ruleSnap) { s.add(chainRoutes()...) }, changes: hopChanges, user: nsReader},
 	{name: "rejected ListenerSet", add: rejectedListenerSet, changes: crdChanges, user: restrictedUser},
-	{name: "memo cap", add: func(ruleSnap) {}, changes: []ruleChange{{name: "memoCap", apply: overMemoCap}}, user: restrictedUser},
+	{name: "memo cap", add: func(ruleSnap) {}, changes: []ruleChange{{name: "memoCap", apply: overMemoCap}}, user: restrictedUser,
+		opts: []api.HandlerOption{api.WithPathMemoCap(ruleMemoCap)}, overCap: true},
 	{name: "sibling refs", add: func(s ruleSnap) { s.add(siblingRoutes()...) }, changes: siblingChanges, user: nsReader},
 	{name: "hidden root selects", add: func(s ruleSnap) { s.add(sharedRoutes()...) }, changes: selectChanges, user: nsReader},
 	{name: "hidden root shares", add: func(s ruleSnap) { s.add(sharedRoutes()...); hiddenSelect(s, chainMatch(sharedRoot)) },
@@ -1611,10 +1615,14 @@ var selectChanges = []ruleChange{
 	{name: "hiddenSelectsFits", apply: func(s ruleSnap) { hiddenSelect(s, chainMatch(sharedRoot)) }},
 }
 
+// ruleMemoCap is the memo cap world's topology cap: the base world's
+// topology (about 40 KB) fits, and overMemoCap's routes take it over.
+const ruleMemoCap = 64 << 10
+
 // overMemoCap adds hidden routes on hidden-gw until the path topology is
-// over paths.TopologyCap.
+// over ruleMemoCap.
 func overMemoCap(s ruleSnap) {
-	for i := range 16000 {
+	for i := range 200 {
 		s.add(routeTo(hiddenNS, fmt.Sprintf("hidden-many-%05d", i), hiddenGW("hidden-gw"), hiddenNS, "hidden-be", true))
 	}
 }
@@ -1625,7 +1633,7 @@ func (w extraWorld) pairs(t *testing.T, opts ...api.HandlerOption) []rulePair {
 	world := func(c ruleChange) *httptest.Server {
 		s := ruleSnapshot(t)
 		w.add(s)
-		return ruleServe(t, worldWith(t, s, c), opts...)
+		return ruleServe(t, worldWith(t, s, c), append(slices.Clone(w.opts), opts...)...)
 	}
 	before := world(ruleChange{name: "base"})
 	var out []rulePair
@@ -1644,6 +1652,17 @@ func TestRuleExtraWorldsUnchanged(t *testing.T) {
 	for _, w := range extraWorlds {
 		t.Run(w.name, func(t *testing.T) {
 			pairs := w.pairs(t)
+			over := func(srv *httptest.Server) bool {
+				return decode[api.PathsResponse](t, srv, fullUser, ruleBase+"/paths?limit=1").Summary.Unmemoised
+			}
+			for _, p := range pairs {
+				if !w.overCap {
+					continue
+				}
+				if before, after := over(p.before), over(p.after); before || !after {
+					t.Errorf("%s: unmemoised %v before and %v after for the full viewer, want false and true", p.change.name, before, after)
+				}
+			}
 			for key, diff := range differences(t, pairs, w.user, ruleMasks) {
 				t.Errorf("%s changed for %s under %s:\n%s", key[0], w.user, key[1], diff)
 			}
