@@ -195,7 +195,7 @@ func (w *walker) result() computed.DelegationResult {
 		w.signals[i].Deps = w.acc.deps.Finish(&w.sigDeps[i])
 	}
 	res := computed.DelegationResult{Signals: w.signals, Reach: w.reach(), Uncertain: w.sortedUncertain(),
-		UncertainKeys: uncertainKeys(w.in.Roots), Cap: w.cap}
+		UncertainKeys: uncertainKeys(w.in.Roots), Cap: w.cap, RetentionCut: w.acc.full}
 	res.Complete = computed.NewCompleteness(res)
 	res.Rows = w.acc.rows(res.Complete.Incomplete)
 	w.setChildKeys(res.Rows)

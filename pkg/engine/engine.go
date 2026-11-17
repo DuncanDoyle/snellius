@@ -25,6 +25,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/health"
 	"github.com/DuncanDoyle/snellius/pkg/install"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
+	"github.com/DuncanDoyle/snellius/pkg/limits"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/overview"
 	"github.com/DuncanDoyle/snellius/pkg/platform"
@@ -70,6 +71,8 @@ type Config struct {
 	DelegationBounds computed.Bounds
 	// Logger receives install rejections; nil means slog.Default().
 	Logger *slog.Logger
+	// Limits counts and logs compute-bound hits; nil means a recorder on Logger and Now.
+	Limits *limits.Recorder
 	// Now stamps computations; nil means Clock.Now. It must agree with Clock,
 	// or Run sees deadlines due that Compute does not.
 	Now func() time.Time
@@ -168,7 +171,6 @@ type Engine struct {
 	seq       uint64
 	seen      map[generation]time.Time
 	rejected  map[string]bool // install errors already logged
-	caps      map[string]bool // install and delegation cap pairs already logged
 	// decode caches typed views by (uid, resourceVersion); only touched under computeMu.
 	decode *decodeCache
 	// persist holds the KGWUI-012 windows; only touched under computeMu.
@@ -233,7 +235,10 @@ func New(cfg Config) *Engine {
 	if cfg.DelegationBounds == (computed.Bounds{}) {
 		cfg.DelegationBounds = computed.DefaultBounds
 	}
-	e := &Engine{cfg: cfg, seen: map[generation]time.Time{}, rejected: map[string]bool{}, caps: map[string]bool{}, reported: map[string]string{},
+	if cfg.Limits == nil {
+		cfg.Limits = limits.New(nil, cfg.Logger, cfg.Now)
+	}
+	e := &Engine{cfg: cfg, seen: map[generation]time.Time{}, rejected: map[string]bool{}, reported: map[string]string{},
 		decode: newDecodeCache(), persist: newPersistence(), diags: map[string]*diagMemo{}}
 	e.kindKeys, e.ownedKeys = kindKeys(cfg.Served)
 	return e
@@ -423,14 +428,13 @@ func (e *Engine) compute() *Published {
 		memos[res.ID()] = m
 		var v *computed.Views
 		if r.sel.Rules != nil {
+			gen := m.gen
 			v = computeViews(m, r.sel, res, r.owned, snap, served, e.decode, e.cfg.DelegationBounds)
+			if v.Generation != gen {
+				e.boundHits(res.ID(), v.Delegation)
+			}
 		}
 		views = append(views, v)
-		// Each cap hit is logged once per distinct value, as rejections are (rules §5.7).
-		if c := capOf(v); c != "" && !e.caps[res.ID()+"\x00"+c] {
-			e.caps[res.ID()+"\x00"+c] = true
-			e.cfg.Logger.Warn("delegation compute cap hit; later work is unknown", "install", res.ID(), "cap", c)
-		}
 	}
 	e.views = memos // a vanished install's memo is dropped
 	maps.DeleteFunc(e.reported, func(id string, _ string) bool { return memos[id] == nil })
@@ -506,12 +510,19 @@ func (e *Engine) reportedVersion(i install.Install, col collect.Snapshot) string
 	return e.reported[id]
 }
 
-// capOf is v's delegation cap hit, "" without views.
-func capOf(v *computed.Views) string {
-	if v == nil {
-		return ""
+// capLimits maps a DelegationResult.Cap to its limit.
+var capLimits = map[string]limits.Limit{computed.CapEdges: limits.DelegationEdges, computed.CapContexts: limits.DelegationContexts,
+	computed.CapMatchers: limits.DelegationMatchers, computed.CapDepth: limits.DelegationDepth}
+
+// boundHits records the bounds a fresh delegation computation of install id
+// hit (rules §5.7): its first compute cap and the retention cap.
+func (e *Engine) boundHits(id string, d computed.DelegationResult) {
+	if l, ok := capLimits[d.Cap]; ok {
+		e.cfg.Limits.Hit(l, id, "")
 	}
-	return v.Delegation.Cap
+	if d.RetentionCut {
+		e.cfg.Limits.Hit(limits.DelegationRetained, id, "")
+	}
 }
 
 // rulesFor selects i's rule set with its pack's hooks.

@@ -55,6 +55,9 @@ func TestEffectiveProjection(t *testing.T) {
 		in := world(p, c)
 		in.Bounds.ContextsPerRow = 1
 		res := delegate(in)
+		if res.RetentionCut {
+			t.Fatal("a per-row cut is not the install retention cap")
+		}
 		e := edge(t, res, c, p)
 		if !slices.Equal(matchPaths(e.Contexts), []string{"/a", "/b"}) || !e.ContextsTruncated || e.Mode != "default" {
 			t.Fatalf("edge %v truncated %v mode %q", matchPaths(e.Contexts), e.ContextsTruncated, e.Mode)
@@ -67,6 +70,9 @@ func TestEffectiveProjection(t *testing.T) {
 		in := world(p, c1, c2)
 		in.Bounds.ContextsPerInstall = 1
 		res := delegate(in)
+		if !res.RetentionCut {
+			t.Fatal("RetentionCut unset at the install cap")
+		}
 		if e := edge(t, res, c1, p); len(e.Contexts) != 1 || e.ContextsTruncated {
 			t.Fatalf("C1 edge %+v", e)
 		}

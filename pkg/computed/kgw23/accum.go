@@ -24,6 +24,8 @@ type accumulator struct {
 	// tooLarge is set when a compute cap was hit, so a row with no context
 	// may have been reached: it is too-large, not not-reached (rules §3.3).
 	tooLarge bool
+	// full is set when ContextsPerInstall dropped a context.
+	full bool
 }
 
 // rowAcc is one row's running aggregate.
@@ -128,6 +130,8 @@ func (a *accumulator) fold(r *rowAcc, c computed.Context, d uint64, frame uint32
 		a.kept++
 	} else {
 		r.row.ContextsTruncated = true
+		// Past the per-row check, only the install-wide retention cap drops it.
+		a.full = a.full || retain && n < a.bounds.ContextsPerRow
 	}
 }
 

@@ -195,6 +195,8 @@ Flags:
 - `--delegation-edge-cap`: selected delegation edges computed per install (default 10000; 0 keeps the default). Past the cap, parents read "too large to compute". A higher cap needs a higher memory limit.
 - `--class-only-installs`: also show one install per GatewayClass `controllerName` that no detector recognises, from Gateway API status alone (default off; chart value `installs.classOnly`).
 
+**Size limits.** Snellius caps its own work: at most 1,000 uncached permission checks per request, and per install the delegation edges, contexts, matcher steps, path depth and kept contexts it computes. Each hit adds one to `snellius_limit_hits_total{limit}` on `/metrics` (`authz-checks`, `delegation-edges`, `delegation-contexts`, `delegation-matchers`, `delegation-depth` or `delegation-retained-contexts`). Snellius also logs the warning `size limit hit` with the limit, the install ID and, for a request, the session's audit ID, at most once a minute per limit and install, with a count of the hits it skipped. Besides the install ID, the warning names no object or namespace. A rising count is worth investigating: the cluster may have outgrown the limits, or someone may be creating objects to push other teams' pages into `503` or cut their delegation analysis.
+
 `make test`, `make lint` and `make e2e` run the Go tests, the linters and the kind end-to-end suite. `make help` lists all targets.
 
 With `SECURE=1`, the e2e setup installs the UI in secure mode against a test OIDC issuer. Its Playwright run skips browser TLS verification of that issuer; the Go sign-in test and the API server verify it.

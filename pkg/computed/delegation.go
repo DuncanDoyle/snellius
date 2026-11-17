@@ -115,6 +115,8 @@ type DelegationResult struct {
 	UncertainKeys []RouteKey
 	// Cap names the first compute cap hit: "", "edges", "contexts", "matchers" or "depth".
 	Cap string
+	// RetentionCut is set when Bounds.ContextsPerInstall dropped a context.
+	RetentionCut bool
 	// Complete says which routes are in a reach closure (rules §8.5).
 	Complete Completeness
 	// Effective is view C per child, projected from the retained contexts (rules §5.7, §6).

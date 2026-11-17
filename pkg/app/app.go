@@ -43,6 +43,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/health"
 	"github.com/DuncanDoyle/snellius/pkg/install"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
+	"github.com/DuncanDoyle/snellius/pkg/limits"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/obs"
 	"github.com/DuncanDoyle/snellius/pkg/proxystats"
@@ -321,6 +322,14 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		}
 		crds.observe(m.Snapshot.CRDs)
 	}
+	metrics := obs.NewRegistry()
+	// One recorder serves the compute bounds and the check cap, on the engine's clock.
+	limitNow := cfg.Now
+	if limitNow == nil && cfg.Clock != nil {
+		limitNow = cfg.Clock.Now
+	}
+	lim := limits.New(metrics, cfg.Logger, limitNow)
+	cfg.Limits = lim
 	eng := engine.New(cfg)
 	env := extension.CollectorEnv{Kube: c.Kube, InCluster: c.InCluster, Scraper: c.Scraper, Interval: o.MetricsInterval,
 		MaxAge: setup.MetricsMaxAge(o.MetricsInterval), Installs: eng.Installs, Current: eng.Current, Discovered: discovered,
@@ -337,7 +346,6 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 	if auditOut == nil {
 		auditOut = os.Stdout
 	}
-	metrics := obs.NewRegistry()
 	mode := o.AuthMode
 	if mode == "" {
 		mode = ModeLocal
@@ -409,7 +417,7 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		}
 		// The data gate stays closed in production; only tests set completeSecure.
 		hopts = append(hopts, api.WithSecureMode(o.completeSecure), api.WithCommitCheck(sessions.StillSignedIn),
-			api.WithAuthzAudit(authzAuditor(auditLog)), api.WithCommitClock(clk.Now))
+			api.WithAuthzAudit(authzAuditor(auditLog, lim, eng.Installs)), api.WithCommitClock(clk.Now))
 	}
 	h := api.NewHandler(eng, o.UI, authz, hopts...)
 	return &App{Engine: eng, oidc: prov, flow: flow, oidcErr: oidcErr, sessions: sessions, sar: sarAuthz, Handler: h, Metrics: metrics, Audit: auditLog, cfg: cfg, cache: ca, kinds: mon, opts: o, authz: authz, discovered: discovered, reg: reg,
@@ -435,8 +443,9 @@ func (a *App) Start(ctx context.Context) {
 }
 
 // authzAuditor writes a security record for each request answered 503
-// authz-unavailable, with the request's session and Kubernetes identity.
-func authzAuditor(l *audit.Logger) func(r *http.Request, reason string) {
+// authz-unavailable, with the request's session and Kubernetes identity. A
+// check-cap 503 is also a hit on lim, for the install installs names in its path.
+func authzAuditor(l *audit.Logger, lim *limits.Recorder, installs func() []install.Install) func(r *http.Request, reason string) {
 	return func(r *http.Request, reason string) {
 		rec := audit.FromRequest(r)
 		if rec.Request.Route == "" {
@@ -448,8 +457,27 @@ func authzAuditor(l *audit.Logger) func(r *http.Request, reason string) {
 			rec.Kube = audit.Kube{Username: info.Identity.Username, Groups: info.Identity.Groups}
 			rec.Session = info.AuditID
 		}
+		if reason == api.AuditCheckLimit {
+			lim.Hit(limits.AuthzChecks, requestInstall(r, installs), rec.Session)
+		}
 		l.Emit(r.Context(), rec)
 	}
+}
+
+// requestInstall is the install r's path names under /api/v1/installs/, or ""
+// when it names none or one installs does not list.
+func requestInstall(r *http.Request, installs func() []install.Install) string {
+	rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/installs/")
+	if !ok {
+		return ""
+	}
+	id, _, _ := strings.Cut(rest, "/")
+	for _, i := range installs() {
+		if i.ID() == id {
+			return id
+		}
+	}
+	return ""
 }
 
 // Run is RunWith over extension.New(opts...): the core plus the kgateway pack.
