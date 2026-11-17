@@ -152,7 +152,8 @@ func pathsPage(l linker, p *engine.Published, i *engine.InstallModel, v *view, t
 	if err != nil {
 		return PathsResponse{}, err
 	}
-	pg.Summary.Unmemoised = !kept
+	// The memo cap is over the whole topology, so only a full reader is told.
+	pg.Summary.Unmemoised = !kept && !v.projects()
 	// Secure mode says nothing of what was left out: the permissions note replaces it (design §7.5).
 	pg.Summary.Hidden = pg.Summary.Hidden && !v.omits()
 	titles := findingTitles(v, i, proj, pg.Rows)

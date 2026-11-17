@@ -997,7 +997,8 @@ var ruleSurfaces = []ruleSurface{
 	{name: "/meta", path: abs("/api/v1/meta"), changes: []string{"controller"}},
 	{name: "extension", path: abs("/api/ext/rule/backends"), changes: []string{"backendConsumer"}},
 	// Paths and backends (Task 35).
-	{name: "/paths", path: fixed("/paths?limit=200"), changes: []string{"faulty", "proxyReadyDeployment"}},
+	{name: "/paths", path: fixed("/paths?limit=200"), changes: []string{"faulty", "proxyReadyDeployment", "memoCap"}},
+	{name: "/paths?namespaces", path: fixed("/paths?limit=200&namespaces=" + ns0), changes: []string{"memoCap"}},
 	{name: "/backends", path: fixed("/backends?limit=200"), changes: []string{"faulty", "proxyReadyDeployment"}},
 	{name: "backend detail (slices not listable)", path: fixed("/backends/-/Service/" + kindLimitedNS + "/" + limitedSvc), changes: []string{"faulty"}},
 	// The namespace scope and its namespace list (Task 37).
@@ -1296,6 +1297,15 @@ type extraWorld struct {
 var extraWorlds = []extraWorld{
 	{name: "hidden hop", add: func(s ruleSnap) { s.add(chainRoutes()...) }, changes: hopChanges, user: nsReader},
 	{name: "rejected ListenerSet", add: rejectedListenerSet, changes: crdChanges, user: restrictedUser},
+	{name: "memo cap", add: func(ruleSnap) {}, changes: []ruleChange{{name: "memoCap", apply: overMemoCap}}, user: restrictedUser},
+}
+
+// overMemoCap adds hidden routes on hidden-gw until the path topology is
+// over paths.TopologyCap.
+func overMemoCap(s ruleSnap) {
+	for i := range 16000 {
+		s.add(routeTo(hiddenNS, fmt.Sprintf("hidden-many-%05d", i), hiddenGW("hidden-gw"), hiddenNS, "hidden-be", true))
+	}
 }
 
 // pairs serves w's world and each of its changes, with opts.

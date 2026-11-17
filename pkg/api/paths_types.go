@@ -117,7 +117,8 @@ type PathCountsDTO struct {
 // PathSummaryDTO summarises the whole filtered result the caller may see
 // (design §5, §13). Hidden says some paths were left out for the caller;
 // secure mode never sets it, since the permissions note replaces it (design §7.5).
-// Unmemoised says the topology was over the memo cap and derived per request.
+// Unmemoised says the topology was over the memo cap and derived per request;
+// a viewer without the full read in secure mode is never told.
 // NotComputed says why there are no paths to compute, such as no computed views.
 type PathSummaryDTO struct {
 	PathCountsDTO
