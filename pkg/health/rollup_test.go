@@ -1,6 +1,7 @@
 package health
 
 import (
+	twin "github.com/DuncanDoyle/snellius/pkg/health/internal/twin/health"
 	"net/url"
 	"reflect"
 	"regexp"
@@ -392,6 +393,18 @@ func TestOwnRefsEvidenceCopyIsDerived(t *testing.T) {
 		if got[i].class != want {
 			t.Errorf("finding %d: class %d, want %d", i, got[i].class, want)
 		}
+	}
+}
+
+// Twin shares its short name, health.Twin, and its fields with twin.Twin.
+type Twin struct{ A int }
+
+// Two types with one short name from different packages print apart.
+func TestDeepPrintTypeIdentity(t *testing.T) {
+	a, _ := deepString(struct{ V any }{Twin{1}})
+	b, _ := deepString(struct{ V any }{twin.Twin{A: 1}})
+	if a == b {
+		t.Errorf("%T and %T print alike: %q", Twin{}, twin.Twin{}, a)
 	}
 }
 
