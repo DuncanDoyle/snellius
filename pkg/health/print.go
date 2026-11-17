@@ -11,16 +11,27 @@ import (
 // maxPrintDepth bounds deepPrint's nesting, so a cycle fails the print instead of looping.
 const maxPrintDepth = 64
 
-// locationType is time.Location, which deepPrint prints by name alone.
-var locationType = reflect.TypeFor[time.Location]()
+// timeType is time.Time, which deepPrint prints through its public methods.
+var timeType = reflect.TypeFor[time.Time]()
 
 // deepPrint writes v to b with every field, exported or not, through
 // pointers, interfaces (with their dynamic type), slices, arrays and maps
-// (keys sorted). It reports false for a func, channel or other kind it
-// cannot print, or past maxPrintDepth, so such content is never trusted.
+// (keys sorted). A time.Time prints as its UTC instant, offset and zone name;
+// no other standard library type is read through unexported fields. It
+// reports false for anything it cannot print that way, a func or channel,
+// or past maxPrintDepth, so such content is never trusted.
 func deepPrint(b *strings.Builder, v reflect.Value, depth int) bool {
 	if depth > maxPrintDepth {
 		return false
+	}
+	if v.IsValid() && v.Type() == timeType {
+		if !v.CanInterface() {
+			return false
+		}
+		t := v.Interface().(time.Time)
+		name, offset := t.Zone()
+		b.WriteString("time:" + t.UTC().Format(time.RFC3339Nano) + "/" + strconv.Itoa(offset) + "/" + strconv.Quote(name))
+		return true
 	}
 	switch v.Kind() {
 	case reflect.Invalid:
@@ -28,10 +39,6 @@ func deepPrint(b *strings.Builder, v reflect.Value, depth int) bool {
 	case reflect.Pointer:
 		if v.IsNil() {
 			b.WriteString("nil")
-			return true
-		}
-		if v.Type().Elem() == locationType {
-			b.WriteString("loc:" + strconv.Quote(v.Elem().FieldByName("name").String()))
 			return true
 		}
 		b.WriteByte('&')
@@ -44,6 +51,9 @@ func deepPrint(b *strings.Builder, v reflect.Value, depth int) bool {
 		b.WriteString(v.Elem().Type().String())
 		return deepPrint(b, v.Elem(), depth+1)
 	case reflect.Struct:
+		if sealed(v.Type()) {
+			return false
+		}
 		b.WriteByte('{')
 		for i := range v.NumField() {
 			b.WriteString(v.Type().Field(i).Name + ":")
@@ -99,4 +109,19 @@ func deepPrint(b *strings.Builder, v reflect.Value, depth int) bool {
 		return false
 	}
 	return true
+}
+
+// sealed reports whether t is a standard library struct with an unexported
+// field: its state is the library's to keep, so deepPrint never reads it.
+func sealed(t reflect.Type) bool {
+	first, _, _ := strings.Cut(t.PkgPath(), "/")
+	if t.PkgPath() == "" || strings.Contains(first, ".") {
+		return false
+	}
+	for i := range t.NumField() {
+		if !t.Field(i).IsExported() {
+			return true
+		}
+	}
+	return false
 }

@@ -1,10 +1,12 @@
 package health
 
 import (
+	"net/url"
 	"reflect"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -382,19 +384,55 @@ func TestDeepPrint(t *testing.T) {
 		m   map[string]int
 		fn  func()
 	}
-	printOf := func(v outer) (string, bool) {
-		var b strings.Builder
-		ok := deepPrint(&b, reflect.ValueOf(v), 0)
-		return b.String(), ok
-	}
 	one, two := 1, 2
-	a, _ := printOf(outer{any: inner{&one}, m: map[string]int{"a": 1, "b": 2}})
-	b, _ := printOf(outer{any: inner{&two}, m: map[string]int{"b": 2, "a": 1}})
-	c, _ := printOf(outer{any: inner{&one}, m: map[string]int{"b": 2, "a": 1}})
+	a, _ := deepString(outer{any: inner{&one}, m: map[string]int{"a": 1, "b": 2}})
+	b, _ := deepString(outer{any: inner{&two}, m: map[string]int{"b": 2, "a": 1}})
+	c, _ := deepString(outer{any: inner{&one}, m: map[string]int{"b": 2, "a": 1}})
 	if a == b || a != c {
 		t.Errorf("prints %q, %q, %q: want the first and last equal, the middle different", a, b, c)
 	}
-	if _, ok := printOf(outer{fn: func() {}}); ok {
+	if _, ok := deepString(outer{fn: func() {}}); ok {
 		t.Error("a func printed")
+	}
+}
+
+// deepString is deepPrint of v, and whether it printed.
+func deepString(v any) (string, bool) {
+	var b strings.Builder
+	ok := deepPrint(&b, reflect.ValueOf(v), 0)
+	return b.String(), ok
+}
+
+// Times print through their public API: one instant in two zones of one name
+// and different offsets differs, and a stdlib struct with unexported fields
+// that has no public form does not print.
+func TestDeepPrintTime(t *testing.T) {
+	type at struct{ T time.Time }
+	instant := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	a, okA := deepString(at{instant.In(time.FixedZone("X", 3600))})
+	b, okB := deepString(at{instant.In(time.FixedZone("X", 7200))})
+	if !okA || !okB || a == b {
+		t.Errorf("one instant in zones X+1 and X+2: %q (%v), %q (%v); want both printed and different", a, okA, b, okB)
+	}
+	if _, ok := deepString(struct{ U *url.Userinfo }{url.User("u")}); ok {
+		t.Error("a url.Userinfo printed through its unexported fields")
+	}
+}
+
+// Printing a local time while another goroutine first formats local time
+// gives one print throughout (run with -race).
+func TestDeepPrintLocalTimeConcurrent(t *testing.T) {
+	v := struct{ T time.Time }{time.Now()}
+	first, _ := deepString(v)
+	var wg sync.WaitGroup
+	wg.Go(func() { _ = time.Now().Format(time.RFC3339) })
+	for range 100 {
+		if p, _ := deepString(v); p != first {
+			t.Fatalf("print moved from %q to %q", first, p)
+		}
+	}
+	wg.Wait()
+	if p, _ := deepString(v); p != first {
+		t.Fatalf("print moved from %q to %q", first, p)
 	}
 }
