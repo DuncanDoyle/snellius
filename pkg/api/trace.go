@@ -35,11 +35,14 @@ type routeTrace struct {
 // rows on route's own rules, as the caller may see them.
 func (d *detail) trace(route objects.Ref) routeTrace {
 	t, proj, _ := d.h.pathModel(d.p, d.i, d.v)
-	in, f := d.v.projectInput(d.p, d.i), d.v.projectionFilter(d.i)
+	shows := func(r paths.Row) bool {
+		return t.Route(r) == route && d.v.allowTableNamed(t, t.Deps(r), writtenTarget(t, r))
+	}
+	in, f := d.v.projectInput(d.p, d.i), d.v.scopedFilter(d.i, t, shows)
 	proj = proj.For(t, in, f)
 	var rows []int32
 	for _, k := range proj.Order {
-		if r := t.Rows[k]; t.Route(r) == route && d.v.allowTableNamed(t, t.Deps(r), writtenTarget(t, r)) {
+		if shows(t.Rows[k]) {
 			rows = append(rows, k)
 		}
 	}

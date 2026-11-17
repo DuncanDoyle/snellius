@@ -493,33 +493,40 @@ func (v *view) projectInput(p *engine.Published, i *engine.InstallModel) paths.P
 	return in
 }
 
-// projectionFilter is what the caller of v may see of install i's path
-// projection: finding signals of shown findings only, and endpoint counts
-// only where it may list EndpointSlices. Nil when v does not project.
-func (v *view) projectionFilter(i *engine.InstallModel) *paths.ProjectionFilter {
-	return v.scopedFilter(i, nil, nil)
+// visibleRows picks the rows of t that rows picks (all when nil) and the
+// caller of v may see, as pathsPage admits them.
+func (v *view) visibleRows(t *paths.Topology, rows func(paths.Row) bool) func(paths.Row) bool {
+	return func(r paths.Row) bool { return (rows == nil || rows(r)) && v.allowTable(t, t.Deps(r)) }
 }
 
-// scopedFilter is projectionFilter projecting only the rows of t that rows
-// picks, all when nil. Findings are prefetched for the picked rows'
-// dependencies only, and each finding signal is decided when first read.
+// scopedFilter is what the caller of v may see of install i's path projection,
+// projecting only the rows of t that rows picks (all when nil): finding signals
+// of shown findings only, and endpoint counts only where it may list
+// EndpointSlices. Nil when v does not project. Findings and the picked rows'
+// EndpointSlice checks are prefetched for those rows only.
 func (v *view) scopedFilter(i *engine.InstallModel, t *paths.Topology, rows func(paths.Row) bool) *paths.ProjectionFilter {
 	if !v.projects() {
 		return nil
 	}
 	var want func(objects.Ref) bool
+	var eps []objects.Ref
 	if rows != nil {
-		deps := map[objects.Ref]bool{}
+		deps, nss := map[objects.Ref]bool{}, map[string]bool{}
 		for _, r := range t.Rows {
 			if rows(r) {
 				for _, k := range t.Deps(r) {
 					deps[t.Refs[k]] = true
 				}
+				if ns, ok := t.EndpointsNamespace(r); ok && !nss[ns] {
+					nss[ns] = true
+					// listQueryOf maps this ref to canList's EndpointSlice question.
+					eps = append(eps, objects.Ref{Group: endpointSlices.Group, Kind: endpointSlices.Kind, Namespace: ns})
+				}
 			}
 		}
 		want = func(ref objects.Ref) bool { return deps[ref] }
 	}
-	v.prefetchFindings(i.Health.Findings, want)
+	v.prefetchFindings(i.Health.Findings, want, eps...)
 	var byKey map[titleKey][]*health.Finding
 	shown := map[titleKey]bool{}
 	signal := func(s paths.Signal) bool {
@@ -627,11 +634,15 @@ func findingInScope(f *health.Finding, scope []string) bool {
 // findings of fs on resources want admits (all when nil):
 // the resources of own-object and collection findings, then the objects named
 // by those whose resource was not denied. Derived findings ask nothing.
-func (v *view) prefetchFindings(fs []health.Finding, want func(objects.Ref) bool) {
+// The buckets of extra join the first round.
+func (v *view) prefetchFindings(fs []health.Finding, want func(objects.Ref) bool, extra ...objects.Ref) {
 	if !v.batching() {
 		return
 	}
 	v.prefetch(func(add func(objects.Ref)) {
+		for _, r := range extra {
+			add(r)
+		}
 		for k := range fs {
 			if f := &fs[k]; f.Resource != nil && (want == nil || want(*f.Resource)) && (f.Class() == health.ClassOwn || f.Basis.Collection) {
 				add(*f.Resource)

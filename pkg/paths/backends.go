@@ -227,6 +227,19 @@ func insert[T any](s []T, v T, compare func(T, T) int) []T {
 
 func compareRefs(a, b objects.Ref) int { return a.Compare(b) }
 
+// ShowsRow reports whether Backends over in reads row r's problem, asking in
+// what rows asks: a wanted target, readable routes, an admitted target and a visible row.
+func (in *BackendsInput) ShowsRow(t *Topology, r Row) bool {
+	ref, ok := t.target(r)
+	if !ok || in.Only != nil && *in.Only != ref || !explore.InScope(in.Scope, ref.Namespace) {
+		return false
+	}
+	if in.Can != nil && slices.ContainsFunc(t.chain(r), func(ri int32) bool { return !in.Can(t.Refs[t.routes[ri].ref]) }) {
+		return false
+	}
+	return in.admits(ref) && (in.Visible == nil || in.Visible(t.Deps(r)))
+}
+
 // rows adds the targets of the path rows whose routes the viewer may see:
 // a hidden route never asks about its target (D-085).
 func (b *backends) rows() {

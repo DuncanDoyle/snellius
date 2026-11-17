@@ -129,17 +129,6 @@ func (h *handler) prefetchBackends(p *engine.Published, i *engine.InstallModel, 
 	})
 }
 
-// backendScope picks the rows of t whose target is in scope; nil when scope is nil.
-func backendScope(t *paths.Topology, scope []string) func(paths.Row) bool {
-	if scope == nil {
-		return nil
-	}
-	return func(r paths.Row) bool {
-		ref, ok := t.Target(r)
-		return ok && explore.InScope(scope, ref.Namespace)
-	}
-}
-
 // backendList is GET …/backends (design §8.1): the install's backends as the
 // caller may see them, problems first by default.
 func (h *handler) backendList(w http.ResponseWriter, r *http.Request) {
@@ -157,7 +146,7 @@ func (h *handler) backendList(w http.ResponseWriter, r *http.Request) {
 	in := h.backendsInput(p, i, v, t)
 	in.Scope = q.Scope
 	h.prefetchBackends(p, i, v, t, in)
-	set := paths.Backends(t, proj.For(t, in.ProjectInput, v.scopedFilter(i, t, backendScope(t, q.Scope))), in)
+	set := paths.Backends(t, proj.For(t, in.ProjectInput, v.scopedFilter(i, t, func(r paths.Row) bool { return in.ShowsRow(t, r) })), in)
 	pg, err := paths.RunBackends(set, q)
 	if err != nil {
 		fail(w, err)
@@ -233,7 +222,11 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, proj, kept := h.pathModel(p, i, v)
-	f := v.projectionFilter(i)
+	// Backends and the exposure read only those of ref's rows the caller may see.
+	f := v.scopedFilter(i, t, func(r paths.Row) bool {
+		target, ok := t.Target(r)
+		return ok && target == ref && v.allowTableNamed(t, t.Deps(r), &ref)
+	})
 	proj = proj.For(t, v.projectInput(p, i), f)
 	in := withSubject(h.backendsInput(p, i, v, t), v, t, ref)
 	in.Only = &ref

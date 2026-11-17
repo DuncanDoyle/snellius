@@ -783,6 +783,21 @@ func (p *projector) backend(sigs []Signal, ref objects.Ref, port int32, traffic 
 	return sigs
 }
 
+// EndpointsNamespace is the namespace whose EndpointSlices row r's projection
+// counts: that of its Service mirror or backendRef target; false for other rows.
+func (t *Topology) EndpointsNamespace(r Row) (string, bool) {
+	var ref objects.Ref
+	if m, ok := t.Mirror(r); ok {
+		ref = m.Backend
+	} else if b, ok := t.Backend(r); ok && b.Delegation == nil {
+		ref = b.Ref
+	}
+	if ref.Group != "" || ref.Kind != "Service" {
+		return "", false
+	}
+	return ref.Namespace, true
+}
+
 // backendSignals appends the signals of kgateway Backend ref, whose object is
 // b (nil when unknown) and whose findings are found: its KGWUI-002, else the
 // rule set judge's verdict: an error when rejected, waiting when it cannot judge.

@@ -329,6 +329,30 @@ func (l *sarLog) Check(ctx context.Context, id oidc.Identity, a sar.Attributes) 
 	return ruleChecker{}.Check(ctx, id, a)
 }
 
+// A restricted viewer's paths, backends and their details ask EndpointSlice
+// list only where a visible row reaches: hidden-svc's namespace is never asked.
+func TestEndpointChecksVisibleRowsOnly(t *testing.T) {
+	for _, page := range []string{"/paths", "/backends", "/backends/-/Service/" + ns0 + "/shared",
+		"/routes/" + objects.GatewayAPIGroup + "/HTTPRoute/" + ns0 + "/svc-consumer"} {
+		log := &sarLog{}
+		srv := ruleServeWith(t, ruleWorld(t, ruleChange{name: "base"}), log)
+		if code, body := fetch(t, srv, restrictedUser, ruleBase+page); code != 200 {
+			t.Fatalf("%s: %d %s", page, code, body)
+		}
+		log.mu.Lock()
+		var asked []string
+		for _, a := range log.calls {
+			if a.Resource == "endpointslices" {
+				asked = append(asked, a.Namespace)
+			}
+		}
+		log.mu.Unlock()
+		if slices.Contains(asked, hiddenNS) || !slices.Contains(asked, ns0) {
+			t.Errorf("%s: EndpointSlice list asked in %v, want %s and never %s", page, asked, ns0, hiddenNS)
+		}
+	}
+}
+
 // An endpoint row shows the Pod name its EndpointSlice writes, as text: the
 // response carries no Pod link or state, and no SAR asks about Pods.
 func TestPodLinkNamedOnly(t *testing.T) {
