@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -345,5 +346,55 @@ func TestOwnCopyChangedIsDerived(t *testing.T) {
 	// Nothing registered: no finding keeps ClassOwn.
 	if got, _ := confine(conditionsCheck{}, []Finding{f}, CheckResult{}, nil); got[0].class != ClassDerived {
 		t.Error("an own-object finding no run registered stays own-object")
+	}
+}
+
+// A copy of an own-object 013 whose evidence differs only in a field JSON
+// leaves out, which suggested fixes read, comes back derived.
+func TestOwnRefsEvidenceCopyIsDerived(t *testing.T) {
+	w := healthyWorld()
+	w.objs[2] = refRoute("BackendNotFound", "", map[string]any{"group": "delegation.gateway.example", "kind": "Service", "name": "cart", "port": int64(80)})
+	f, ev := only(t, refsReport(t, w, served()), CodeRefUnresolved, "shop/cart")
+	if f.class != ClassOwn {
+		t.Fatalf("fixture %+v is not own-object", f)
+	}
+	owned := &ownedSet{}
+	owned.add(f)
+	group := "forged.example"
+	withGroup, withUnknown := *ev, *ev
+	withGroup.Group, withUnknown.Unknown = &group, !ev.Unknown
+	g, u := f, f
+	g.Facts, u.Facts = &withGroup, &withUnknown
+	got, _ := confine(conditionsCheck{}, []Finding{g, u, f}, CheckResult{}, owned)
+	for i, want := range []Class{ClassDerived, ClassDerived, ClassOwn} {
+		if got[i].class != want {
+			t.Errorf("finding %d: class %d, want %d", i, got[i].class, want)
+		}
+	}
+}
+
+// deepPrint sees unexported fields behind pointers and interfaces, ignores
+// map order, and fails on content it cannot print.
+func TestDeepPrint(t *testing.T) {
+	type inner struct{ hidden *int }
+	type outer struct {
+		any any
+		m   map[string]int
+		fn  func()
+	}
+	printOf := func(v outer) (string, bool) {
+		var b strings.Builder
+		ok := deepPrint(&b, reflect.ValueOf(v), 0)
+		return b.String(), ok
+	}
+	one, two := 1, 2
+	a, _ := printOf(outer{any: inner{&one}, m: map[string]int{"a": 1, "b": 2}})
+	b, _ := printOf(outer{any: inner{&two}, m: map[string]int{"b": 2, "a": 1}})
+	c, _ := printOf(outer{any: inner{&one}, m: map[string]int{"b": 2, "a": 1}})
+	if a == b || a != c {
+		t.Errorf("prints %q, %q, %q: want the first and last equal, the middle different", a, b, c)
+	}
+	if _, ok := printOf(outer{fn: func() {}}); ok {
+		t.Error("a func printed")
 	}
 }

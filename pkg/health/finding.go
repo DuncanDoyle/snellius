@@ -3,8 +3,9 @@
 package health
 
 import (
-	"encoding/json"
+	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -112,27 +113,14 @@ func collectionTrusted(c Check) bool {
 // a copy changed or duplicated after runOwn is derived.
 type ownedSet struct{ prints map[string]int }
 
-// ownPrint is the content of a finding that an own-object mark covers: its
-// JSON and every field JSON leaves out.
-type ownPrint struct {
-	F               Finding
-	Key             []string
-	Evidence, Basis []objects.Ref
-	Parent          *objects.ParentRef
-	ResourceSince   *time.Time
-	Collection      bool
-	Text            string
-	Class           Class
-}
-
-// print is f's content as ownedSet compares it.
+// print is f's content as ownedSet compares it: every field, exported or
+// not, of f and all it points to (deepPrint); "" when it cannot be printed.
 func (o *ownedSet) print(f *Finding) string {
-	b, err := json.Marshal(ownPrint{F: *f, Key: f.Key, Evidence: f.Evidence, Basis: f.Basis.Refs, Parent: f.parent, ResourceSince: f.ResourceSince,
-		Collection: f.Basis.Collection, Text: f.Basis.text, Class: f.class})
-	if err != nil {
+	var b strings.Builder
+	if !deepPrint(&b, reflect.ValueOf(f).Elem(), 0) {
 		return ""
 	}
-	return string(b)
+	return b.String()
 }
 
 // rekey runs rewrite, which changes only f's Key; a registered own-object
