@@ -3,7 +3,9 @@ package health
 import (
 	"reflect"
 	"regexp"
+	"slices"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -314,5 +316,32 @@ func TestEvaluateFlagsUnrecognisedSeverity(t *testing.T) {
 func TestUnknownSeverityRanksLast(t *testing.T) {
 	if compareFindings(Finding{Severity: "critical"}, Finding{Severity: SeverityInfo}) <= 0 {
 		t.Fatal("an unknown severity must order after info")
+	}
+}
+
+// A trusted check that copies an own-object finding whole and changes it
+// gets a derived finding back: only what runOwn produced keeps ClassOwn.
+func TestOwnCopyChangedIsDerived(t *testing.T) {
+	r := ruleReport(t, ruleRoute(ruleCond(kgatewayProgrammed, "RouteRuleReplaced", "Replaced Rule (0): bad", testutil.Now.Add(-time.Hour))), policyCatalog())
+	f, _ := onlyRule(t, r)
+	if f.class != ClassOwn {
+		t.Fatalf("fixture %+v is not own-object", f)
+	}
+	owned := &ownedSet{}
+	owned.add(f)
+	copied := f // a whole-struct copy, as *g = *f is
+	copied.Detail, copied.Message = "derived content", "derived"
+	var assigned Finding
+	assigned = f
+	assigned.Basis.Refs = append(slices.Clone(f.Basis.Refs), objects.Ref{Kind: "Secret", Namespace: "shop", Name: "s"})
+	got, _ := confine(conditionsCheck{}, []Finding{f, copied, assigned}, CheckResult{}, owned)
+	for i, want := range []Class{ClassOwn, ClassDerived, ClassDerived} {
+		if got[i].class != want {
+			t.Errorf("finding %d: class %d, want %d", i, got[i].class, want)
+		}
+	}
+	// Nothing registered: no finding keeps ClassOwn.
+	if got, _ := confine(conditionsCheck{}, []Finding{f}, CheckResult{}, nil); got[0].class != ClassDerived {
+		t.Error("an own-object finding no run registered stays own-object")
 	}
 }

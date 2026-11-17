@@ -227,6 +227,12 @@ func runOwn(ctx RunContext, k own.Kind, resources []*unstructured.Unstructured) 
 				continue
 			}
 			f.Install, f.Resource = ctx.Install.ID(), ref(u)
+			if ctx.sink != nil {
+				if ctx.sink.owned == nil {
+					ctx.sink.owned = &ownedSet{}
+				}
+				ctx.sink.owned.add(f)
+			}
 			out = append(out, f)
 		}
 	}

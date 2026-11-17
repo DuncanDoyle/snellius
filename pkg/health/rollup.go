@@ -242,7 +242,7 @@ func evaluateOne(in Input, c Check, set InputSet, rt Runtime, memoize bool, outp
 	}
 	ctx := runContext(in, c, set, rt, outputs)
 	fs, cr = c.Run(ctx)
-	fs, cr = confine(c, fs, cr)
+	fs, cr = confine(c, fs, cr, ctx.sink.owned)
 	if ctx.sink.hold != nil {
 		cr.Hold = ctx.sink.hold
 	}

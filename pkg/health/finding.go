@@ -3,6 +3,7 @@
 package health
 
 import (
+	"encoding/json"
 	"slices"
 	"time"
 
@@ -106,22 +107,84 @@ func collectionTrusted(c Check) bool {
 	return false
 }
 
-// confine clears from c's output every visibility mark c may not set (D-106).
+// ownedSet is what runOwn produced in one check run, by content. confine
+// keeps ClassOwn only on a finding that matches one of them, once each, so
+// a copy changed or duplicated after runOwn is derived.
+type ownedSet struct{ prints map[string]int }
+
+// ownPrint is the content of a finding that an own-object mark covers.
+type ownPrint struct {
+	F               Finding
+	Evidence, Basis []objects.Ref
+	Parent          *objects.ParentRef
+	ResourceSince   *time.Time
+	Collection      bool
+	Class           Class
+}
+
+// print is f's content as ownedSet compares it.
+func (o *ownedSet) print(f *Finding) string {
+	b, err := json.Marshal(ownPrint{F: *f, Evidence: f.Evidence, Basis: f.Basis.Refs, Parent: f.parent, ResourceSince: f.ResourceSince,
+		Collection: f.Basis.Collection, Class: f.class})
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// add registers f.
+func (o *ownedSet) add(f Finding) {
+	if o.prints == nil {
+		o.prints = map[string]int{}
+	}
+	if p := o.print(&f); p != "" {
+		o.prints[p]++
+	}
+}
+
+// take reports whether f matches a registered finding not yet taken, and takes it.
+func (o *ownedSet) take(f *Finding) bool {
+	if o == nil {
+		return false
+	}
+	p := o.print(f)
+	if p == "" || o.prints[p] == 0 {
+		return false
+	}
+	o.prints[p]--
+	return true
+}
+
+// confine clears from c's output every visibility mark c may not set (D-106),
+// and ClassOwn from any finding of a trusted check that owned does not hold.
 // It copies fs before it changes it.
-func confine(c Check, fs []Finding, cr CheckResult) ([]Finding, CheckResult) {
+func confine(c Check, fs []Finding, cr CheckResult, owned *ownedSet) ([]Finding, CheckResult) {
 	own, coll := ownTrusted(c), collectionTrusted(c)
 	if !coll {
 		cr.Collection, cr.fixed = false, ""
 	}
-	marked := func(f *Finding) bool {
-		return !own && (f.class != ClassDerived || len(f.Basis.Refs) > 0) || !coll && (f.Basis.Collection || f.Basis.text != "")
+	// A trusted check keeps ClassOwn only on what runOwn produced, unchanged.
+	var forged []bool
+	if own {
+		forged = make([]bool, len(fs))
+		for i := range fs {
+			forged[i] = fs[i].class != ClassDerived && !owned.take(&fs[i])
+		}
 	}
-	if !slices.ContainsFunc(fs, func(f Finding) bool { return marked(&f) }) {
+	marked := func(i int) bool {
+		f := &fs[i]
+		return !own && (f.class != ClassDerived || len(f.Basis.Refs) > 0) || own && forged[i] || !coll && (f.Basis.Collection || f.Basis.text != "")
+	}
+	marks := false
+	for i := range fs {
+		marks = marks || marked(i)
+	}
+	if !marks {
 		return fs, cr
 	}
 	fs = slices.Clone(fs)
 	for i := range fs {
-		if !own {
+		if !own || forged[i] {
 			fs[i].class, fs[i].Basis.Refs = ClassDerived, nil
 		}
 		if !coll {

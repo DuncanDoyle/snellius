@@ -271,6 +271,7 @@ type runSink struct {
 	hold     *Hold
 	reasons  []string // hold's distinct reasons, in declaration order
 	own      *ownBase // what runOwn indexes once per run
+	owned    *ownedSet
 }
 
 // WakeAt says the check's output may change at at; the engine recomputes by
