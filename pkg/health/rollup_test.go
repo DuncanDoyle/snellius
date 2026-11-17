@@ -334,8 +334,10 @@ func TestOwnCopyChangedIsDerived(t *testing.T) {
 	var assigned Finding
 	assigned = f
 	assigned.Basis.Refs = append(slices.Clone(f.Basis.Refs), objects.Ref{Kind: "Secret", Namespace: "shop", Name: "s"})
-	got, _ := confine(conditionsCheck{}, []Finding{f, copied, assigned}, CheckResult{}, owned)
-	for i, want := range []Class{ClassOwn, ClassDerived, ClassDerived} {
+	rekeyed := f
+	rekeyed.Key = []string{"derived-from-hidden-input"}
+	got, _ := confine(conditionsCheck{}, []Finding{rekeyed, copied, assigned, f}, CheckResult{}, owned)
+	for i, want := range []Class{ClassDerived, ClassDerived, ClassDerived, ClassOwn} {
 		if got[i].class != want {
 			t.Errorf("finding %d: class %d, want %d", i, got[i].class, want)
 		}

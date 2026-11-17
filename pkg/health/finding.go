@@ -112,24 +112,38 @@ func collectionTrusted(c Check) bool {
 // a copy changed or duplicated after runOwn is derived.
 type ownedSet struct{ prints map[string]int }
 
-// ownPrint is the content of a finding that an own-object mark covers.
+// ownPrint is the content of a finding that an own-object mark covers: its
+// JSON and every field JSON leaves out.
 type ownPrint struct {
 	F               Finding
+	Key             []string
 	Evidence, Basis []objects.Ref
 	Parent          *objects.ParentRef
 	ResourceSince   *time.Time
 	Collection      bool
+	Text            string
 	Class           Class
 }
 
 // print is f's content as ownedSet compares it.
 func (o *ownedSet) print(f *Finding) string {
-	b, err := json.Marshal(ownPrint{F: *f, Evidence: f.Evidence, Basis: f.Basis.Refs, Parent: f.parent, ResourceSince: f.ResourceSince,
-		Collection: f.Basis.Collection, Class: f.class})
+	b, err := json.Marshal(ownPrint{F: *f, Key: f.Key, Evidence: f.Evidence, Basis: f.Basis.Refs, Parent: f.parent, ResourceSince: f.ResourceSince,
+		Collection: f.Basis.Collection, Text: f.Basis.text, Class: f.class})
 	if err != nil {
 		return ""
 	}
 	return string(b)
+}
+
+// rekey runs rewrite, which changes only f's Key; a registered own-object
+// finding stays registered under its new key. Only the key normalisers call it.
+func (o *ownedSet) rekey(f *Finding, rewrite func()) {
+	if f.class != ClassOwn || !o.take(f) {
+		rewrite()
+		return
+	}
+	rewrite()
+	o.add(*f)
 }
 
 // add registers f.

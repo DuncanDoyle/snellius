@@ -274,6 +274,14 @@ type runSink struct {
 	owned    *ownedSet
 }
 
+// ownedSet is the run's own-object registry; nil without a sink or before runOwn.
+func (s *runSink) ownedSet() *ownedSet {
+	if s == nil {
+		return nil
+	}
+	return s.owned
+}
+
 // WakeAt says the check's output may change at at; the engine recomputes by
 // then. A time not after Now is ignored.
 func (c RunContext) WakeAt(at time.Time) {

@@ -184,7 +184,8 @@ const ownerLen = 7
 // rankOwners replaces each status-only owner of fs, a key's first ownerLen elements
 // led by tag, with label and "#k": its rank by ref among the distinct such owners of
 // one code on one resource. Status is hidden from a restricted row (design §14 rule 11).
-func rankOwners(fs []Finding, tag, label string) {
+// owned follows each own-object finding's new key.
+func rankOwners(fs []Finding, tag, label string, owned *ownedSet) {
 	var is []int
 	for i := range fs {
 		if k := fs[i].Key; len(k) >= ownerLen && k[0] == tag {
@@ -216,7 +217,7 @@ func rankOwners(fs []Finding, tag, label string) {
 	// Keys are rewritten only after every comparison.
 	for j, i := range is {
 		f := &fs[i]
-		f.Key = append([]string{label + ordinal(rank[j])}, f.Key[ownerLen:]...)
+		owned.rekey(f, func() { f.Key = append([]string{label + ordinal(rank[j])}, f.Key[ownerLen:]...) })
 	}
 }
 
@@ -239,7 +240,8 @@ func ordinal(n int) string {
 // key elements stay and the rest become "#k", the finding's rank by them among
 // those sharing resource and kept prefix. A restricted row's id then hashes only
 // what it shows (design §14 rule 11); it can shift when a sibling appears or clears.
-func ordinalKeys(fs []Finding, visible func(f *Finding) (n int, ok bool)) {
+// owned follows each own-object finding's new key.
+func ordinalKeys(fs []Finding, visible func(f *Finding) (n int, ok bool), owned *ownedSet) {
 	type entry struct{ i, n int }
 	var es []entry
 	for i := range fs {
@@ -268,7 +270,7 @@ func ordinalKeys(fs []Finding, visible func(f *Finding) (n int, ok bool)) {
 	// Keys are rewritten only after every comparison; each key's array is its finding's own.
 	for j, e := range es {
 		f := &fs[e.i]
-		f.Key = append(f.Key[:e.n], ordinal(rank[j]))
+		owned.rekey(f, func() { f.Key = append(f.Key[:e.n], ordinal(rank[j])) })
 	}
 }
 
