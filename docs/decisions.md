@@ -1644,7 +1644,7 @@ Measured on the reference machine, 5 runs per world:
 
 **Context:** Snellius bounds work per install (computed delegation contexts and edges) and per request (at most 1,000 permission checks, D-100). Hidden objects count toward both. A hidden route can use up a shared compute bound, so a restricted viewer's delegation contexts are cut or read "too large". Enough hidden objects can push a cold request past the check cap, so a page answers `503` instead of `200`.
 
-**Decision:** These limits are install-wide state, like collection failures (D-108): a stated exception to D-085. Which limit was hit may change what a restricted viewer sees; what or where the hidden objects are never does.
+**Decision:** These limits are install-wide state, like collection failures (D-108): a stated exception to D-085. Hidden objects can change a restricted viewer's responses through these limits: how many there are, which namespaces they sit in and how their delegation is configured decide whether and where a limit is hit. A response never names or counts a hidden object.
 
 **Consequences:** 7.4 closes without per-viewer bounds. Making them viewer-independent stays possible later, at the cost of per-viewer recomputes and more checks per cold page.
 
