@@ -29,14 +29,18 @@ type Logger struct {
 	queue   chan Record
 	mu      sync.RWMutex
 	stopped bool // set once Run stops reading; guarded by mu
-	log     *slog.Logger
+	handler slog.Handler
 	written *obs.CounterVec
 	dropped *obs.CounterVec
 	clock   clock.WithTicker
 	server  string
 	maxOpen int
-	// summaries and denials collapse records per key until Run flushes them.
+	// summaries and denials collapse records per key until a tick closes them.
 	summaries, denials *window
+	// closed holds the records of closed windows until Run writes them; wake signals it.
+	closedMu sync.Mutex
+	closed   []Record
+	wake     chan struct{}
 }
 
 // Option configures a Logger.
@@ -78,9 +82,9 @@ func New(w io.Writer, levels Levels, reg *obs.Registry, opts ...Option) *Logger 
 	if reg == nil {
 		reg = obs.NewRegistry()
 	}
-	l := &Logger{levels: levels, log: slog.New(h).With("log", "snellius.audit"),
+	l := &Logger{levels: levels, handler: h.WithAttrs([]slog.Attr{slog.String("log", "snellius.audit")}), wake: make(chan struct{}, 1),
 		written: reg.Counter("snellius_audit_records_total", "Audit records written.", "level"),
-		dropped: reg.Counter("snellius_audit_dropped_total", "Audit records dropped because the queue was full or the writer had stopped.", "level")}
+		dropped: reg.Counter("snellius_audit_dropped_total", "Audit records dropped because the queue was full, the writer had stopped or the write failed.", "level")}
 	for _, o := range opts {
 		o(l)
 	}
@@ -177,27 +181,27 @@ func (l *Logger) enqueue(rec Record) {
 	}
 }
 
-// Run writes queued records and flushes the windows on their periods until
-// ctx is done, then writes what is left, the open windows included. Records
-// emitted after that are dropped.
+// Run writes queued records and closed windows until ctx is done, then writes
+// what is left, the open windows included. Records emitted after that are
+// dropped. Windows close on their ticks in a goroutine of their own, so a slow
+// write never stretches a window.
 func (l *Logger) Run(ctx context.Context) {
-	sums, dens := l.clock.NewTicker(SummaryWindow), l.clock.NewTicker(DenialWindow)
-	defer sums.Stop()
-	defer dens.Stop()
+	rolled := make(chan struct{})
+	go func() { defer close(rolled); l.roll(ctx) }()
 	for {
 		select {
 		case rec := <-l.queue:
 			l.write(rec)
-		case <-sums.C():
-			l.flush(l.summaries)
-		case <-dens.C():
-			l.flush(l.denials)
+		case <-l.wake:
+			l.writeClosed()
 		case <-ctx.Done():
+			<-rolled
 			l.mu.Lock()
 			l.stopped = true
 			l.mu.Unlock()
-			l.flush(l.denials)
-			l.flush(l.summaries)
+			l.close(l.denials)
+			l.close(l.summaries)
+			l.writeClosed()
 			for {
 				select {
 				case rec := <-l.queue:
@@ -210,18 +214,65 @@ func (l *Logger) Run(ctx context.Context) {
 	}
 }
 
-// flush writes w's open records.
-func (l *Logger) flush(w *window) {
-	for _, rec := range w.take() {
+// roll closes each window on its tick until ctx is done.
+func (l *Logger) roll(ctx context.Context) {
+	sums, dens := l.clock.NewTicker(SummaryWindow), l.clock.NewTicker(DenialWindow)
+	defer sums.Stop()
+	defer dens.Stop()
+	for {
+		select {
+		case <-sums.C():
+			l.close(l.summaries)
+		case <-dens.C():
+			l.close(l.denials)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// close moves w's open records to the closed list for Run to write. Past
+// twice the open-key cap, a stalled writer's records are dropped and counted.
+func (l *Logger) close(w *window) {
+	recs := w.take()
+	if len(recs) == 0 {
+		return
+	}
+	l.closedMu.Lock()
+	keep := min(len(recs), max(2*l.maxOpen-len(l.closed), 0))
+	l.closed = append(l.closed, recs[:keep]...)
+	l.closedMu.Unlock()
+	for _, rec := range recs[keep:] {
+		l.dropped.Inc(rec.Level)
+	}
+	select {
+	case l.wake <- struct{}{}:
+	default:
+	}
+}
+
+// writeClosed writes the closed windows' records, oldest window first.
+func (l *Logger) writeClosed() {
+	l.closedMu.Lock()
+	recs := l.closed
+	l.closed = nil
+	l.closedMu.Unlock()
+	for _, rec := range recs {
 		l.write(rec)
 	}
 }
 
+// write writes rec and counts it as written, or as dropped when the sink fails.
 func (l *Logger) write(rec Record) {
 	if rec.ID == "" {
 		rec.ID = newID()
 	}
-	l.log.LogAttrs(context.Background(), slog.LevelInfo, "", attrs(rec)...)
+	r := slog.NewRecord(time.Time{}, slog.LevelInfo, "", 0)
+	r.AddAttrs(attrs(rec)...)
+	if err := l.handler.Handle(context.Background(), r); err != nil {
+		l.dropped.Inc(rec.Level)
+		return
+	}
 	l.written.Inc(rec.Level)
 }
 

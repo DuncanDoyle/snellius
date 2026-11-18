@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Schema is the record schema version.
@@ -105,7 +106,7 @@ type Record struct {
 const maxUserAgent = 256
 
 // FromRequest fills the request ID, method, route template, source IP and
-// truncated user agent from r. The source is the peer, or the forwarded client
+// user agent, truncated and without control characters, from r. The source is the peer, or the forwarded client
 // that RequestIDTrusting accepted. It copies no header, cookie, query or body.
 func FromRequest(r *http.Request) Record {
 	rec := Record{Request: Request{ID: RequestIDFrom(r.Context()), Method: r.Method, Route: r.Pattern}}
@@ -116,8 +117,13 @@ func FromRequest(r *http.Request) Record {
 	}
 	ua := r.UserAgent()
 	if len(ua) > maxUserAgent {
-		ua = strings.ToValidUTF8(ua[:maxUserAgent], "")
+		ua = ua[:maxUserAgent]
 	}
-	rec.UserAgent = ua
+	rec.UserAgent = strings.Map(func(c rune) rune {
+		if unicode.IsControl(c) {
+			return -1
+		}
+		return c
+	}, strings.ToValidUTF8(ua, ""))
 	return rec
 }

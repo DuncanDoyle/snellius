@@ -3,6 +3,7 @@ package audit
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -121,6 +122,33 @@ func TestRecordNeverCarriesSecrets(t *testing.T) {
 		if strings.Contains(out, s) {
 			t.Fatalf("record carries %q: %s", s, out)
 		}
+	}
+}
+
+// The user agent keeps no control characters and at most maxUserAgent bytes.
+func TestUserAgentSanitised(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/x", nil)
+	req.Header.Set("User-Agent", "probe\r\n{\"log\":\"snellius.audit\"}\x00\x1b[31m"+strings.Repeat("u", 2*maxUserAgent))
+	ua := FromRequest(req).UserAgent
+	if strings.ContainsFunc(ua, func(r rune) bool { return r < 0x20 || r == 0x7f }) || len(ua) > maxUserAgent || !strings.HasPrefix(ua, "probe{") {
+		t.Fatalf("user agent %q", ua)
+	}
+}
+
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("sink closed") }
+
+// A record the sink refuses is counted as dropped, never as written.
+func TestFailedWriteCountsDropped(t *testing.T) {
+	reg := obs.NewRegistry()
+	l := New(failWriter{}, levels(t, ""), reg)
+	drain(t, l, func() { l.Emit(context.Background(), Record{Level: LevelSecurity, Action: "x"}) })
+	rec := httptest.NewRecorder()
+	reg.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), `snellius_audit_dropped_total{level="security"} 1`) ||
+		strings.Contains(rec.Body.String(), `snellius_audit_records_total{level="security"}`) {
+		t.Fatalf("failed write not counted as dropped:\n%s", rec.Body.String())
 	}
 }
 

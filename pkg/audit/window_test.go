@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ func running(t *testing.T, l *Logger, clk *clocktesting.FakeClock) (stop func())
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { l.Run(ctx); close(done) }()
-	waitFor(t, "the window tickers", func() bool { return clk.HasWaiters() })
+	waitFor(t, "the window tickers", func() bool { return clk.Waiters() >= 2 })
 	return func() { cancel(); <-done }
 }
 
@@ -86,6 +87,48 @@ func TestSummaryWindowFlushes(t *testing.T) {
 	waitFor(t, "the second flush", func() bool { return strings.Count(buf.String(), "\n") == 3 })
 	if got := lines(t, buf.String()); got[2]["count"] != 1.0 {
 		t.Fatalf("second window counts %v, want 1", got[2]["count"])
+	}
+}
+
+// stallWriter blocks its first write until release is closed.
+type stallWriter struct {
+	syncBuf
+	once             sync.Once
+	entered, release chan struct{}
+}
+
+func (s *stallWriter) Write(p []byte) (int, error) {
+	s.once.Do(func() { close(s.entered); <-s.release })
+	return s.syncBuf.Write(p)
+}
+
+// A tick closes the window even while a write is stalled: later requests
+// start the next window instead of joining the closed one.
+func TestWindowRollsOverDuringStalledWrite(t *testing.T) {
+	w := &stallWriter{entered: make(chan struct{}), release: make(chan struct{})}
+	clk := clocktesting.NewFakeClock(time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC))
+	l := New(w, levels(t, ""), nil, WithClock(clk))
+	stop := running(t, l, clk)
+	l.Emit(context.Background(), Record{Level: LevelSecurity, Action: "startup"})
+	<-w.entered
+	l.Summarize("a", summary("GET /a"))
+	clk.Step(SummaryWindow)
+	waitFor(t, "the summary window to close while the write is stalled", func() bool {
+		l.summaries.mu.Lock()
+		defer l.summaries.mu.Unlock()
+		return len(l.summaries.open) == 0
+	})
+	l.Summarize("a", summary("GET /a"))
+	close(w.release)
+	stop()
+	var counts []any
+	for _, r := range lines(t, w.String()) {
+		if r["action"] == "list" {
+			counts = append(counts, r["count"])
+		}
+	}
+	if len(counts) != 2 || counts[0] != 1.0 || counts[1] != 1.0 {
+		t.Fatalf("summary counts %v, want one per window", counts)
 	}
 }
 
