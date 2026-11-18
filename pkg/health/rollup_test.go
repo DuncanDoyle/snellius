@@ -331,7 +331,7 @@ func TestOwnCopyChangedIsDerived(t *testing.T) {
 		t.Fatalf("fixture %+v is not own-object", f)
 	}
 	owned := &ownedSet{}
-	owned.add(f)
+	owned.add(&f)
 	copied := f // a whole-struct copy, as *g = *f is
 	copied.Detail, copied.Message = "derived content", "derived"
 	assigned := f
@@ -342,16 +342,16 @@ func TestOwnCopyChangedIsDerived(t *testing.T) {
 	rekeyed.Key = []string{"derived-from-hidden-input"}
 	unkeyed := f // registered with a nil key; a copy with an empty one is not the same finding
 	unkeyed.Key = nil
-	owned.add(unkeyed)
+	owned.add(&unkeyed)
 	emptyKeyed := unkeyed
 	emptyKeyed.Key = []string{}
-	in := []Finding{rekeyed, copied, assigned, emptyKeyed, unkeyed, f}
+	in := []Finding{rekeyed, copied, assigned, emptyKeyed, unkeyed, f, f} // the second f is a duplicate
 	before := make([]string, len(in))
 	for i := range in {
 		before[i], _ = deepString(in[i])
 	}
 	got, _ := confine(conditionsCheck{}, in, CheckResult{}, owned)
-	for i, want := range []Class{ClassDerived, ClassDerived, ClassDerived, ClassDerived, ClassOwn, ClassOwn} {
+	for i, want := range []Class{ClassDerived, ClassDerived, ClassDerived, ClassDerived, ClassOwn, ClassOwn, ClassDerived} {
 		if got[i].class != want {
 			t.Errorf("finding %d: class %d, want %d", i, got[i].class, want)
 		}
@@ -381,7 +381,7 @@ func TestOwnRefsEvidenceCopyIsDerived(t *testing.T) {
 		t.Fatalf("fixture %+v is not own-object", f)
 	}
 	owned := &ownedSet{}
-	owned.add(f)
+	owned.add(&f)
 	group := "forged.example"
 	withGroup, withUnknown := *ev, *ev
 	withGroup.Group, withUnknown.Unknown = &group, !ev.Unknown

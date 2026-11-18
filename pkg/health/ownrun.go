@@ -234,7 +234,9 @@ func runOwn(ctx RunContext, ks []own.Kind, resources []*unstructured.Unstructure
 			rec.resource, rec.refs, rec.returned = u, rec.refs[:0], rec.returned[:0]
 		}
 		for i, r := range own.EvaluateRoute(ks, ic, u, named) {
-			ctx.WakeAt(r.WakeAt())
+			if at := r.WakeAt(); !at.IsZero() {
+				ctx.WakeAt(at)
+			}
 			var basis []objects.Ref
 			if len(r.Findings()) > 0 {
 				basis = slices.Clone(recs[i].refs) // findings keep it; the recorder is reused
@@ -249,7 +251,7 @@ func runOwn(ctx RunContext, ks []own.Kind, resources []*unstructured.Unstructure
 					if ctx.sink.owned == nil {
 						ctx.sink.owned = &ownedSet{}
 					}
-					ctx.sink.owned.add(f)
+					ctx.sink.owned.add(&f)
 				}
 				out[i] = append(out[i], f)
 			}

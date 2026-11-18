@@ -134,27 +134,34 @@ func collectionTrusted(c Check) bool {
 	return false
 }
 
-// ownedSet is what runOwn produced in one check run, by content. confine
-// keeps ClassOwn only on a finding that matches one of them, once each, so
-// a copy changed or duplicated after runOwn is derived.
+// ownedSet is what runOwn produced in one check run, by content. Each
+// registered finding carries its entry; confine keeps ClassOwn only on a
+// finding whose content and key still match that entry, once each, so a copy
+// changed or duplicated after runOwn is derived.
 type ownedSet struct {
-	// keys are the registered findings' keys, by the digest of the rest of their content.
-	keys map[[sha256.Size]byte][][]string
-	// scratch holds the last print, reused so a lookup does not allocate.
+	entries []ownedEntry
+	// scratch holds the last print, reused so a check does not allocate.
 	scratch []byte
 }
 
-// keyField is Finding.Key's index; ownedSet compares keys apart from the rest.
-var keyField = func() int {
-	f, _ := reflect.TypeFor[Finding]().FieldByName("Key")
-	return f.Index[0]
+// ownedEntry is one registered finding: the digest of its print, and its key.
+type ownedEntry struct {
+	digest [sha256.Size]byte
+	key    []string
+	taken  bool
+}
+
+// unprinted are the fields ownedSet compares apart from a print: Key, and reg, which names the entry.
+var unprinted = func() uint64 {
+	k, _ := reflect.TypeFor[Finding]().FieldByName("Key")
+	r, _ := reflect.TypeFor[Finding]().FieldByName("reg")
+	return 1<<k.Index[0] | 1<<r.Index[0]
 }()
 
-// digest is f's content but its Key as ownedSet compares it: every field,
-// exported or not, of f and all it points to (deepPrint); false when it
-// cannot be printed.
+// digest is f's content but its Key and reg: every field, exported or not, of
+// f and all it points to (deepPrint); false when it cannot be printed.
 func (o *ownedSet) digest(f *Finding) ([sha256.Size]byte, bool) {
-	p, ok := printFields(o.scratch[:0], reflect.ValueOf(f).Elem(), keyField, 0)
+	p, ok := printFields(o.scratch[:0], reflect.ValueOf(f).Elem(), unprinted, 0)
 	o.scratch = p
 	if !ok {
 		return [sha256.Size]byte{}, false
@@ -162,53 +169,54 @@ func (o *ownedSet) digest(f *Finding) ([sha256.Size]byte, bool) {
 	return sha256.Sum256(p), true
 }
 
-// find is the index of f's key among those registered under d, or -1. A nil
-// key and an empty one differ, as they would in a print.
-func (o *ownedSet) find(d [sha256.Size]byte, f *Finding) int {
-	return slices.IndexFunc(o.keys[d], func(k []string) bool { return (k == nil) == (f.Key == nil) && slices.Equal(k, f.Key) })
+// entry is f's entry while it is not taken and holds f's key, else nil. A
+// nil key and an empty one differ, as they would in a print.
+func (o *ownedSet) entry(f *Finding) *ownedEntry {
+	if o == nil || f.reg <= 0 || int(f.reg) > len(o.entries) {
+		return nil
+	}
+	e := &o.entries[f.reg-1]
+	if e.taken || (e.key == nil) != (f.Key == nil) || !slices.Equal(e.key, f.Key) {
+		return nil
+	}
+	return e
 }
 
 // rekey runs rewrite, which changes only f's Key; a registered own-object
 // finding stays registered under its new key. Only the key normalisers call it.
+// A copy changed elsewhere may move its entry's key: take still compares content.
 func (o *ownedSet) rekey(f *Finding, rewrite func()) {
-	if o == nil || f.class != ClassOwn {
-		rewrite()
-		return
+	var e *ownedEntry
+	if f.class == ClassOwn {
+		e = o.entry(f)
 	}
-	d, ok := o.digest(f)
-	i := o.find(d, f)
 	rewrite()
-	if ok && i >= 0 {
-		o.keys[d][i] = slices.Clone(f.Key)
+	if e != nil {
+		e.key = slices.Clone(f.Key)
 	}
 }
 
-// add registers f.
-func (o *ownedSet) add(f Finding) {
-	if o.keys == nil {
-		o.keys = map[[sha256.Size]byte][][]string{}
-	}
-	if d, ok := o.digest(&f); ok {
-		o.keys[d] = append(o.keys[d], slices.Clone(f.Key))
-	}
-}
-
-// take reports whether f matches a registered finding not yet taken, and takes it.
-func (o *ownedSet) take(f *Finding) bool {
-	if o == nil {
-		return false
-	}
+// add registers f and marks it with its entry.
+func (o *ownedSet) add(f *Finding) {
+	f.reg = 0
 	d, ok := o.digest(f)
 	if !ok {
+		return
+	}
+	o.entries = append(o.entries, ownedEntry{digest: d, key: slices.Clone(f.Key)})
+	f.reg = int32(len(o.entries)) //nolint:gosec // one check run registers far fewer than 2^31 findings
+}
+
+// take reports whether f still matches its entry, not yet taken, and takes it.
+func (o *ownedSet) take(f *Finding) bool {
+	e := o.entry(f)
+	if e == nil {
 		return false
 	}
-	i := o.find(d, f)
-	if i < 0 {
+	if d, ok := o.digest(f); !ok || d != e.digest {
 		return false
 	}
-	ks := o.keys[d]
-	ks[i] = ks[len(ks)-1]
-	o.keys[d] = ks[:len(ks)-1]
+	e.taken = true
 	return true
 }
 
@@ -311,6 +319,8 @@ type Finding struct {
 	// parent is the route parentRef a KGWUI-003 or KGWUI-011 finding is about;
 	// it orders findings. A pointer keeps the other findings small.
 	parent *objects.ParentRef
+	// reg is 1 + the finding's ownedSet entry, 0 for none; only ownedSet.add sets it.
+	reg int32
 }
 
 // CheckResult records whether a check could collect current input. A Required

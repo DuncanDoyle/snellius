@@ -43,7 +43,7 @@ func infoOf(t reflect.Type) *typeInfo {
 // deepPrint appends v to b with every field, exported or not, in order,
 // through pointers, interfaces (with their dynamic type's process-unique id),
 // slices, arrays and maps (keys sorted). Prints are compared only within one process. Strings print length-prefixed, so a print is
-// unambiguous without escaping. A time.Time prints as its UTC instant, offset and zone
+// unambiguous without escaping. A time.Time prints as its instant, offset and zone
 // name; no other standard library type is read through unexported fields. It
 // reports false for anything it cannot print that way, a func or channel,
 // or past maxPrintDepth, so such content is never trusted.
@@ -55,9 +55,15 @@ func deepPrint(b []byte, v reflect.Value, depth int) ([]byte, bool) {
 		if !v.CanInterface() {
 			return b, false
 		}
-		t := v.Interface().(time.Time)
+		var t time.Time
+		if v.CanAddr() {
+			t = *v.Addr().Interface().(*time.Time) // a pointer boxes without allocating
+		} else {
+			t = v.Interface().(time.Time)
+		}
 		name, offset := t.Zone()
-		b = t.UTC().AppendFormat(append(b, "time:"...), time.RFC3339Nano)
+		b = strconv.AppendInt(append(b, "time:"...), t.Unix(), 10)
+		b = strconv.AppendInt(append(b, '.'), int64(t.Nanosecond()), 10)
 		b = strconv.AppendInt(append(b, '/'), int64(offset), 10)
 		return appendString(append(b, '/'), name), true
 	}
@@ -79,7 +85,7 @@ func deepPrint(b []byte, v reflect.Value, depth int) ([]byte, bool) {
 		if infoOf(v.Type()).sealed {
 			return b, false
 		}
-		return printFields(b, v, -1, depth)
+		return printFields(b, v, 0, depth)
 	case reflect.Slice, reflect.Array:
 		if v.Kind() == reflect.Slice && v.IsNil() {
 			return append(b, "nil"...), true
@@ -133,11 +139,11 @@ func deepPrint(b []byte, v reflect.Value, depth int) ([]byte, bool) {
 	return b, true
 }
 
-// printFields appends v's fields, but for the one at index skip, as deepPrint does.
-func printFields(b []byte, v reflect.Value, skip, depth int) ([]byte, bool) {
+// printFields appends v's fields, but for those whose index bit is set in skip, as deepPrint does.
+func printFields(b []byte, v reflect.Value, skip uint64, depth int) ([]byte, bool) {
 	b = append(b, '{')
 	for i := range v.NumField() {
-		if i == skip {
+		if i < 64 && skip&(1<<i) != 0 {
 			continue
 		}
 		var ok bool
