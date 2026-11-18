@@ -138,6 +138,7 @@ func (h *handler) startDetail(w http.ResponseWriter, r *http.Request) *detail {
 // nil. Nothing else about ref is read before this check.
 func (d *detail) open(w http.ResponseWriter, ref objects.Ref) (*unstructured.Unstructured, *Candidate) {
 	var u *unstructured.Unstructured
+	noteSubject(d.v.r, ref)
 	if d.l.linkNamed(ref) == LinkDetail {
 		u, _ = stored(d.p.Model, ref)
 	}

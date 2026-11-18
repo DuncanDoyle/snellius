@@ -52,6 +52,9 @@ type handlerConfig struct {
 	// commitCheck and authzAudit are the commit wrapper's hooks (commit.go); nil means none.
 	commitCheck func(http.ResponseWriter, *http.Request) (*http.Request, error)
 	authzAudit  func(*http.Request, string)
+	// audit hears each answered /api/ request; disclosure keeps its body to scan (audit.go).
+	audit      func(AuditEvent)
+	disclosure bool
 	// capHit hears each request that passes CheckLimit; nil means none.
 	capHit func(*http.Request)
 	// checkTrace hears each uncached check a request counts; nil means none.

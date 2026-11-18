@@ -88,16 +88,24 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { writeErr(w, http.StatusNotFound, "not found") })
 	mux.Handle("/", spa(ui, authMode(cfg.secure)))
 	var next http.Handler = mux
+	if cfg.audit != nil {
+		// Innermost, so the note's request is the one the mux gives its route template.
+		next = noteBuilds(mux)
+	}
 	if cfg.bypass {
 		// Extension Viewers see the bypass through the request.
+		inner := next
 		next = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), bypassKey{}, true)))
+			inner.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), bypassKey{}, true)))
 		})
 	}
 	if cfg.secure {
 		base, _ := unnarrow(authz)
 		admit, _ := base.(Admitter)
-		return commit(next, admit, cfg.commitCheck, cfg.authzAudit, cfg.capHit, cfg.checkTrace, cfg.commitClock)
+		next = commit(next, admit, cfg.commitCheck, cfg.authzAudit, cfg.capHit, cfg.checkTrace, cfg.commitClock)
+	}
+	if cfg.audit != nil {
+		next = auditing(next, cfg.audit, cfg.disclosure)
 	}
 	return next
 }
@@ -501,6 +509,7 @@ func (h *handler) resource(w http.ResponseWriter, r *http.Request) {
 		return s
 	}
 	want := objects.Ref{Group: dash(r.PathValue("group")), Kind: r.PathValue("kind"), Namespace: dash(r.PathValue("rns")), Name: r.PathValue("rname")}
+	noteSubject(r, want)
 	if linkerFor(h.view(r), p.Model, i).admitNamed(want) != LinkNone {
 		if obj := object(p.Model, want); obj != nil {
 			// The body is the raw object, so the collection time travels in a header (D-017 §6).

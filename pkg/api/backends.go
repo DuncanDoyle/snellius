@@ -216,6 +216,7 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 		group = ""
 	}
 	ref := objects.Ref{Group: group, Kind: r.PathValue("kind"), Namespace: r.PathValue("ns"), Name: r.PathValue("name")}
+	noteSubject(r, ref)
 	v := h.view(r)
 	if !v.canNamed(ref) {
 		writeErr(w, http.StatusNotFound, notFoundInScope)

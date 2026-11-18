@@ -52,6 +52,8 @@ type view struct {
 	projections map[*engine.InstallModel]*projection
 	// listed memoises canList's cluster-wide answers.
 	listed map[ListQuery]bool
+	// note hears a refused named ref for the audit stream; nil when nothing listens.
+	note *auditNote
 }
 
 // projection is an install's report and diagnosis as a viewer without the full read sees them.
@@ -86,7 +88,7 @@ func (h *handler) view(r *http.Request) *view {
 // newView is the view of r's caller through a; secure turns the projection on.
 func newView(r *http.Request, a Authorizer, secure bool) *view {
 	a, policy := unnarrow(a)
-	v := &view{a: a, policy: policy, r: r, all: policy == nil && allowsAll(a), secure: secure}
+	v := &view{a: a, policy: policy, r: r, all: policy == nil && allowsAll(a), secure: secure, note: noteOf(r)}
 	if !v.all {
 		v.lazy = true
 		v.seen, v.seenNamed = map[objects.Ref]bool{}, map[objects.Ref]bool{}
@@ -287,13 +289,18 @@ func (v *view) canNamed(ref objects.Ref) bool {
 	if v.all {
 		return true
 	}
-	if _, ok := v.a.(NamedAuthorizer); !ok {
-		return v.can(ref)
+	var ok bool
+	if _, named := v.a.(NamedAuthorizer); !named {
+		ok = v.can(ref)
+	} else {
+		var asked bool
+		if ok, asked = v.seenNamed[ref]; !asked {
+			ok = decideNamed(v.r, v.a, ref) && v.policyAllows(ref, true)
+			v.seenNamed[ref] = ok
+		}
 	}
-	ok, asked := v.seenNamed[ref]
-	if !asked {
-		ok = decideNamed(v.r, v.a, ref) && v.policyAllows(ref, true)
-		v.seenNamed[ref] = ok
+	if !ok {
+		v.note.deniedNamed(ref)
 	}
 	return ok
 }
