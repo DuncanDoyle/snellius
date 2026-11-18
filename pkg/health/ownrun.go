@@ -229,10 +229,12 @@ func runOwn(ctx RunContext, ks []own.Kind, resources []*unstructured.Unstructure
 		ic, named[i] = newOwnInput(ctx.Input, recs[i])
 	}
 	out := make([][]Finding, len(ks))
+	id := ctx.Install.ID()
 	for _, u := range resources {
 		for _, rec := range recs {
 			rec.resource, rec.refs, rec.returned = u, rec.refs[:0], rec.returned[:0]
 		}
+		var res *objects.Ref // the resource's findings share it; nothing writes through it
 		for i, r := range own.EvaluateRoute(ks, ic, u, named) {
 			if at := r.WakeAt(); !at.IsZero() {
 				ctx.WakeAt(at)
@@ -246,7 +248,10 @@ func runOwn(ctx RunContext, ks []own.Kind, resources []*unstructured.Unstructure
 				if !ok {
 					continue
 				}
-				f.Install, f.Resource = ctx.Install.ID(), ref(u)
+				if res == nil {
+					res = ref(u)
+				}
+				f.Install, f.Resource = id, res
 				if ctx.sink != nil {
 					if ctx.sink.owned == nil {
 						ctx.sink.owned = &ownedSet{}

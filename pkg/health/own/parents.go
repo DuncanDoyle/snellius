@@ -34,7 +34,7 @@ func parents(ic InstallContext, u *unstructured.Unstructured, named Named, o *ou
 		return
 	}
 	r := parentsRun{ic: ic, u: u, v: w.v, named: named, o: o}
-	hint := experimentalHint(ic, u)
+	hint := experimentalHint(w.kind, w.exp)
 	for i := range w.blocks {
 		b := &w.blocks[i]
 		switch {

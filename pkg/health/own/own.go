@@ -14,6 +14,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
@@ -135,7 +136,7 @@ const (
 
 // Evaluate dispatches k to an unexported analyzer. It and EvaluateRoute are the only entry points.
 func Evaluate(k Kind, ic InstallContext, resource *unstructured.Unstructured, named Named) Result {
-	return evaluate(k, ic, resource, named, &walk{})
+	return evaluate(k, ic, resource, named, &walk{}, &out{})
 }
 
 // EvaluateRoute returns, for each ks[i], what Evaluate(ks[i], ic, resource, named[i])
@@ -145,16 +146,16 @@ func EvaluateRoute(ks []Kind, ic InstallContext, resource *unstructured.Unstruct
 		return nil
 	}
 	w := &walk{}
-	rs := make([]Result, len(ks))
+	rs, outs := make([]Result, len(ks)), make([]out, len(ks))
 	for i, k := range ks {
-		rs[i] = evaluate(k, ic, resource, named[i], w)
+		rs[i] = evaluate(k, ic, resource, named[i], w, &outs[i])
 	}
 	return rs
 }
 
-// evaluate runs analyzer k; w is shared by the analyzers of one resource.
-func evaluate(k Kind, ic InstallContext, resource *unstructured.Unstructured, named Named, w *walk) Result {
-	o := &out{now: ic.Now}
+// evaluate runs analyzer k into the empty o; w is shared by the analyzers of one resource.
+func evaluate(k Kind, ic InstallContext, resource *unstructured.Unstructured, named Named, w *walk, o *out) Result {
+	o.now = ic.Now
 	switch k {
 	case Status:
 		status(ic, resource, named, o, w)
@@ -353,10 +354,10 @@ func BlockFreshness(u *unstructured.Unstructured, cs []metav1.Condition, require
 		return NoControllerStatus, FreshnessNeverWritten, 0
 	}
 	types := [2][]string{required, optional}
-	stale := false
+	stale, gen := false, u.GetGeneration() // objects.IsStale's comparison, with the generation read once
 	for _, ts := range types {
 		for _, t := range ts {
-			if c := objects.FindCondition(cs, t); c != nil && objects.IsStale(u, *c) && (!stale || c.ObservedGeneration < observed) {
+			if c := objects.FindCondition(cs, t); c != nil && c.ObservedGeneration < gen && (!stale || c.ObservedGeneration < observed) {
 				stale, observed = true, c.ObservedGeneration
 			}
 		}
@@ -415,7 +416,12 @@ type routeView struct {
 
 // viewOf decodes route u through views.
 func viewOf(views objects.Decoder, u *unstructured.Unstructured) routeView {
-	if gvk := u.GroupVersionKind(); gvk.Group == objects.GatewayAPIGroup && gvk.Kind == "HTTPRoute" {
+	return viewAs(views, u, u.GroupVersionKind())
+}
+
+// viewAs decodes route u, of kind gvk, through views.
+func viewAs(views objects.Decoder, u *unstructured.Unstructured, gvk schema.GroupVersionKind) routeView {
+	if gvk.Group == objects.GatewayAPIGroup && gvk.Kind == "HTTPRoute" {
 		v := views.HTTPRoute(u)
 		return routeView{v.ParentRefs, v.WrittenRefs, v.Parents, true}
 	}
@@ -473,11 +479,16 @@ func isHTTPRoute(group, kind string) bool {
 	return group == objects.GatewayAPIGroup && kind == "HTTPRoute"
 }
 
-// experimentalHint is ExperimentalHint for u's kind, or "" for a stable kind.
-func experimentalHint(ic InstallContext, u *unstructured.Unstructured) string {
-	gvk := u.GroupVersionKind()
+// experimental returns gvk's served kind and whether the controller watches
+// it only with its experimental Gateway API features on.
+func experimental(ic InstallContext, gvk schema.GroupVersionKind) (kinds.Served, bool) {
 	k, ok := served(ic, gvk.Group, gvk.Kind)
-	if !ok || ic.Experimental == nil || !ic.Experimental(k) {
+	return k, ok && ic.Experimental != nil && ic.Experimental(k)
+}
+
+// experimentalHint is ExperimentalHint for served kind k, or "" for a stable kind.
+func experimentalHint(k kinds.Served, exp bool) string {
+	if !exp {
 		return ""
 	}
 	return fmt.Sprintf(ExperimentalHint, k.Kind+" "+k.Version)
@@ -487,12 +498,10 @@ func experimentalHint(ic InstallContext, u *unstructured.Unstructured) string {
 // an experimental-only kind (D-018 §2); %s is the kind and served version.
 const ExperimentalHint = "; the controller watches %s only when its experimental Gateway API features are on, and they may be off here"
 
-// ignored reports whether route u is left unjudged: its kind is
-// experimental-only and only other controllers wrote its status (D-018 §1).
-func ignored(ic InstallContext, u *unstructured.Unstructured, v routeView) bool {
-	gvk := u.GroupVersionKind()
-	k, ok := served(ic, gvk.Group, gvk.Kind)
-	if !ok || ic.Experimental == nil || !ic.Experimental(k) {
+// ignored reports whether a route with view v is left unjudged: its kind is
+// experimental-only (exp) and only other controllers wrote its status (D-018 §1).
+func ignored(ic InstallContext, v routeView, exp bool) bool {
+	if !exp {
 		return false
 	}
 	for _, p := range v.status {
@@ -547,6 +556,8 @@ type walk struct {
 	built   bool
 	v       routeView
 	ignored bool
+	kind    kinds.Served // the route's served kind
+	exp     bool         // its kind is experimental-only
 	blocks  []block
 }
 
@@ -568,8 +579,10 @@ func (w *walk) of(ic InstallContext, u *unstructured.Unstructured) *walk {
 	if w.built {
 		return w
 	}
-	w.built, w.v = true, viewOf(ic.Views, u)
-	if w.ignored = ignored(ic, u, w.v); w.ignored {
+	gvk := u.GroupVersionKind()
+	w.kind, w.exp = experimental(ic, gvk)
+	w.built, w.v = true, viewAs(ic.Views, u, gvk)
+	if w.ignored = ignored(ic, w.v, w.exp); w.ignored {
 		return w
 	}
 	rr := routeRequired()
