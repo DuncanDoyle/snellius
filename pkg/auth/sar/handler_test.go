@@ -135,7 +135,7 @@ func (c *checker) recorded() []sar.Attributes {
 // X-User. Commit reads t0 unless opts set a clock that moves.
 func serve(t *testing.T, src api.ModelSource, authz api.Authorizer, opts ...api.HandlerOption) *httptest.Server {
 	t.Helper()
-	opts = append([]api.HandlerOption{api.WithSecureMode(true), api.WithCommitClock(func() time.Time { return t0 })}, opts...)
+	opts = append([]api.HandlerOption{api.WithSecureMode(), api.WithCommitClock(func() time.Time { return t0 })}, opts...)
 	h := api.NewHandler(src, fstest.MapFS{}, authz, opts...)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey{}, r.Header.Get("X-User"))))

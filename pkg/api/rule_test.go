@@ -840,7 +840,7 @@ func ruleServeWith(t *testing.T, src api.ModelSource, c sar.Checker, opts ...api
 		m := src.Current().Model
 		return app.CoreCapabilities(m.Snapshot, app.Diagnostics{ControllerLogs: true}, m.Collected)
 	}
-	opts = append([]api.HandlerOption{api.WithSecureMode(true), api.WithCommitClock(func() time.Time { return ruleCommit }),
+	opts = append([]api.HandlerOption{api.WithSecureMode(), api.WithCommitClock(func() time.Time { return ruleCommit }),
 		api.WithExtMounts(mounts...), api.WithCoreCapabilities(core)}, opts...)
 	h := api.NewHandler(src, fstest.MapFS{}, az, opts...)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

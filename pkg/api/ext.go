@@ -47,8 +47,8 @@ type handlerConfig struct {
 	scoped endpoints.ScopedReader
 	// consumersFor, if set, gives an install's non-route backend consumers.
 	consumersFor func(install.Install, *install.Owned) []objects.Consumer
-	// secure marks secure mode; complete says its identity and authorisation are fully wired.
-	secure, complete bool
+	// secure marks secure mode.
+	secure bool
 	// commitCheck and authzAudit are the commit wrapper's hooks (commit.go); nil means none.
 	commitCheck func(http.ResponseWriter, *http.Request) (*http.Request, error)
 	authzAudit  func(*http.Request, string)
@@ -64,10 +64,10 @@ type handlerConfig struct {
 	off    projStep
 }
 
-// WithSecureMode marks the handler secure. Until complete is true, every /api/
-// route answers 503 and nothing behind the gate runs.
-func WithSecureMode(complete bool) HandlerOption {
-	return func(c *handlerConfig) { c.secure, c.complete = true, complete }
+// WithSecureMode marks the handler secure: every /api/ response goes through
+// the per-viewer projection and the commit wrapper.
+func WithSecureMode() HandlerOption {
+	return func(c *handlerConfig) { c.secure = true }
 }
 
 // WithExtMounts serves m under /api/ext/{name}/. Callers check them with

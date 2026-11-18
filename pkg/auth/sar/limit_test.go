@@ -763,7 +763,7 @@ func admitFixture(checker Checker, clk *clocktesting.FakeClock, waiting chan<- s
 		}
 		api.WriteJSON(w, strings.Join(seen, ","))
 	})}
-	opts = append([]api.HandlerOption{api.WithSecureMode(true), api.WithCommitClock(clk.Now), api.WithExtMounts(ext)}, opts...)
+	opts = append([]api.HandlerOption{api.WithSecureMode(), api.WithCommitClock(clk.Now), api.WithExtMounts(ext)}, opts...)
 	return a, api.NewHandler(noModel{}, fstest.MapFS{}, a, opts...)
 }
 

@@ -33,7 +33,7 @@ Snellius runs in one of two modes. Set it with `--auth-mode` or the chart value 
 - At startup, local mode logs a warning with the bind address that anyone who can port-forward sees everything Snellius reads.
 - The binary refuses a non-loopback `--listen` and a pod on host networking in local mode. The chart refuses `httpRoute.enabled` in local mode.
 
-**Secure mode.** OIDC sign-in, with visibility per user that follows Kubernetes RBAC, is available from `v0.8.0`. Before that, a build started with `--auth-mode=secure` answers `/api/` requests with `401` without a session and with `503 secure-mode-incomplete` after sign-in. Main is a development build until `v0.8.0`. Setup steps are in [Secure mode](#secure-mode).
+**Secure mode.** OIDC sign-in, with visibility per user that follows Kubernetes RBAC, is available from `v0.8.0`. A build started with `--auth-mode=secure` serves each signed-in user only what their Kubernetes RBAC allows, and answers `401` without a session. Main is a development build until `v0.8.0`. Setup steps are in [Secure mode](#secure-mode).
 
 **Both modes.**
 
@@ -116,7 +116,7 @@ Notes:
 - **Sign-out.** The Sign out menu item ends the session and sends the browser to the IdP's end-session endpoint, if the IdP publishes one. Snellius sends `client_id` and a `post_logout_redirect_uri` that is the app root. It sends no ID token hint.
 - **Sign-in errors.** A failed sign-in lands on `/signin-failed` with the reason `unauthenticated` (the API server does not accept the token, for example because it does not accept the client ID as an audience) or `invalid` (the login attempt has no open transaction or a wrong state, the code exchange or ID token check fails, or the token review itself fails).
 - **Routes.** Secure mode serves `/auth/login`, `/auth/callback`, `/auth/me` and `POST /auth/logout`. `/auth/status` reports the mode and whether sign-in is ready. Local mode serves only `/auth/status`.
-- **Data stays closed for now.** Until per-user authorisation lands later in Phase 7, every `/api/` request answers `401` without a session and `503 secure-mode-incomplete` after sign-in. Main is a development build until `v0.8.0`.
+- **Data follows RBAC.** Every `/api/` request answers `401` without a session. With one, the user sees only what their Kubernetes RBAC allows.
 - **No secrets in the browser.** The client secret, the ID token, the refresh token and the user's bearer token never reach the browser or the logs. The browser holds only an opaque session cookie.
 
 #### What each user sees

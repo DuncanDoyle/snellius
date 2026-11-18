@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -46,21 +47,39 @@ func gateGet(t *testing.T, url string) (int, string) {
 	return r.StatusCode, strings.TrimSpace(string(b))
 }
 
-// An incomplete secure mode answers every /api/ route with 503 and runs nothing behind it.
-func TestSecureModeGateBlocksEveryAPIRoute(t *testing.T) {
-	srv, calls := gateServer(t, WithSecureMode(false))
+// A nil Authorizer in secure mode is DenyAll, never AllowAll: a handler with data
+// shows a viewer nothing it would show under AllowAll.
+func TestSecureModeNilAuthorizerFailsClosed(t *testing.T) {
+	routes := func(opts ...HandlerOption) Page[json.RawMessage] {
+		_, srv, _ := startWith(t, setup{opts: opts}, world()...)
+		insts := get[[]InstallSummary](t, srv, "/api/v1/installs", 200)
+		if len(insts) == 0 {
+			t.Fatal("no install in the world")
+		}
+		return get[Page[json.RawMessage]](t, srv, "/api/v1/installs/"+insts[0].ID+"/routes", 200)
+	}
+	if open := routes(); len(open.Items) == 0 {
+		t.Fatal("local mode lists no routes; the comparison proves nothing")
+	}
+	if closed := routes(WithSecureMode()); len(closed.Items) != 0 || closed.Total != 0 {
+		t.Errorf("secure mode with a nil authoriser lists %d routes (total %d), want none", len(closed.Items), closed.Total)
+	}
+}
+
+// Secure mode never answers 503 secure-mode-incomplete, runs extension mounts, and serves the SPA and probes.
+func TestSecureModeServesAPI(t *testing.T) {
+	srv, calls := gateServer(t, WithSecureMode())
 	for _, p := range gatePaths {
-		code, body := gateGet(t, srv.URL+p)
-		if code != http.StatusServiceUnavailable || body != `{"error":"secure-mode-incomplete"}` {
-			t.Errorf("%s: got %d %q", p, code, body)
+		if _, body := gateGet(t, srv.URL+p); strings.Contains(body, "secure-mode-incomplete") {
+			t.Errorf("%s: got %q", p, body)
 		}
 	}
-	if *calls != 0 {
-		t.Errorf("extension handler ran %d times behind the gate", *calls)
+	if *calls != 1 {
+		t.Errorf("extension handler ran %d times, want 1", *calls)
 	}
 	for _, p := range []string{"/healthz", "/"} {
-		if code, _ := gateGet(t, srv.URL+p); code == http.StatusServiceUnavailable {
-			t.Errorf("%s must stay served, got 503", p)
+		if code, _ := gateGet(t, srv.URL+p); code != http.StatusOK {
+			t.Errorf("%s: got %d", p, code)
 		}
 	}
 }

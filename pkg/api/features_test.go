@@ -143,7 +143,7 @@ func TestMetaAuthMode(t *testing.T) {
 	if got := get[MetaResponse](t, local, "/api/v1/meta", 200).AuthMode; got != "local" {
 		t.Errorf("authMode %q, want local", got)
 	}
-	_, secure, _ := startWith(t, setup{opts: []HandlerOption{WithSecureMode(true)}}, world()...)
+	_, secure, _ := startWith(t, setup{opts: []HandlerOption{WithSecureMode()}}, world()...)
 	if got := get[MetaResponse](t, secure, "/api/v1/meta", 200).AuthMode; got != "secure" {
 		t.Errorf("authMode %q, want secure", got)
 	}
@@ -155,7 +155,7 @@ func TestIndexStampsAuthMode(t *testing.T) {
 	for _, tc := range []struct {
 		opts []HandlerOption
 		want string
-	}{{nil, "local"}, {[]HandlerOption{WithSecureMode(false)}, "secure"}} {
+	}{{nil, "local"}, {[]HandlerOption{WithSecureMode()}, "secure"}} {
 		srv := httptest.NewServer(NewHandler(staticModel{}, ui, nil, tc.opts...))
 		_, body := gateGet(t, srv.URL+"/i/some-route")
 		srv.Close()

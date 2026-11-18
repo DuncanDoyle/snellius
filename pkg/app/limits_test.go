@@ -64,7 +64,7 @@ func TestCheckLimitCountedAndLogged(t *testing.T) {
 	audits := &lockedBuf{}
 	o := secureOpts()
 	o.OIDC = oidc.Config{IssuerURL: idp.srv.URL, ClientID: "c", RedirectURL: "https://s.example.com/auth/callback", CAFile: ca}
-	o.AuditOut, o.completeSecure = audits, true
+	o.AuditOut = audits
 	a, err = Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}}, o, extension.New(flood))
 	if err != nil {
 		t.Fatal(err)

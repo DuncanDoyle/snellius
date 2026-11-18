@@ -1902,8 +1902,8 @@ func secureOpts() Options {
 	return Options{AuthMode: ModeSecure, PollInterval: 10 * time.Millisecond, MetricsInterval: time.Hour, UI: ui, AuditOut: io.Discard}
 }
 
-// Secure mode without a registry authoriser wires the SAR authoriser, and the data gate stays closed.
-func TestSecureModeWiresSARBehindGate(t *testing.T) {
+// Secure mode without a registry authoriser wires the SAR authoriser, and the data API is open to sessions.
+func TestSecureModeWiresSAR(t *testing.T) {
 	dyn, kube := testutil.Clients(t)
 	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}}, secureOpts(), extension.New())
 	if err != nil {
@@ -1912,10 +1912,11 @@ func TestSecureModeWiresSARBehindGate(t *testing.T) {
 	if s, ok := a.authz.(*sar.Authorizer); !ok || s != a.sar {
 		t.Fatalf("secure-mode authoriser is %T, want the app's *sar.Authorizer", a.authz)
 	}
+	// Without a session the commit wrapper has no identity, so it refuses; it never answers 503 secure-mode-incomplete.
 	rec := httptest.NewRecorder()
 	a.Handler.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/meta", nil))
-	if rec.Code != http.StatusServiceUnavailable || strings.TrimSpace(rec.Body.String()) != `{"error":"secure-mode-incomplete"}` {
-		t.Fatalf("/api/ = %d %s, want 503 secure-mode-incomplete", rec.Code, rec.Body.String())
+	if rec.Code == http.StatusOK || strings.Contains(rec.Body.String(), "secure-mode-incomplete") {
+		t.Fatalf("/api/ without a session = %d %s", rec.Code, rec.Body.String())
 	}
 	local := secureOpts()
 	local.AuthMode = ModeLocal
@@ -2058,7 +2059,7 @@ func TestAuthzUnavailableAudited(t *testing.T) {
 	out := &lockedBuf{}
 	o := secureOpts()
 	o.OIDC = oidc.Config{IssuerURL: idp.srv.URL, ClientID: "c", RedirectURL: "https://s.example.com/auth/callback", CAFile: ca}
-	o.AuditOut, o.completeSecure = out, true
+	o.AuditOut = out
 	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}}, o, extension.New())
 	if err != nil {
 		t.Fatal(err)

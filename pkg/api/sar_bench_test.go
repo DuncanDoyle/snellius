@@ -874,7 +874,7 @@ func TestScopedFewerColdChecksLarge(t *testing.T) {
 	base := "/api/v1/installs/" + m.Installs[0].Resolved.ID()
 	cold := func(path string) result {
 		c, clk := &fakeChecker{allow: nsGrants}, clocktesting.NewFakeClock(t0)
-		h := build(newAuthz(c, clk, nil, lifted), api.WithSecureMode(true), api.WithCommitClock(clk.Now))
+		h := build(newAuthz(c, clk, nil, lifted), api.WithSecureMode(), api.WithCommitClock(clk.Now))
 		return get(h, c, "u", path)
 	}
 	for _, p := range []string{"/routes", "/gateways", "/listenersets", "/paths", "/backends", "/findings", "/processes"} {
@@ -890,7 +890,7 @@ func TestScopedFewerColdChecksLarge(t *testing.T) {
 // so allows dated on a fake clock are judged on it.
 func secureWith(build func(api.Authorizer, ...api.HandlerOption) http.Handler) func(api.Authorizer, func() time.Time, ...api.HandlerOption) http.Handler {
 	return func(az api.Authorizer, now func() time.Time, opts ...api.HandlerOption) http.Handler {
-		return build(az, append([]api.HandlerOption{api.WithSecureMode(true), api.WithCommitClock(now)}, opts...)...)
+		return build(az, append([]api.HandlerOption{api.WithSecureMode(), api.WithCommitClock(now)}, opts...)...)
 	}
 }
 

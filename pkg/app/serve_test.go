@@ -17,6 +17,9 @@ import (
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/extension"
+	authzv1 "k8s.io/api/authorization/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 // TestMain discards the default logger so served apps keep test output clean.
@@ -176,9 +179,9 @@ func TestServeDrainsBoth(t *testing.T) {
 }
 
 // The served secure-mode app answers every API route, extension routes, other
-// methods and encoded paths included, with 401 without a session and 503 with
-// one, and never runs extension code.
-func TestServedSecureModeGatesTheAPI(t *testing.T) {
+// methods and encoded paths included, with 401 without a session, and serves a
+// signed-in viewer. Extension code runs only behind a session.
+func TestServedSecureModeRequiresSession(t *testing.T) {
 	var calls atomic.Int32
 	count := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { calls.Add(1) })
 	ext := extension.WithHandlers("acme", func(r extension.Router, _ extension.Deps) {
@@ -187,6 +190,9 @@ func TestServedSecureModeGatesTheAPI(t *testing.T) {
 	})
 	dyn, kube := testutil.Clients(t, testutil.ControllerDeployment("kgw", "kgateway", "cr.kgateway.dev/kgateway-dev/kgateway:v2.4.0", 1, 1),
 		testutil.GatewayClass("kgateway", testutil.Controller, true), testutil.Gateway("infra", "edge", "kgateway", nil))
+	kube.PrependReactor("create", "subjectaccessreviews", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, &authzv1.SubjectAccessReview{Status: authzv1.SubjectAccessReviewStatus{Allowed: true}}, nil
+	})
 	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}},
 		Options{AuthMode: ModeSecure, PollInterval: 10 * time.Millisecond, MetricsInterval: time.Hour, UI: ui, AuditOut: io.Discard},
 		extension.New(ext))
@@ -207,22 +213,31 @@ func TestServedSecureModeGatesTheAPI(t *testing.T) {
 	a.sessions.Complete(signIn, httptest.NewRequest("GET", "/auth/callback", nil), oidc.Result{Identity: oidc.Identity{Username: "u"},
 		Expiry: time.Now().Add(time.Hour), ReturnPath: "/"})
 	session := signIn.Result().Cookies()[0]
-	for _, c := range []struct{ method, path string }{
-		{"GET", "/api/v1/meta"},
-		{"GET", "/api/v1/installs"},
-		{"POST", "/api/v1/installs"},
-		{"DELETE", "/api/v1/meta"},
-		{"GET", "/%61pi/v1/meta"},
-		{"GET", "/api/ext/acme/hi"},
-		{"POST", "/api/ext/acme/hi"},
-		{"GET", "/%61pi/ext/acme/hi"},
+	// served is the status with a session; 0 means the same 404 an unknown route gets.
+	for _, c := range []struct {
+		method, path string
+		served       int
+		ext          bool
+	}{
+		{"GET", "/api/v1/meta", http.StatusOK, false},
+		{"GET", "/api/v1/installs", http.StatusOK, false},
+		{"POST", "/api/v1/installs", 0, false},
+		{"DELETE", "/api/v1/meta", 0, false},
+		{"GET", "/%61pi/v1/meta", http.StatusOK, false},
+		{"GET", "/api/ext/acme/hi", http.StatusOK, true},
+		{"POST", "/api/ext/acme/hi", http.StatusOK, true},
+		{"GET", "/%61pi/ext/acme/hi", http.StatusOK, true},
 	} {
 		for _, withSession := range []bool{false, true} {
+			before := calls.Load()
 			req := &http.Request{Method: c.method, URL: &url.URL{Scheme: "http", Host: addr, Opaque: c.path}, Host: addr, Header: http.Header{}}
-			code, want := http.StatusUnauthorized, `{"error":"sign-in-required","login":"/auth/login?return=%2F"}`
+			code := http.StatusUnauthorized
 			if withSession {
 				req.AddCookie(session)
-				code, want = http.StatusServiceUnavailable, `{"error":"secure-mode-incomplete"}`
+				code = c.served
+				if code == 0 {
+					code = http.StatusNotFound
+				}
 			}
 			r, err := http.DefaultClient.Do(req)
 			if err != nil {
@@ -230,12 +245,13 @@ func TestServedSecureModeGatesTheAPI(t *testing.T) {
 			}
 			b, _ := io.ReadAll(r.Body)
 			_ = r.Body.Close()
-			if r.StatusCode != code || strings.TrimSpace(string(b)) != want {
-				t.Errorf("%s %s (session %v): %d %.80q", c.method, c.path, withSession, r.StatusCode, b)
+			if r.StatusCode != code || strings.Contains(string(b), "secure-mode-incomplete") {
+				t.Errorf("%s %s (session %v): %d %.80q, want %d", c.method, c.path, withSession, r.StatusCode, b, code)
+			}
+			// Extension code runs for a signed-in viewer only.
+			if ran := calls.Load() - before; ran != 0 != (withSession && c.ext) {
+				t.Errorf("%s %s (session %v): extension ran %d times", c.method, c.path, withSession, ran)
 			}
 		}
-	}
-	if n := calls.Load(); n != 0 {
-		t.Errorf("extension handler ran %d times behind the gate", n)
 	}
 }

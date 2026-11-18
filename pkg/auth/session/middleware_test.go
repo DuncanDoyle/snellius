@@ -309,7 +309,7 @@ func TestSessionEndsInFlight(t *testing.T) {
 					}
 					api.WriteJSON(w, "buffered")
 				})}
-				h := f.store.Middleware(api.NewHandler(noModel{}, fstest.MapFS{}, authz, api.WithSecureMode(true), api.WithExtMounts(ext),
+				h := f.store.Middleware(api.NewHandler(noModel{}, fstest.MapFS{}, authz, api.WithSecureMode(), api.WithExtMounts(ext),
 					api.WithCommitCheck(f.store.StillSignedIn)))
 				recs := make([]*httptest.ResponseRecorder, n)
 				var wg sync.WaitGroup
@@ -360,7 +360,7 @@ func (f *fixture) commitRun(c *http.Cookie, mid func(*http.Request), opts ...api
 		}
 		api.WriteJSON(w, data)
 	})}
-	opts = append([]api.HandlerOption{api.WithSecureMode(true), api.WithExtMounts(ext), api.WithCommitCheck(f.store.StillSignedIn)}, opts...)
+	opts = append([]api.HandlerOption{api.WithSecureMode(), api.WithExtMounts(ext), api.WithCommitCheck(f.store.StillSignedIn)}, opts...)
 	h := f.store.Middleware(api.NewHandler(noModel{}, fstest.MapFS{}, api.AllowAll{}, opts...))
 	req := httptest.NewRequest("GET", "/api/ext/probe/data", nil)
 	req.AddCookie(c)

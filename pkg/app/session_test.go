@@ -17,6 +17,7 @@ import (
 	"time"
 
 	authnv1 "k8s.io/api/authentication/v1"
+	authzv1 "k8s.io/api/authorization/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -70,6 +71,9 @@ func sessionApp(t *testing.T, cfg oidc.Config) *App {
 	kube.PrependReactor("create", "tokenreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, &authnv1.TokenReview{Status: authnv1.TokenReviewStatus{Authenticated: true,
 			User: authnv1.UserInfo{Username: "oidc:alice", Groups: []string{"oidc:dev"}}}}, nil
+	})
+	kube.PrependReactor("create", "subjectaccessreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &authzv1.SubjectAccessReview{Status: authzv1.SubjectAccessReviewStatus{Allowed: true}}, nil
 	})
 	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}},
 		Options{AuthMode: ModeSecure, OIDC: cfg, PollInterval: 10 * time.Millisecond, MetricsInterval: time.Hour, UI: ui, AuditOut: io.Discard},
@@ -129,8 +133,8 @@ func TestSecureSessionFlow(t *testing.T) {
 	if rec := call(a, "GET", "/auth/me", sess, nil); rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != `{"username":"oidc:alice","groups":["oidc:dev"]}` {
 		t.Fatalf("me = %d %s", rec.Code, rec.Body.String())
 	}
-	// With a session the request reaches the 7.1 gate.
-	if rec := call(a, "GET", "/api/v1/meta", sess, nil); rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "secure-mode-incomplete") {
+	// With a session the API serves.
+	if rec := call(a, "GET", "/api/v1/meta", sess, nil); rec.Code != http.StatusOK {
 		t.Fatalf("API with a session = %d %s", rec.Code, rec.Body.String())
 	}
 	if m := metricsText(a); !strings.Contains(m, "snellius_sessions_active 1") {

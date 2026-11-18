@@ -109,8 +109,6 @@ type Options struct {
 	// ClassOnlyInstalls adds an install per GatewayClass controllerName that no
 	// detector claims, known from Gateway API status alone.
 	ClassOnlyInstalls bool
-	// completeSecure serves secure mode without the data gate. Tests only.
-	completeSecure bool
 }
 
 // Diagnostics toggles the optional inputs (design §18.1): No* turns off a
@@ -415,8 +413,7 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		if o.Clock != nil {
 			clk = o.Clock
 		}
-		// The data gate stays closed in production; only tests set completeSecure.
-		hopts = append(hopts, api.WithSecureMode(o.completeSecure), api.WithCommitCheck(sessions.StillSignedIn),
+		hopts = append(hopts, api.WithSecureMode(), api.WithCommitCheck(sessions.StillSignedIn),
 			api.WithAuthzAudit(authzAuditor(auditLog)), api.WithCheckCapHit(capHitter(lim, eng.Installs)), api.WithCommitClock(clk.Now))
 	}
 	h := api.NewHandler(eng, o.UI, authz, hopts...)

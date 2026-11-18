@@ -105,7 +105,7 @@ func (a listAuthz) CanList(_ *http.Request, gk objects.GroupKind, ns string) (bo
 // secureServer serves src in complete secure mode with a.
 func secureServer(t *testing.T, src ModelSource, a Authorizer, opts ...HandlerOption) *httptest.Server {
 	t.Helper()
-	opts = append([]HandlerOption{WithSecureMode(true)}, opts...)
+	opts = append([]HandlerOption{WithSecureMode()}, opts...)
 	srv := httptest.NewServer(NewHandler(src, fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}, a, opts...))
 	t.Cleanup(srv.Close)
 	return srv
@@ -427,25 +427,6 @@ func TestCommitIdentityChecks(t *testing.T) {
 	}
 }
 
-// The closed gate stays in front of everything: no full read, no check.
-func TestGateStillAuthoritative(t *testing.T) {
-	a := &fullAuthz{errAuthz: &errAuthz{}, all: true}
-	srv := httptest.NewServer(NewHandler(staticModel{}, fstest.MapFS{"index.html": {Data: []byte("spa")}}, a,
-		WithExtMounts(refsExt(a, 3)), WithSecureMode(false), WithCommitCheck(func(_ http.ResponseWriter, r *http.Request) (*http.Request, error) {
-			t.Error("commit check ran behind the gate")
-			return r, nil
-		})))
-	t.Cleanup(srv.Close)
-	for _, p := range append(slices.Clone(gatePaths), "/api/ext/refs/n") {
-		if code, _, body := fetchRaw(t, srv, p); code != http.StatusServiceUnavailable || body != `{"error":"secure-mode-incomplete"}`+"\n" {
-			t.Errorf("GET %s: %d %q", p, code, body)
-		}
-	}
-	if a.count() != 0 || a.reads != 0 {
-		t.Errorf("%d checks, %d full reads behind the gate", a.count(), a.reads)
-	}
-}
-
 // canList is allow-all under a full read, false without a ListAuthorizer, and
 // records an error like can.
 func TestViewCanList(t *testing.T) {
@@ -741,7 +722,7 @@ func TestCommitStalledBodyHoldsNoPlace(t *testing.T) {
 	a := &placeAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: true}, place: make(chan struct{}, 1)}
 	b := &builds{}
 	h := NewHandler(staticModel{}, fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}, a,
-		WithSecureMode(true), WithExtMounts(b.mount(a, 3), readBody(a, &builds{}, 3)), WithCommitClock(clk.Now))
+		WithSecureMode(), WithExtMounts(b.mount(a, 3), readBody(a, &builds{}, 3)), WithCommitClock(clk.Now))
 	body := &stallReader{reading: make(chan struct{}), resume: make(chan struct{})}
 	posted := make(chan struct{})
 	go func() {
@@ -775,7 +756,7 @@ func TestCommitStalledBodyTimesOut(t *testing.T) {
 	clk := clocktesting.NewFakeClock(commitT0)
 	a := &placeAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: true}, place: make(chan struct{}, 1)}
 	h := NewHandler(staticModel{}, fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}, a,
-		WithSecureMode(true), WithExtMounts(readBody(a, &builds{}, 3)), WithCommitClock(clk.Now))
+		WithSecureMode(), WithExtMounts(readBody(a, &builds{}, 3)), WithCommitClock(clk.Now))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
@@ -849,7 +830,7 @@ func TestCommitEndedSessionReleasesFirst(t *testing.T) {
 		return nil, nil
 	})
 	h := NewHandler(staticModel{}, fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}, a,
-		WithSecureMode(true), WithExtMounts((&builds{}).mount(a, 3)), WithCommitClock(clk.Now), ended)
+		WithSecureMode(), WithExtMounts((&builds{}).mount(a, 3)), WithCommitClock(clk.Now), ended)
 	var held int32 = -1
 	w := watchWriter{httptest.NewRecorder(), func() {
 		if held < 0 {

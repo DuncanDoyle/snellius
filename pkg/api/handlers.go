@@ -36,8 +36,8 @@ type ModelSource interface {
 
 // NewHandler returns the HTTP handler for the API, the probes and the SPA in ui.
 // Every response with resources, findings or counts goes through authz; a nil
-// authz means AllowAll (D-013). Options add extension endpoints. In complete
-// secure mode every /api/ response goes through the commit wrapper (commit.go).
+// authz means AllowAll (D-013), except in secure mode, where it means DenyAll.
+// Options add extension endpoints. In secure mode every /api/ response goes through the commit wrapper (commit.go).
 func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOption) http.Handler {
 	var cfg handlerConfig
 	for _, o := range opts {
@@ -94,25 +94,11 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 			mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), bypassKey{}, true)))
 		})
 	}
-	switch {
-	case cfg.secure && !cfg.complete:
-		return secureGate(next)
-	case cfg.secure:
+	if cfg.secure {
 		admit, _ := authz.(Admitter)
 		return commit(next, admit, cfg.commitCheck, cfg.authzAudit, cfg.capHit, cfg.checkTrace, cfg.commitClock)
 	}
 	return next
-}
-
-// secureGate answers every /api/ path with 503 and passes the rest (SPA, probes) on.
-func secureGate(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			writeErr(w, http.StatusServiceUnavailable, "secure-mode-incomplete")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 type handler struct {

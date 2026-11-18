@@ -19,6 +19,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DuncanDoyle/snellius/pkg/api"
 )
 
 // issuerHost is the test issuer's name; setup.sh maps it for the node and the pod, and this client dials loopback.
@@ -118,8 +120,34 @@ func whoami(t *testing.T, c *http.Client) (int, me) {
 	return code, m
 }
 
+// checkData reads the data API as a signed-in user. setup.sh grants the test
+// users no RBAC, so every install is listed with its details hidden and its
+// routes page is empty.
+func checkData(t *testing.T, user string, c *http.Client) {
+	t.Helper()
+	code, body := call(t, c, http.MethodGet, "/api/v1/meta", nil)
+	if code != http.StatusOK {
+		t.Errorf("%s: /api/v1/meta = %d %s", user, code, body)
+	}
+	code, body = call(t, c, http.MethodGet, "/api/v1/installs", nil)
+	var insts []api.InstallSummary
+	if err := json.Unmarshal(body, &insts); code != http.StatusOK || err != nil || len(insts) == 0 {
+		t.Fatalf("%s: /api/v1/installs = %d %s", user, code, body)
+	}
+	for _, in := range insts {
+		if !in.DetailsHidden {
+			t.Errorf("%s: install %s shows its details without any RBAC", user, in.ID)
+		}
+	}
+	code, body = call(t, c, http.MethodGet, "/api/v1/installs/"+insts[0].ID+"/routes", nil)
+	var routes api.Page[json.RawMessage]
+	if err := json.Unmarshal(body, &routes); code != http.StatusOK || err != nil || len(routes.Items) != 0 || routes.Total != 0 {
+		t.Errorf("%s: routes of %s = %d %s, want 200 and an empty page", user, insts[0].ID, code, body)
+	}
+}
+
 // TestSignIn signs two users in through the test issuer and checks the
-// cluster's view of each, the closed data API, and logout.
+// cluster's view of each, the data API for each, and logout.
 func TestSignIn(t *testing.T) {
 	if os.Getenv("SECURE") != "1" {
 		t.Skip("needs SECURE=1 and a secure-mode install (test/e2e/setup.sh)")
@@ -150,13 +178,11 @@ func TestSignIn(t *testing.T) {
 				t.Errorf("%s: groups %v hold %s", tc.user, m.Groups, g)
 			}
 		}
-		// The data API stays closed until secure mode is complete.
-		code, body := call(t, tc.c, http.MethodGet, "/api/v1/meta", nil)
-		var e struct{ Error string }
-		_ = json.Unmarshal(body, &e)
-		if code != http.StatusServiceUnavailable || e.Error != "secure-mode-incomplete" {
-			t.Errorf("%s: /api/v1/meta = %d %s", tc.user, code, body)
-		}
+		checkData(t, tc.user, tc.c)
+	}
+	// Without a session the data API answers 401.
+	if code, _ := call(t, browser(t), http.MethodGet, "/api/v1/installs", nil); code != http.StatusUnauthorized {
+		t.Errorf("/api/v1/installs without a session = %d, want 401", code)
 	}
 
 	// A logout without the UI's Origin is refused and ends nothing.
