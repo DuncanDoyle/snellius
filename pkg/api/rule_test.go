@@ -990,8 +990,12 @@ var ruleSurfaces = []ruleSurface{
 	// The Gateway and ListenerSet route tables, and the two signal filters (design §8.2).
 	{name: "/routes?parent=Gateway", path: fixed("/routes?limit=200&parent=" + gw0Param), changes: []string{"listenerCount", "rejecting"}},
 	{name: "/routes?parent=ListenerSet", path: fixed("/routes?limit=200&parent=" + lsAllParam), changes: []string{"listenerSetRoute"}},
-	{name: "/routes?path", path: fixed("/routes?limit=200&path=unknown&path=healthy"), changes: []string{"rejecting", "created"}},
+	{name: "/routes?path=healthy", path: fixed("/routes?limit=200&path=healthy"), changes: []string{"created"}},
+	{name: "/routes?path=unknown", path: fixed("/routes?limit=200&path=unknown"), changes: []string{"pending"}},
 	{name: "/routes?config", path: fixed("/routes?limit=200&config=warning"), changes: []string{"computedTrigger"}},
+	// The summary's filter, and its sort through the restricted viewer's page 2 cursor.
+	{name: "/routes?health=healthy", path: fixed("/routes?limit=200&health=healthy"), changes: []string{"rejecting", "created"}},
+	{name: "/routes?sort=health page 2", path: sortedPage2, changes: []string{"created"}},
 	{name: "route detail (hidden parent)", path: routePath(ns0, "child", ""), changes: []string{"computedTrigger"}},
 	{name: "route detail (hidden Gateway)", path: routePath(ns0, namesHidden, ""), changes: []string{"rejecting"}},
 	{name: "delegation", path: routePath(ns0, delegToHidden, "/delegation"), changes: []string{"hiddenChild"}},
@@ -1049,11 +1053,22 @@ var ruleSurfaces = []ruleSurface{
 	{name: "route detail (shared leaf)", path: routePath(ns0, sharedLeaf, ""), changes: []string{"hiddenSelectsFits"}},
 }
 
+// sortedPage2 is routesPage2 under the health sort.
+func sortedPage2(t *testing.T, before, _ *httptest.Server) string {
+	t.Helper()
+	return pageAfter(t, before, ruleBase+"/routes?limit=50&sort=health.desc")
+}
+
 // routesPage2 is the routes list after the next cursor of the restricted
 // viewer's first page in the before world.
 func routesPage2(t *testing.T, before, _ *httptest.Server) string {
 	t.Helper()
-	const page = ruleBase + "/routes?limit=50"
+	return pageAfter(t, before, ruleBase+"/routes?limit=50")
+}
+
+// pageAfter is page after the next cursor of the restricted viewer's first page of it in before.
+func pageAfter(t *testing.T, before *httptest.Server, page string) string {
+	t.Helper()
 	next := decode[api.Page[api.RouteRow]](t, before, restrictedUser, page).Next
 	if next == "" {
 		t.Fatal("the restricted viewer's first routes page has no next cursor")
@@ -1079,7 +1094,9 @@ var ruleMasks = map[[2]string][]string{
 	// Deleting hidden-gw takes hidden-parent's child out of the install (D-107); nothing else moves.
 	{"/routes", "deleted"}:                      {"items.@child", "total"},
 	{"/routes?namespaces=visible", "deleted"}:   {"items.@child", "total"},
-	{"/routes?path", "deleted"}:                 {"items.@child", "total"},
+	{"/routes?path=unknown", "deleted"}:         {"items.@child", "total"},
+	{"/routes?health=healthy", "deleted"}:       {"items.@child", "total"},
+	{"/routes?sort=health page 2", "deleted"}:   {"items.@child", "total"},
 	{"/routes page 2", "deleted"}:               {"total"},
 	{"route detail (hidden parent)", "deleted"}: {""},
 	// The same move takes child out of the overview's HTTPRoute count and be-0000's routes.
