@@ -38,10 +38,7 @@
         ],
         "path": {
           "incomplete": false,
-          "reason": {
-            "kind": "not-attached"
-          },
-          "state": "unknown"
+          "state": "healthy"
         },
         "ref": {
           "group": "gateway.networking.k8s.io",

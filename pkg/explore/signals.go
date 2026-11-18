@@ -50,7 +50,7 @@ func (ix *Index) ObjectSignals(u *unstructured.Unstructured, vw Viewer) (config,
 // signals composes route r's configuration and its path from pr. A readable
 // error or warning decides the path, incomplete or not; then an incomplete
 // path is unknown, then an unknown row, the install-wide unknown, and a
-// route without rows is not attached (design §8.1).
+// route without rows that no parent accepted is not attached (design §8.1).
 func (ix *Index) signals(r *RouteRow, vw Viewer, pr PathRows) (config, path Signal, backend *objects.Ref) {
 	unknown := ix.unknown
 	if vw.Shown != nil {
@@ -67,7 +67,7 @@ func (ix *Index) signals(r *RouteRow, vw Viewer, pr PathRows) (config, path Sign
 		path.State, path.Reason = health.StateUnknown, pr.Reason
 	case unknown:
 		path.State, path.Reason = health.StateUnknown, &health.RowReason{Kind: health.ReasonUnknown}
-	case pr.Rows == 0:
+	case pr.Rows == 0 && r.Flags&FlagAccepted == 0:
 		path.State, path.Reason = health.StateUnknown, &health.RowReason{Kind: health.ReasonNotAttached}
 	default:
 		path.State = health.StateHealthy
@@ -87,10 +87,21 @@ func (ix *Index) config(ref objects.Ref, vw Viewer) Signal {
 }
 
 // incomplete reports whether vw cannot assess route r's whole path: its
-// permissions leave a ref unreadable, or it gets no delegation analysis
-// (D-114) and r names a parent route. Both are permissions alone.
+// permissions leave a ref unreadable, it gets no delegation analysis (D-114)
+// and r names a parent route, or r's status says accepted while vw.Path
+// admits none of its rows. Rows are admitted by readable dependencies only.
 func (ix *Index) incomplete(r *RouteRow, vw Viewer) bool {
-	return vw.Perms != nil && (ix.routeIncomplete(r, vw.Perms) || vw.NoDelegation && len(ix.routeData(r).routeParents) > 0)
+	if vw.Perms == nil {
+		return false
+	}
+	if ix.routeIncomplete(r, vw.Perms) || vw.NoDelegation && len(ix.routeData(r).routeParents) > 0 {
+		return true
+	}
+	if vw.Path == nil || r.Flags&FlagAccepted == 0 {
+		return false
+	}
+	id, ok := ix.Row(r.Ref)
+	return ok && vw.Path(id).Rows == 0
 }
 
 // indexPath is route r's path from the index alone, for a viewer without

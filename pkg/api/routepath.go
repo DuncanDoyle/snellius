@@ -28,15 +28,28 @@ type routePaths struct {
 }
 
 // routePaths is the path reader of install i for the caller of v over the
-// routes covers admits; covers runs on route refs before any check.
+// routes covers admits; covers runs on route refs before any check. Nil
+// without computed views, which derive no path rows: the index decides then.
 func (h *handler) routePaths(p *engine.Published, i *engine.InstallModel, ix *explore.Index, v *view, covers func(objects.Ref) bool) *routePaths {
+	if i.Computed == nil {
+		return nil
+	}
 	t, proj, _ := h.pathModel(p, i, v)
 	pick := func(r paths.Row) bool { return t.ChainHolds(r, covers) }
 	prefetchRows(v, t, pick)
-	visible := v.visibleRows(t, pick)
+	// The target a route writes is read by name, as the route detail's trace reads it (D-100 item 1).
+	visible := func(r paths.Row) bool { return pick(r) && v.allowTableNamed(t, t.Deps(r), writtenTarget(t, r)) }
 	proj = proj.For(t, v.projectInput(p, i), v.scopedFilter(i, t, visible))
 	return &routePaths{v: v, i: i, ix: ix, t: t, proj: proj, visible: visible,
 		deciding: map[explore.RowID]paths.Signal{}, done: map[explore.RowID]explore.PathRows{}}
+}
+
+// pathFunc is rp's path for an explore.Viewer; nil for a nil rp.
+func (rp *routePaths) pathFunc() func(explore.RowID) explore.PathRows {
+	if rp == nil {
+		return nil
+	}
+	return rp.path
 }
 
 // path is route row id's path rows: the worst state over the rows the caller
@@ -95,6 +108,9 @@ func (rp *routePaths) read(id explore.RowID) explore.PathRows {
 // message is the shown finding message of route row id's deciding signal, or
 // "". Titles are read once for every route answered so far.
 func (rp *routePaths) message(id explore.RowID) string {
+	if rp == nil {
+		return ""
+	}
 	s, ok := rp.deciding[id]
 	if !ok || s.Kind != paths.SignalFinding {
 		return ""

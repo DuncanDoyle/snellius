@@ -115,10 +115,11 @@ func (h *handler) routes(w http.ResponseWriter, r *http.Request) {
 			ls.addInScope(add, ls.ix.Routes[i].Ref)
 		}
 	})
-	// The path filter reads every scoped route's path rows; otherwise only the page's are read.
-	if len(ls.q.Path) > 0 {
+	// The path filter, and a restricted viewer's health filter or sort, read every scoped route's path rows; else only the page's.
+	filtered := len(ls.q.Path) > 0 || ls.vw.Perms != nil && (len(ls.q.Health) > 0 || ls.q.Sort.Key == "health")
+	if filtered {
 		ls.paths = h.routePaths(ls.p, ls.i, ls.ix, ls.v, func(ref objects.Ref) bool { return explore.InScope(ls.q.Scope, ref.Namespace) })
-		ls.vw.Path = ls.paths.path
+		ls.vw.Path = ls.paths.pathFunc()
 	}
 	pg, err := ls.ix.QueryRoutesAs(ls.q, ls.vw)
 	if err != nil {
@@ -126,13 +127,13 @@ func (h *handler) routes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ls.prefetchRouteRows(pg.IDs)
-	if ls.paths == nil {
+	if !filtered {
 		onPage := make(map[objects.Ref]bool, len(pg.IDs))
 		for _, id := range pg.IDs {
 			onPage[ls.ix.Routes[id].Ref] = true
 		}
 		ls.paths = h.routePaths(ls.p, ls.i, ls.ix, ls.v, func(ref objects.Ref) bool { return onPage[ref] })
-		ls.vw.Path = ls.paths.path
+		ls.vw.Path = ls.paths.pathFunc()
 	}
 	items := make([]RouteRow, 0, len(pg.IDs))
 	for _, id := range pg.IDs {

@@ -151,7 +151,8 @@ func TestRouteSignalsUnknownKeepsReadableFault(t *testing.T) {
 }
 
 // Viewer.Path's rows decide the path: their worst state and reason, with
-// incompleteness still from permissions; no readable row is not attached.
+// incompleteness from permissions and from an accepted route without a
+// readable row; a route no parent accepted and without rows is not attached.
 func TestRouteSignalsFromPathRows(t *testing.T) {
 	ix := signalWorld(t)
 	listener := &health.RowReason{Kind: health.ReasonPathProblem, Code: "ResolvedRefs"}
@@ -160,6 +161,7 @@ func TestRouteSignalsFromPathRows(t *testing.T) {
 		"both":    {State: health.StateWarning, Reason: listener, Rows: 1},
 		"vaulted": {State: health.StateHealthy, Rows: 1},
 		"bare":    {State: health.StateHealthy},
+		"free":    {State: health.StateHealthy},
 	}
 	vw := vaultViewer()
 	vw.Path = func(id RowID) PathRows { return rows[ix.Routes[id].Ref.Name] }
@@ -167,7 +169,9 @@ func TestRouteSignalsFromPathRows(t *testing.T) {
 		"cart":    {health.StateHealthy, health.StateError, health.StateHealthy, health.ReasonPathProblem, false},
 		"both":    {health.StateHealthy, health.StateWarning, health.StateUnknown, health.ReasonPathProblem, true},
 		"vaulted": {health.StateHealthy, health.StateUnknown, health.StateUnknown, health.ReasonPathIncomplete, true},
-		"bare":    {health.StateHealthy, health.StateUnknown, health.StateHealthy, health.ReasonNotAttached, false},
+		// Accepted, yet no row the viewer may read: incomplete. Never accepted: not attached.
+		"bare": {health.StateHealthy, health.StateUnknown, health.StateUnknown, health.ReasonPathIncomplete, true},
+		"free": {health.StateHealthy, health.StateUnknown, health.StateHealthy, health.ReasonNotAttached, false},
 	})
 }
 
