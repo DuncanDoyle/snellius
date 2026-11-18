@@ -9,6 +9,7 @@ import type { GatewayDetail, LinkedRef, PathRow, PathSummary, PathsResponse } fr
 import { renderWithTheme, testSWR } from "../../test/render";
 import { defaultThemes } from "../../theme/themes";
 import { GatewayPage } from "../explore/GatewayPage";
+import { useChildRouteHealth } from "./childRouteHealth";
 import { dedupeRows, useMapPaths } from "./mapData";
 
 // No timed polls: a slow draw would let one walk the pages again mid-test. Tests poll with mutate.
@@ -1001,6 +1002,84 @@ it("a delegating route shows its delegated route at rest and can be collapsed; E
   await user.keyboard("{Escape}");
   await waitFor(() => expect(screen.queryByTestId("map-focus")).toBeNull());
   expect(screen.getByTestId("location")).not.toHaveTextContent("focus=");
+});
+
+/** Wraps serve's fetch: GET routes?parent=shop/api answers by childAnswer; any other routes query is empty. */
+function serveChildQuery(childAnswer: (call: number) => Response) {
+  serve(() => edgePaths());
+  const base = vi.mocked(fetch);
+  let calls = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      const u = new URL(url, "http://ui");
+      if (u.pathname !== `${API}/routes`) return base(url, init);
+      if (!u.searchParams.get("parent")?.endsWith("/shop/api")) return Response.json({ ...emptyRoutes() });
+      return childAnswer(++calls);
+    }),
+  );
+  return () => calls;
+}
+const emptyRoutes = () => ({ install: ID, items: [], total: 0, collectedAt: now() });
+const childPage = (health: "warning" | "healthy"): Response =>
+  Response.json({
+    ...emptyRoutes(),
+    items: [
+      { ref: { group: "gateway.networking.k8s.io", kind: "HTTPRoute", namespace: "shop", name: "child" }, health },
+    ],
+    total: 1,
+  });
+const unavailable = () => Response.json({ error: "authz-unavailable" }, { status: 503 });
+
+it("a delegated route's node shows the child query's summary health, not its rows' state", async () => {
+  const calls = serveChildQuery(() => childPage("warning"));
+  mount("?tab=map");
+  const map = await screen.findByTestId("gateway-map");
+  await waitFor(() => expect(flowNode(map, "shop/child")).toHaveTextContent(/Warning/));
+  expect(calls()).toBe(1);
+});
+
+it("a 503 child query is retried, then the node reads the summary", async () => {
+  const calls = serveChildQuery((n) => (n === 1 ? unavailable() : childPage("warning")));
+  mount("?tab=map");
+  const map = await screen.findByTestId("gateway-map");
+  await waitFor(() => expect(flowNode(map, "shop/child")).toHaveTextContent(/Warning/), { timeout: 3000 });
+  expect(calls()).toBe(2);
+});
+
+it("a child query that keeps answering 503 is retried a bounded number of times, then the rows' state stays", async () => {
+  const calls = serveChildQuery(unavailable);
+  mount("?tab=map");
+  const map = await screen.findByTestId("gateway-map");
+  await waitFor(() => expect(calls()).toBe(3), { timeout: 3000 });
+  expect(flowNode(map, "shop/child")).toHaveTextContent(/Healthy/);
+  expect(calls()).toBe(3);
+});
+
+it("child queries run two at a time", async () => {
+  let active = 0;
+  let peak = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => {
+      peak = Math.max(peak, ++active);
+      await new Promise((r) => setTimeout(r, 10));
+      active--;
+      return Response.json(emptyRoutes());
+    }),
+  );
+  const parents = Array.from({ length: 6 }, (_, k) => ({
+    group: "gateway.networking.k8s.io",
+    kind: "HTTPRoute",
+    namespace: "shop",
+    name: `p${k}`,
+    link: "detail" as const,
+  }));
+  const { result } = renderHook(() => useChildRouteHealth(ID, parents), { wrapper: hookWrapper });
+  await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(6));
+  await waitFor(() => expect(active).toBe(0));
+  expect(result.current.size).toBe(0);
+  expect(peak).toBe(2);
 });
 
 it("find locates a route its collapsed parent hides: the parent opens and the route is selected", async () => {
