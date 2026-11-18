@@ -64,20 +64,23 @@ Topics the user-facing documentation must cover when it is written. Each entry s
 - **Two modes.** Flag `--auth-mode`, chart value `auth.mode`, default `local`. Explain what each means for who sees what.
 - **Local mode.** No sign-in. Snellius listens on `127.0.0.1:8080` in the pod, so only `kubectl port-forward` reaches it. Whoever can port-forward (needs `pods/portforward` in its namespace) sees everything Snellius reads. A banner on every page says so.
 - **Refusals.** A Host that is not localhost (or in `auth.allowedHosts`) gets 421; a cross-origin request gets 403. Explain both, and that the binary refuses a non-loopback `--listen` or host networking, and the chart refuses `httpRoute.enabled`.
-- **Secure mode.** OIDC sign-in with visibility that follows Kubernetes RBAC, from `v0.8.0`. Since 7.5 (cd667e0) it serves each signed-in user only what their RBAC allows; a custom policy can only narrow it. Write the setup in 7.6.
+- **Secure mode.** OIDC sign-in with visibility that follows Kubernetes RBAC, from `v0.8.0`. Since 7.5 (cd667e0) it serves each signed-in user only what their RBAC allows; a custom policy can only narrow it. 
 - **Upgrade break.** An install with `httpRoute.enabled` needs `auth.mode: secure`. Explain why (an HTTPRoute exposed an unauthenticated view up to `v0.7.x`; local mode is loopback-only), give the two choices (secure mode from `v0.8.0`, or port-forward), and say not to upgrade it to a development build.
+- **Written (7.6).** README "Security and trust model", "Secure mode" and "Upgrade notes"; chart README.
 
 ## Audit stream (2026-11-14, Phase 7 sub-phase 7.1)
 
 - **Format.** JSON lines on stdout, each with `"log":"snellius.audit"`. Document the record fields once more than the startup record exists.
 - **Levels.** `--audit-levels` (chart `audit.levels`), default `security,agent,reads,summaries`. Explain what each level records.
 - **Request ID.** Every response from the UI and API listener carries `X-Request-Id` (the probe listener does not); say how to match it to audit lines.
+- **Written (7.6).** README "Audit stream": levels, collapsing, fields, what is never recorded, request ID.
 
 ## Probe port and metrics (2026-11-14, Phase 7 sub-phase 7.1)
 
 - **Probe listener.** `--probe-listen`, chart container port `probe` (8081). It serves `/healthz`, `/readyz` and `/metrics`, and the probes use it.
 - **Readiness body.** `/readyz` lists no install IDs; they go to the log.
 - **Metrics.** `snellius_auth_mode{mode}`, `snellius_audit_records_total{level}`, `snellius_audit_dropped_total{level}`. Say how to scrape them and that a NetworkPolicy must allow it.
+- **Written (7.6).** README "Probe port and metrics" and chart README "Probes and metrics".
 
 ## Secure-mode sign-in (2026-11-14, Phase 7 sub-phase 7.2)
 
@@ -87,6 +90,7 @@ Topics the user-facing documentation must cover when it is written. Each entry s
 - **Sessions.** What a session is (one signed-in browser), and the three settings: `auth.session.idle` (30m), `auth.session.absolute` (8h) and `auth.session.max` (1,000; past it, the session unused for longest ends). Say that the IdP's refresh-token lifetime also ends a session, whichever comes first. Cover the identity check at least every 15 minutes, and that a restart signs everyone out. Explain why one replica.
 - **Sign-out.** RP-initiated logout: `client_id` and the app root as `post_logout_redirect_uri`, no ID token hint. Say what happens when the IdP has no end-session endpoint (the browser returns to the app root).
 - **HTTPS and cookies.** `cookieSecure=false` only for a localhost redirect. Behind a gateway, the route must carry TLS and operator authentication.
+- **Written (7.6).** README "Secure mode": the steps, both audience options, `kubectl auth whoami`, sessions, sign-out, sign-in errors, the trusted proxy setting. Still open: the per-provider IdP walkthroughs, and a fuller `/signin-failed` troubleshooting entry per reason with the log lines to read.
 
 ## Permission checks (2026-11-15, Phase 7 sub-phase 7.3)
 
@@ -97,6 +101,7 @@ Topics the user-facing documentation must cover when it is written. Each entry s
 - **Failing closed.** A failed check answers `503 authz-unavailable`, never a partial page or a 404, and writes a `security` audit record `authz-unavailable` with the reason (`check-failed`, `check-limit`, `full-read-failed`, `expired`, `identity-stale`). Explain the 1,000-check limit per request. A full admission queue (D-116) answers `503 authz-busy` instead, audited with reason `queue-full`; the page says Snellius is busy and retries by itself.
 - **RBAC.** Secure mode adds `create` on `subjectaccessreviews`. Say which kinds a user needs `list` on for the full-read path.
 - **Metrics.** `snellius_authz_checks_total{verb,outcome}`, `snellius_authz_check_seconds_total`, `snellius_authz_cache_total{result}`, `snellius_authz_identities`.
+- **Written (7.6).** README "Secure mode" notes (permission checks, what lists show, faster revocation, fewer checks) and "Capacity and tuning". Not folded in: the 3 min first-answer wait and 3% `expired` figure for 50 cold viewers.
 
 ## Visibility for restricted viewers (2026-11-17, Phase 7 sub-phase 7.4)
 
@@ -107,6 +112,7 @@ Topics the user-facing documentation must cover when it is written. Each entry s
 - **Install context.** List what every viewer sees regardless of RBAC: the install list and IDs (D-102, D-103), controller settings (D-106), membership (D-107), collection failures and Snellius's own RBAC (D-108), the response time (D-109). Say plainly that these are accepted exceptions.
 - **Times.** For a viewer without the full read, per-result times and `/installs` `computedAt` are the confirmation time (D-109).
 - **Backend detail read time.** Endpoint reads are kept for 5 s, so a backend detail page can show that someone opened the same Service just before. Document it as a known side channel that reveals no hidden object.
+- **Written (7.6).** README "What each user sees". Not folded in: the RBAC rules a team needs for each below-full-read exception, as ready-to-copy Roles.
 
 ## Namespace scope (2026-11-17, Phase 7 sub-phase 7.4)
 
@@ -114,8 +120,10 @@ Topics the user-facing documentation must cover when it is written. Each entry s
 - **Where it lives.** One browser setting for every install, kept across reloads. Explain the marker on the header and the scoped empty state with "Show all namespaces".
 - **Why use it.** A scoped page asks about a tenth of the permission checks on a large cluster. Give the measured numbers from the 7.4 bench.
 - **API.** `namespaces=` on the seven lists (at most 100 names, `400` on a bad value) and `GET /api/v1/installs/{id}/namespaces`.
+- **Written (7.6).** README "Namespace scope". The README states the "about tenfold" cut; the 7.4 bench numbers are not in it.
 
 ## Many viewers at once (2026-11-18, Phase 7 sub-phase 7.5, D-116 to D-118)
 - When many restricted viewers open pages at the same moment (for example after a Snellius restart), page loads are answered in turn, oldest first; the last can wait minutes. Viewers with full read access and polls with cached answers don't wait.
 - Capacity at the default 100 checks/s: on a cluster of about 100 namespaces, 50 restricted viewers polling `/backends` every 5 s need about 95 checks/s, so their polls slow to about 12 s. Raise `auth.authz.rate` if the API server can take it; scoping a page to a namespace cuts its checks sharply.
 - The permission cache stays at 8 MiB and holds about 40,000 answers (about 210 B each).
+- **Written (7.6).** README "Capacity and tuning".

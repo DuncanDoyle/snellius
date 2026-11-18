@@ -33,13 +33,25 @@ Snellius runs in one of two modes. Set it with `--auth-mode` or the chart value 
 - At startup, local mode logs a warning with the bind address that anyone who can port-forward sees everything Snellius reads.
 - The binary refuses a non-loopback `--listen` and a pod on host networking in local mode. The chart refuses `httpRoute.enabled` in local mode.
 
-**Secure mode.** OIDC sign-in, with visibility per user that follows Kubernetes RBAC, is available from `v0.8.0`. A build started with `--auth-mode=secure` serves each signed-in user only what their Kubernetes RBAC allows, and answers `401` without a session. Main is a development build until `v0.8.0`. Setup steps are in [Secure mode](#secure-mode).
+**Secure mode.** Users sign in with OIDC, and each user sees only what their own Kubernetes RBAC allows. Snellius answers `401` to an `/api/` request without a session. Setup steps are in [Secure mode](#secure-mode). Use it for any install that you expose through a Gateway.
+
+| | Local mode | Secure mode |
+|---|---|---|
+| Sign-in | None | OIDC |
+| Listens on | `127.0.0.1:8080` in the pod | `:8080` on the pod IP |
+| Reached through | `kubectl port-forward` | A Gateway route, or the Service |
+| What a user sees | Everything Snellius can read | What the user's own RBAC allows |
+| Permission checks | None | SubjectAccessReview, on the API server |
+| ClusterRole extras | None | `create` on `tokenreviews` and `subjectaccessreviews` |
 
 **Both modes.**
 
+- **What Snellius reads.** Snellius reads the cluster with its own ServiceAccount, never with a user's token. The ClusterRole grants only `get`, `list` and `watch` (see [What it reads](#what-it-reads)). A user can never see more than that, whatever their own RBAC allows.
+- **Where checks happen.** In secure mode, Snellius asks the API server whether the signed-in user may read each object (a SubjectAccessReview as that user), and filters its own data with the answer. The API server stays the only place that evaluates RBAC. Snellius keeps no permission model of its own.
 - **No Secrets.** The UI never reads Secrets, and its ClusterRole excludes them. No other field is redacted, because a secret can sit in any field, such as an inline token or a literal env var.
-- **Audit stream.** Snellius writes JSON audit lines to stdout, each with `"log":"snellius.audit"`. Select the levels with `--audit-levels` (chart `audit.levels`, default `security,agent,reads,summaries`). The `security` level records startup, sign-in success and failure, sign-out, a session that ends and a session evicted at the limit.
+- **Audit stream.** Snellius writes JSON audit lines to stdout. See [Audit stream](#audit-stream).
 - **Request IDs.** Every response from the UI and API listener carries an `X-Request-Id`. The probe listener does not.
+- **Downstream builds.** In secure mode, an authoriser that a downstream build registers can only narrow what a user sees. Every decision needs both Kubernetes RBAC and the build's authoriser to allow it.
 
 ### Secure mode
 
@@ -94,6 +106,8 @@ Managed clusters whose API server accepts only the cloud's own tokens, such as G
          existingSecret: snellius-oidc   # omit for a public client
        ca:
          existingConfigMap: snellius-oidc-ca   # omit for a public CA
+     trustedProxyCIDRs:
+       - 10.42.0.0/16   # the Gateway's proxy pods; omit when nothing sits in front of Snellius
    httpRoute:
      enabled: true
      parentRefs:
@@ -102,6 +116,10 @@ Managed clusters whose API server accepts only the cloud's own tokens, such as G
      hostnames:
        - snellius.example.com
    ```
+
+   `auth.trustedProxyCIDRs` (`--trusted-proxy-cidrs`) lists the proxies that sit in front of Snellius. For a request from one of them, Snellius keeps its `X-Request-Id`, and the audit `source` is the right-most `X-Forwarded-For` address that is not itself a listed proxy. For any other peer, the source is the connection's address and both headers are ignored. The setting changes only the audit stream and the request ID. It never changes who can sign in or what they see. Without it, every audit `source` is the Gateway's address.
+
+   Put the Gateway's own sign-in or access control on the route too, so that only the people you intend reach the sign-in page.
 5. **Check the result.** Run `kubectl auth whoami` as the same user, with the same IdP. Open Snellius, sign in, and select Account details in the user menu. The username and groups match the `kubectl auth whoami` output.
 
 Notes:
@@ -112,7 +130,7 @@ Notes:
 - **What lists show.** An object appears in a list, count or summary only when the user may `list` its kind in its namespace, or cluster-wide for a cluster-scoped kind. An object the user may only `get` by name (a `resourceNames` grant) still opens on its detail page, and when an object the user can read names it. Set `auth.authz.namedGetScan: true` to show such objects in lists too. It costs one check per object the user cannot list.
 - **Faster revocation.** For faster permission revocation, set `auth.authz.cacheTTL: 30s` and shorten `auth.session.idle` and `auth.session.absolute`. The cache TTL limits how long an allowed permission check is reused. Identity-provider changes and authorization caches in the API server can take longer. Idle expiry does not end a session that keeps polling, so use a shorter absolute lifetime where that matters. A `30s` TTL repeats each allowed check twice as often as the default.
 - **Fewer checks.** A `cacheTTL` up to `15m` trades freshness for fewer checks. A removed RoleBinding then stays effective in Snellius for up to that TTL.
-- **Check load.** Across all users, Snellius sends at most 32 checks to the API server at once (`auth.authz.maxInFlight`) and 100 per second (`auth.authz.rate`, at most `10000`), with a burst of 500 above the rate (`auth.authz.burst`). Checks use their own client, so these limits are the only throttle. Raise them for a large cluster or many users when pages report that Snellius can't check permissions. One request makes at most 1,000 uncached checks. Past that it answers `503 authz-unavailable`, never a partial page.
+- **Check load.** Snellius limits the checks it sends to the API server. See [Capacity and tuning](#capacity-and-tuning).
 - **Sign-out.** The Sign out menu item ends the session and sends the browser to the IdP's end-session endpoint, if the IdP publishes one. Snellius sends `client_id` and a `post_logout_redirect_uri` that is the app root. It sends no ID token hint.
 - **Sign-in errors.** A failed sign-in lands on `/signin-failed` with the reason `unauthenticated` (the API server does not accept the token, for example because it does not accept the client ID as an audience) or `invalid` (the login attempt has no open transaction or a wrong state, the code exchange or ID token check fails, or the token review itself fails).
 - **Routes.** Secure mode serves `/auth/login`, `/auth/callback`, `/auth/me` and `POST /auth/logout`. `/auth/status` reports the mode and whether sign-in is ready. Local mode serves only `/auth/status`.
@@ -152,6 +170,59 @@ The namespace selector in the header limits the list pages to the namespaces you
 - **Fewer checks.** A scoped list checks permissions only in the chosen namespaces. On a large cluster this cuts the checks for a cold page about tenfold.
 - **API.** The lists `/routes`, `/gateways`, `/listenersets`, `/paths`, `/backends`, `/findings` and `/processes` take `namespaces=a,b`, in both modes. Give it once, with up to 100 namespace names. An empty or invalid value answers `400`. `GET /api/v1/installs/{id}/namespaces` lists the namespaces that hold routes, Gateways or ListenerSets the user can see.
 
+#### Capacity and tuning
+
+Each restricted viewer's page needs permission checks, and Snellius sends them to the API server within these limits. They apply across all users, and checks use their own client, so these are the only throttle.
+
+| Setting | Flag | Default | Meaning |
+|---|---|---|---|
+| `auth.authz.maxInFlight` | `--authz-max-in-flight` | `32` | Checks in flight at once |
+| `auth.authz.rate` | `--authz-rate` | `100` | Checks per second, `1` to `10000` |
+| `auth.authz.burst` | `--authz-burst` | `500` | Checks allowed above the rate before it applies |
+| `auth.authz.cacheTTL` | `--authz-cache-ttl` | `60s` | How long an allowed answer is reused, `30s` to `15m` |
+
+- **Who is affected.** A user with the full read (the `list` rights in [What each user sees](#what-each-user-sees)) needs no per-object checks. So do polls that the cache answers. Only restricted viewers whose cache is cold or expired send checks.
+- **Many viewers at once.** Page loads that need new checks wait in turn, oldest first. After a restart, when many restricted viewers load a page at the same moment, the last one can wait minutes. When too many requests wait, Snellius answers `503 authz-busy`. The page then says Snellius is busy and retries on its next poll. A failed check answers `503 authz-unavailable` instead.
+- **How much the default carries.** On a cluster of about 100 namespaces, 50 restricted viewers who poll the Backends page every 5 seconds need about 95 checks per second. That is close to the default of 100. Their polls then slow to about 12 seconds, and still answer. Sustained demand above the rate answers `503 authz-unavailable`.
+- **What to do.** Raise `auth.authz.rate` when many restricted viewers use a large cluster, and make sure the API server can take the load. Ask users to pick a namespace in the header: a scoped page checks only those namespaces, which cuts the checks for a cold page about tenfold on a large cluster.
+- **Memory.** The permission cache holds about 40,000 answers in 8 MiB. Its size is not a setting.
+- **Watch it.** `snellius_authz_checks_total{verb,outcome}`, `snellius_authz_cache_total{result}` and `snellius_authz_cache_evictions_total` on `/metrics` show the load and the cache. A rising `authz-unavailable` count in the audit stream, with reason `expired` or `check-limit`, says the limits are too low for the demand.
+
+### Audit stream
+
+Snellius writes audit records as JSON lines on stdout, each with `"log":"snellius.audit"`. Operational logs use a different format. Snellius does not store, rotate or sign the records. Keep and protect them in your log collector or SIEM.
+
+Select the levels with `--audit-levels` (chart `audit.levels`). The default is `security,agent,reads,summaries`.
+
+| Level | Default | Records |
+|---|---|---|
+| `security` | on | Startup (with the mode and listen address), sign-in success and failure, sign-out, a session that ends, a session evicted at the limit, a refused request (`denial`), and `authz-unavailable` with its reason |
+| `agent` | on | Each agent tool call. Nothing emits it yet. |
+| `reads` | on | Each detail, YAML or export read |
+| `summaries` | on | List and overview access, counted per session, endpoint and filter set |
+| `disclosure` | off | The object references that a response returned |
+| `requests` | off | Every API request |
+
+- **Collapsing.** Repeated denials of the same request collapse into one record per minute, with a `count`. Summaries flush every 5 minutes and at shutdown, with a `count`. Rows left out of a list are filtering, not denials, so they are not recorded.
+- **Fields.** `schema`, `id`, `time` (UTC), `level`, `action`, `outcome`, `reason`, `user` (issuer and subject), `kube` (username and groups), `session` (an opaque ID, not the cookie), `request` (ID, method, route template and allow-listed filters), `install`, `server`, `refs`, `source`, `userAgent` and `count`. Empty fields are left out.
+- **Never recorded.** Tokens, cookies, raw query strings and response bodies.
+- **Matching a response.** Every response carries `X-Request-Id`. The same value is in the `request.id` of the audit records that the request wrote, so a user's report maps to its lines.
+- **Local mode.** It writes only the startup record.
+- **Drops.** A record that cannot be queued or written counts in `snellius_audit_dropped_total{level}`. A window holds at most 10,000 open keys. Past that, the oldest flushes early.
+
+### Probe port and metrics
+
+The probe listener serves `/healthz`, `/readyz` and `/metrics` on container port `probe` (8081, `--probe-listen`), in both modes. It serves no cluster data, and `/readyz` lists no install IDs. The chart's probes use it. Scrape `/metrics` on that port. If a NetworkPolicy limits traffic to the pod, allow your scraper to reach 8081.
+
+| Metric | Meaning |
+|---|---|
+| `snellius_auth_mode{mode}` | The running mode |
+| `snellius_audit_records_total{level}`, `snellius_audit_dropped_total{level}` | Audit records written and dropped |
+| `snellius_sessions_active` | Signed-in sessions in memory |
+| `snellius_authz_checks_total{verb,outcome}`, `snellius_authz_check_seconds_total` | Permission checks sent, by result, and their time |
+| `snellius_authz_cache_total{result}`, `snellius_authz_cache_evictions_total`, `snellius_authz_cache_bytes`, `snellius_authz_identities` | The permission cache |
+| `snellius_limit_hits_total{limit}` | Hits of Snellius's own size limits |
+
 ## Install
 
 ```sh
@@ -165,7 +236,7 @@ kubectl -n snellius port-forward svc/ui-snellius 8080:80
 
 The image is `ghcr.io/duncandoyle/snellius`. Installing from a checkout needs `--set image.tag=<version>`; see the [chart README](deploy/helm/snellius/README.md#install). To pin the UI to one install, set `install.pin`. To expose it through a Gateway:
 
-1. Read [Security and trust model](#security-and-trust-model). Secure mode serves data only from `v0.8.0`.
+1. Read [Security and trust model](#security-and-trust-model).
 2. Set `auth.mode: secure`.
 3. Set `httpRoute.enabled`, `httpRoute.parentRefs` and `httpRoute.hostnames`.
 
@@ -188,6 +259,8 @@ Flags:
 - `--listen`: listen address (default `127.0.0.1:8080`; `:8080` in-cluster in secure mode). Local mode requires a loopback address.
 - `--auth-mode`: `local` (default) or `secure`; see [Security and trust model](#security-and-trust-model).
 - `--allowed-hosts`: extra Host names accepted in local mode.
+- Secure mode: `--oidc-issuer-url`, `--oidc-client-id`, `--oidc-client-secret-file`, `--oidc-redirect-url`, `--oidc-ca-file`, `--oidc-scopes`, `--cookie-secure`, `--session-idle`, `--session-absolute`, `--session-max`, `--authz-cache-ttl`, `--authz-named-get-scan`, `--authz-max-in-flight`, `--authz-rate` and `--authz-burst`. The chart's `auth.*` values set them; see the [chart README](deploy/helm/snellius/README.md#values).
+- `--trusted-proxy-cidrs`: comma-separated CIDRs of proxies whose `X-Request-Id` and `X-Forwarded-For` Snellius trusts (chart `auth.trustedProxyCIDRs`).
 - `--probe-listen`: listen address of the probe listener (`/healthz`, `/readyz`, `/metrics`). The chart uses container port `probe` (8081).
 - `--audit-levels`: audit levels written to stdout (default `security,agent,reads,summaries`).
 - `--poll-interval`: maximum time between model recomputes, the safety timer (default 30s). The model recomputes on object, access, metrics and served-kind changes; `2s` restores the earlier fixed cadence as a floor.
@@ -401,17 +474,21 @@ Saved theme choices carry over. Finding codes keep the `KGWUI-` prefix, so API v
 
 ## Upgrade notes
 
-### Unreleased: identity and access (Phase 7)
+### v0.8.0: identity and access (Phase 7)
 
-- **Upgrade break: `httpRoute.enabled` needs `auth.mode: secure`.** Up to `v0.7.x`, an HTTPRoute let anyone who reached its hostname see everything the Snellius ServiceAccount can read, with no sign-in. The new default, local mode, listens only on the pod's loopback. An HTTPRoute would then either reach nothing, or, with the listener opened, expose that same unauthenticated view through the gateway. So the chart refuses to render the HTTPRoute in local mode, instead of breaking the route silently or exposing it. Secure mode is the mode for a gateway: users sign in, and from `v0.8.0` each user sees only what their own Kubernetes RBAC allows. Before you upgrade such an install, choose one:
-  1. Upgrade to `v0.8.0` or later, and set `auth.mode: secure` with the `auth.oidc.*` values. See [Secure mode](#secure-mode).
+- **Upgrade break: `httpRoute.enabled` needs `auth.mode: secure`.** Up to `v0.7.x`, an HTTPRoute let anyone who reached its hostname see everything the Snellius ServiceAccount can read, with no sign-in. The new default, local mode, listens only on the pod's loopback. An HTTPRoute would then either reach nothing, or, with the listener opened, expose that same unauthenticated view through the gateway. So the chart refuses to render the HTTPRoute in local mode, instead of breaking the route silently or exposing it. Secure mode is the mode for a gateway: users sign in, and each user sees only what their own Kubernetes RBAC allows. Before you upgrade such an install, choose one:
+  1. Set `auth.mode: secure` with the `auth.oidc.*` values. See [Secure mode](#secure-mode).
   2. Set `httpRoute.enabled: false`, and reach the UI with `kubectl port-forward`.
 
-  Development builds before `v0.8.0` serve no data in secure mode, so do not upgrade such an install to one.
-- **Default mode is `local`.** The UI listens on `127.0.0.1:8080` in the pod, so from outside the pod only `kubectl port-forward` reaches it. Upgrades with `--reuse-values` from older releases work.
+  A cluster whose API server cannot accept Snellius's token, such as GKE and AKS with Entra ID, has only the second choice in `v0.8.0` ([#51](https://github.com/DuncanDoyle/snellius/issues/51)).
+- **Default mode is `local`.** The UI listens on `127.0.0.1:8080` in the pod, so from outside the pod only `kubectl port-forward` reaches it. Anything that called the UI through the Service or the pod IP, such as another pod or a proxy, no longer reaches it. Upgrades with `--reuse-values` from older releases work.
+- **Replicas.** The chart runs one replica. Sessions live in memory, and a restart signs everyone out.
+- **Secure-mode ClusterRole.** It gains `create` on `tokenreviews` and `subjectaccessreviews`. Local mode does not get them.
+- **Downstream authorisers.** In secure mode, an authoriser that a build registers with `extension.WithAuthorizer` now only narrows what a user may read. Kubernetes RBAC decides first, through SubjectAccessReview. A policy that cannot answer list questions hides everything that depends on `list` permission, such as Pods and Events. Local mode is unchanged.
+- **What users see.** Restricted viewers see only findings about their own objects, and "Not checked" where a check needs the full read. See [What each user sees](#what-each-user-sees).
 - **Probe port.** Liveness and readiness probes use the new `probe` port (8081). `/readyz` no longer lists install IDs; they go to the log.
-- **`/metrics`.** The probe listener serves Prometheus text: `snellius_auth_mode{mode}`, `snellius_audit_records_total{level}` and `snellius_audit_dropped_total{level}`.
-- **Audit stream.** JSON lines on stdout, set with `--audit-levels` (chart `audit.levels`). Every response from the UI and API listener carries an `X-Request-Id`.
+- **`/metrics`.** The probe listener serves Prometheus text. See [Probe port and metrics](#probe-port-and-metrics).
+- **Audit stream.** JSON lines on stdout, set with `--audit-levels` (chart `audit.levels`). See [Audit stream](#audit-stream). Every response from the UI and API listener carries an `X-Request-Id`.
 - **API.** `/api/v1/meta` gains `authMode`. `index.html` carries `data-auth-mode`.
 - **Sign-in (7.2).**
   - New flags: `--oidc-issuer-url`, `--oidc-client-id`, `--oidc-client-secret-file`, `--oidc-redirect-url`, `--oidc-ca-file`, `--oidc-scopes`, `--cookie-secure`, `--session-idle`, `--session-absolute` and `--trusted-proxy-cidrs`.
@@ -422,7 +499,8 @@ Saved theme choices carry over. Finding codes keep the `KGWUI-` prefix, so API v
 - **Permission checks (7.3).**
   - New flag `--authz-cache-ttl` (default `60s`, `30s` to `15m`) and chart value `auth.authz.cacheTTL`. It is how long an allowed check is reused, so how long a revoked permission stays visible. A denied check is reused for 4 to 5 minutes.
   - **Named read grants:** objects granted only through `resourceNames` (named) read rules do not appear in lists, counts or summaries. They open on their detail page, and when an object the viewer can read names them. `auth.authz.namedGetScan: true` (flag `--authz-named-get-scan`) also includes them in lists, at the cost of one check per object the viewer cannot list.
-  - New flags `--authz-max-in-flight`, `--authz-rate` and `--authz-burst` (chart `auth.authz.maxInFlight`, `rate` and `burst`, defaults 32, 100 and 500) limit checks across all users. See [Secure mode](#secure-mode).
+  - New flags `--authz-max-in-flight`, `--authz-rate` and `--authz-burst` (chart `auth.authz.maxInFlight`, `rate` and `burst`, defaults 32, 100 and 500) limit checks across all users. See [Capacity and tuning](#capacity-and-tuning).
+  - A full admission queue answers `503 authz-busy`, which the page shows as "busy" and retries.
   - The secure-mode ClusterRole gains `create` on `subjectaccessreviews`.
   - New metrics: `snellius_authz_checks_total{verb,outcome}`, `snellius_authz_check_seconds_total`, `snellius_authz_cache_total{result}` and `snellius_authz_identities`.
 - **Visibility everywhere (7.4).** See [What each user sees](#what-each-user-sees).
@@ -433,7 +511,8 @@ Saved theme choices carry over. Finding codes keep the `KGWUI-` prefix, so API v
   - The seven list routes take `namespaces=`, and `GET /api/v1/installs/{id}/namespaces` is new. See [Namespace scope](#namespace-scope).
   - Extensions: `Deps.View` gives a handler the caller's `api.Viewer`, and a handler that serves cluster objects must use it. Use `Viewer.Backends` in place of `Install.Owned.Backends`. See [Extending](#extending).
 - **Chart.**
-  - New values `auth.mode`, `auth.allowedHosts` and `audit.levels`.
+  - New values `auth.mode`, `auth.allowedHosts`, `audit.levels`, `auth.oidc.*`, `auth.session.*`, `auth.authz.*`, `auth.trustedProxyCIDRs` and `hostAliases`. The [chart README](deploy/helm/snellius/README.md#values) lists each with its default.
+  - The chart fails to render for `httpRoute.enabled` in local mode, and for secure mode without `auth.oidc.issuerURL`, `clientID` or `redirectURL`.
   - In local mode the pod gets the annotation `sidecar.istio.io/inject: "false"` and the label `istio.io/dataplane-mode: none`.
 
 ### v0.7.1
