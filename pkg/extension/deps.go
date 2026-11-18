@@ -21,6 +21,7 @@ type Deps struct {
 	// A handler calls it once per request and serves from that value.
 	Current func() *engine.Published
 	// Authorizer is the core handler's; handlers filter objects through View, not with it directly.
+	// Nil means AllowAll, or DenyAll in secure mode, as for api.NewHandler.
 	Authorizer api.Authorizer
 	// View is the caller's api.Viewer, through the core handler's authoriser.
 	// A handler that serves cluster objects must use it (api.VisibleTo, Can, CanNamed,
@@ -86,9 +87,7 @@ func WithHandlers(name string, f func(r Router, d Deps)) Option {
 // extension's name, and returns the endpoints for api.WithExtMounts. It
 // returns an error if any endpoint fails api.CheckExtMounts.
 func (r *Registry) Mounts(d Deps) ([]api.ExtMount, error) {
-	if d.Authorizer == nil {
-		d.Authorizer = api.AllowAll{}
-	}
+	// A nil Authorizer stays nil: per request it is DenyAll in secure mode and AllowAll otherwise.
 	if d.View == nil {
 		a := d.Authorizer
 		d.View = func(r *http.Request) api.Viewer { return api.ViewerOf(r, a) }
