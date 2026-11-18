@@ -51,14 +51,11 @@ func checkListen(mode, addr, podIP, hostIP string) error {
 }
 
 // servedHandler builds the handler that is served: the API behind the Host
-// guard in local mode, behind the session check in secure mode, and
-// /auth/status and the sign-in routes outside the API, all behind request IDs.
+// guard in local mode, behind the session check in secure mode (applied inside
+// the API's request audit, so refusals are audited), and /auth/status and the
+// sign-in routes outside the API, all behind request IDs.
 func (a *App) servedHandler() http.Handler {
-	inner := a.Handler
-	if a.sessions != nil {
-		inner = a.sessions.Middleware(inner)
-	}
-	h := a.withAuthStatus(a.withSignIn(inner))
+	h := a.withAuthStatus(a.withSignIn(a.Handler))
 	if a.opts.AuthMode == ModeSecure {
 		return audit.RequestIDTrusting(a.opts.TrustedProxyCIDRs, h)
 	}

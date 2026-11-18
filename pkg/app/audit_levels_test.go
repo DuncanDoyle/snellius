@@ -243,6 +243,44 @@ func TestAuditDisclosureAndRequests(t *testing.T) {
 	}
 }
 
+// A call the session gate refuses still writes a requests record: ID, method,
+// route and status, with no session and no cookie value.
+func TestAuditRequestsRejectedBySession(t *testing.T) {
+	x := newAuditedApp(t, "requests")
+	stale := &http.Cookie{Name: x.session.Name, Value: "stale-cookie-secret"}
+	for _, c := range []struct {
+		path    string
+		cookies []*http.Cookie
+	}{
+		{"/api/v1/installs/" + x.install + "/gateways", nil},
+		{"/api/v1/nowhere", []*http.Cookie{stale}},
+	} {
+		if rec := call(x.a, "GET", c.path, c.cookies, nil); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("GET %s = %d, want 401", c.path, rec.Code)
+		}
+	}
+	reqs := x.records(t, "request")
+	if len(reqs) != 2 {
+		t.Fatalf("%d request records, want 2: %s", len(reqs), x.out.String())
+	}
+	for k, want := range []string{"GET /api/v1/installs/{id}/gateways", "unmatched"} {
+		r, _ := json.Marshal(reqs[k])
+		for _, s := range []string{`"route":"` + want + `"`, `"method":"GET"`, `"reason":"401"`, `"outcome":"failure"`, `"id":"`} {
+			if !strings.Contains(string(r), s) {
+				t.Errorf("request record lacks %s: %s", s, r)
+			}
+		}
+		for _, s := range []string{`"session"`, `"username"`, `"subject"`} {
+			if strings.Contains(string(r), s) {
+				t.Errorf("request record carries %s: %s", s, r)
+			}
+		}
+	}
+	if strings.Contains(x.out.String(), "stale-cookie-secret") {
+		t.Errorf("audit output carries the cookie:\n%s", x.out.String())
+	}
+}
+
 // No record carries a token, cookie, raw query string or response body.
 func TestAuditNeverLogged(t *testing.T) {
 	x := newAuditedApp(t, "security,reads,summaries,disclosure,requests")

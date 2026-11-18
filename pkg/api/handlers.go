@@ -109,6 +109,9 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 		}
 		next = commit(next, admit, cfg.commitCheck, authzAudit, cfg.capHit, cfg.checkTrace, cfg.commitClock)
 	}
+	if cfg.gate != nil {
+		next = cfg.gate(passGate(next))
+	}
 	if cfg.audit != nil {
 		next = auditing(next, mux, cfg.audit, cfg.disclosure)
 	}

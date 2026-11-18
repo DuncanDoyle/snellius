@@ -55,6 +55,8 @@ type handlerConfig struct {
 	// audit hears each answered /api/ request; disclosure keeps its body to scan (audit.go).
 	audit      func(AuditEvent)
 	disclosure bool
+	// gate wraps the handler inside the request audit, so its refusals are audited; nil means none.
+	gate func(http.Handler) http.Handler
 	// capHit hears each request that passes CheckLimit; nil means none.
 	capHit func(*http.Request)
 	// checkTrace hears each uncached check a request counts; nil means none.

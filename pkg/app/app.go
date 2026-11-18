@@ -422,7 +422,7 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		if o.Clock != nil {
 			clk = o.Clock
 		}
-		hopts = append(hopts, api.WithSecureMode(), api.WithCommitCheck(sessions.StillSignedIn),
+		hopts = append(hopts, api.WithSecureMode(), api.WithSessionGate(sessions.Middleware), api.WithCommitCheck(sessions.StillSignedIn),
 			api.WithAuthzAudit(authzAuditor(auditLog)), api.WithCheckCapHit(capHitter(lim, eng.Installs)), api.WithCommitClock(clk.Now),
 			api.WithRequestAudit(requestAuditor(auditLog), auditLog.Enabled(audit.LevelDisclosure)))
 	}

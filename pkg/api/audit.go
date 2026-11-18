@@ -61,6 +61,12 @@ func WithRequestAudit(hear func(AuditEvent), disclosure bool) HandlerOption {
 	return func(c *handlerConfig) { c.audit, c.disclosure = hear, disclosure }
 }
 
+// WithSessionGate wraps the handler in gate, inside the request audit and
+// outside the commit wrapper, so a request gate refuses is still heard.
+func WithSessionGate(gate func(http.Handler) http.Handler) HandlerOption {
+	return func(c *handlerConfig) { c.gate = gate }
+}
+
 // auditRoutes classifies the core routes; others are AuditOther, extension routes aside.
 var auditRoutes = map[string]AuditKind{
 	"GET /api/v1/installs":                                                   AuditList,
@@ -210,9 +216,21 @@ type auditNote struct {
 
 // auditHolder keeps the note and request of a request's latest build.
 type auditHolder struct {
-	note     *auditNote
-	req      *http.Request
+	note *auditNote
+	req  *http.Request
+	// passed is the request the session gate let through, carrying its session.
+	passed   *http.Request
 	disclose bool
+}
+
+// passGate records in r's audit holder the request a session gate let through.
+func passGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h, _ := r.Context().Value(holderKey{}).(*auditHolder); h != nil {
+			h.passed = r
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type (
@@ -301,8 +319,11 @@ func (h *auditHolder) event(r *http.Request, mux *http.ServeMux, aw *auditWriter
 		status = http.StatusOK
 	}
 	req := r
-	if h.req != nil {
+	switch {
+	case h.req != nil:
 		req = h.req
+	case h.passed != nil:
+		req = h.passed
 	}
 	ev := AuditEvent{Request: req, Route: routeOf(mux, req), Status: status, Kind: auditKind(req), Install: req.PathValue("id")}
 	if n := h.note; n != nil && ev.Kind == AuditRead {
