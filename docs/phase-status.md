@@ -40,11 +40,11 @@ Features within the approved design (§8, §2 gate); the load fix and D-115 foll
 Design changes without a decisions.md entry and user approval; 7.6 work (audit levels, release docs).
 
 ### Queue
-- [ ] Load: every cold viewer gets answers on /routes, /paths, /backends under the load bench (P2, 7.4 Deferred) ← CURRENT. D-116 implemented (67409dd, 83d5b3f, 9c503f0); Codex review `reviews/7.5-d116-codex.md`. Fix round 1 paused 2026-11-17 after 905cca8 (R1 release before write, R8 other methods admitted first) and 7f6e44b (miss reasons, admission tests watch the queue); R5/R6 in 0605d85; cache entries 468 → 210 B (D-117, c479b13); capacity accepted (D-118). Next: full `TestBudgetSARDeniedList` green, then Codex re-review of c0f2a03..HEAD. Separate PR later: `pkg/engine` `TestStaleMetricsAreNeverConfirmed` flaked once (60 reruns pass)
+- [x] Load: every cold viewer gets answers on /routes, /paths, /backends under the load bench (P2, 7.4 Deferred) — D-116 admission, D-117 cache entries 468 → 210 B, D-118 capacity accepted; Codex review, re-review and fix check with triage in `reviews/7.5-d116-codex.md`; load bench green on 0ad27f0. Separate PR later: `pkg/engine` `TestStaleMetricsAreNeverConfirmed` flaked once (60 reruns pass)
 - [ ] `pkg/explore`: `config`, `path`, `path.incomplete`, legacy `health`, `path-incomplete` (plan 7.5 item 1)
 - [ ] API: route list and detail, Gateway and ListenerSet route tables, `config=` and `path=` filters (item 2)
 - [ ] Web: columns, header badges, problem strip, map nodes, wording (item 3)
-- [ ] D-115 follow-up: shared route walk in `own` (P3)
+- [ ] D-115 follow-up: shared route walk in `own` (P3) ← CURRENT
 - [ ] Open the gate, rule tests on the new fields (item 4)
 
 ## Program
