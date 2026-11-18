@@ -163,9 +163,9 @@ func (ps *procSummary) set(s *process.Set, podNS string, sf *subjectFacts, visib
 }
 
 // probes reports whether the caller sees probe facts: they come from Events
-// under a cap over every namespace, so a projecting caller needs Events listed cluster-wide.
+// under a cap over every namespace, so the caller needs Events listed cluster-wide, even under the full read.
 func (ps *procSummary) probes() bool {
-	return !ps.v.projects() || ps.v.canList(objects.GroupKind{Kind: "Event"}, "")
+	return ps.v.readsInput(objects.GroupKind{Kind: "Event"}, nil)
 }
 
 // processDTO is p on the wire, times in UTC; never a termination message. Probe facts only with probes.

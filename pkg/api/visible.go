@@ -312,6 +312,26 @@ func (v *view) canList(gk objects.GroupKind, namespace string) bool {
 	if v.readsAll() {
 		return true
 	}
+	return v.asksList(gk, namespace)
+}
+
+// readsInput reports whether the caller may list gk cluster-wide, or get
+// named when set. gk is an input the full-read proof leaves out (Events,
+// CRDs), so the full read alone does not grant it. True when v projects nothing.
+func (v *view) readsInput(gk objects.GroupKind, named *objects.Ref) bool {
+	switch {
+	case !v.secure || v.off&stepFindings != 0 || v.policy == nil && allowsAll(v.a):
+		return true
+	case !v.readsAll():
+		return named != nil && v.canNamed(*named) || v.canList(gk, "")
+	case named != nil && decideNamed(v.r, v.a, *named) && v.policyAllows(*named, true):
+		return true
+	}
+	return v.asksList(gk, "")
+}
+
+// asksList is canList without the full read's answer.
+func (v *view) asksList(gk objects.GroupKind, namespace string) bool {
 	q := ListQuery{Kind: gk, Namespace: namespace}
 	if allowed, ok := v.listed[q]; ok {
 		return allowed

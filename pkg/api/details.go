@@ -419,10 +419,10 @@ func servedListenerSet(m *engine.Model, group, kind string) (kinds.Served, bool)
 var crdKind = objects.GroupKind{Group: "apiextensions.k8s.io", Kind: "CustomResourceDefinition"}
 
 // readsGatewayCRD reports whether the caller may read the Gateway CRD's
-// metadata: always unless v projects, else with get on it or list on CRDs.
+// metadata: with get on it or list on CRDs, even under the full read.
 func (d *detail) readsGatewayCRD() bool {
 	ref := objects.Ref{Group: crdKind.Group, Kind: crdKind.Kind, Name: "gateways." + objects.GatewayAPIGroup}
-	return !d.v.projects() || d.v.canNamed(ref) || d.v.canList(crdKind, "")
+	return d.v.readsInput(crdKind, &ref)
 }
 
 // gatewayCRDField fills a's CRD fields from the watched Gateway CRD's channel

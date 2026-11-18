@@ -472,6 +472,10 @@ func TestProbeFactsNeedEventsList(t *testing.T) {
 	if probed(r) || len(r.Set.Processes) == 0 {
 		t.Errorf("restricted viewer: probe facts %+v", r.Set.Processes)
 	}
+	// The full read's proof leaves Events out, so it alone does not grant probe facts.
+	if f := proc(fullNoInputs); probed(f) || !f.Skew {
+		t.Errorf("full read without Events: probe facts %+v, skew %v (want none, and skew as under the full read)", f.Set.Processes, f.Skew)
+	}
 	if r.Skew {
 		t.Error("restricted viewer: skew on a Not checked row")
 	}

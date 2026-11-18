@@ -36,6 +36,9 @@ type Admission struct {
 	Referrers []objects.Ref
 	// NoParent marks a no-parent row; alone it admits the YAML view only.
 	NoParent bool
+	// Consumed marks an owned Backend: a member through the owned routes in
+	// Referrers, which are not install context (D-107).
+	Consumed bool
 	// Else is a finding candidate's reason without its findings, referenced
 	// or selected, when it has Referrers; "" otherwise.
 	Else CandidateReason
@@ -73,10 +76,13 @@ func (b *builder) admit(ix *Index) map[objects.Ref]Admission {
 	m := map[objects.Ref]Admission{}
 	o := b.in.Owned
 	if o != nil {
-		for _, l := range [][]*unstructured.Unstructured{o.GatewayClasses, o.Gateways, o.ListenerSets, o.Backends} {
+		for _, l := range [][]*unstructured.Unstructured{o.GatewayClasses, o.Gateways, o.ListenerSets} {
 			for _, u := range l {
 				m[objects.RefOf(u)] = Admission{Owned: true}
 			}
+		}
+		for _, u := range o.Backends {
+			m[objects.RefOf(u)] = Admission{Owned: true, Consumed: true}
 		}
 		for _, ps := range [][]install.OwnedObject{o.Policies, o.Listed} {
 			for _, p := range ps {
@@ -105,7 +111,7 @@ func (b *builder) admit(ix *Index) map[objects.Ref]Admission {
 		switch {
 		case !ok:
 			a = Admission{Reason: ReasonReferenced}
-		case a.Owned || a.Reason == ReasonSelected:
+		case a.Owned && !a.Consumed || a.Reason == ReasonSelected:
 			return
 		case len(a.Referrers) > 0 && a.Referrers[len(a.Referrers)-1] == by:
 			return

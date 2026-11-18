@@ -67,6 +67,8 @@ const (
 	nsReader = "ns-reader"
 	// crdGetter is restricted plus get on the Gateway CRD.
 	crdGetter = "crd-getter"
+	// fullNoInputs has the full read but may not read Events or CRDs, which its proof leaves out.
+	fullNoInputs = "full-no-inputs"
 	// nobodyUser may read nothing; metaUser+"dcn" reads the controller Deployment, GatewayClasses and Namespaces.
 	nobodyUser = "nobody"
 	metaUser   = "meta-"
@@ -744,6 +746,8 @@ func (ruleKinds) Lookup(group, kind string) (sar.Kind, bool) {
 		return sar.Kind{Group: "discovery.k8s.io", Resource: "endpointslices", Namespaced: true}, true
 	case group == "apiextensions.k8s.io" && kind == "CustomResourceDefinition":
 		return sar.Kind{Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions"}, true
+	case group == "" && kind == "Event":
+		return sar.Kind{Resource: "events", Namespaced: true}, true
 	}
 	for _, s := range testutil.ServedUpstream() {
 		if s.Group == group && s.Kind == kind {
@@ -786,6 +790,9 @@ func (ruleChecker) Check(_ context.Context, id oidc.Identity, a sar.Attributes) 
 	}
 	if id.Username == fullUser || id.Username == routeReader && strings.HasSuffix(a.Resource, "routes") {
 		return true, nil
+	}
+	if id.Username == fullNoInputs {
+		return a.Resource != "events" && a.Resource != "customresourcedefinitions", nil
 	}
 	if id.Username == crdGetter && a.Verb == "get" && a.Resource == "customresourcedefinitions" && a.Name == "gateways."+objects.GatewayAPIGroup {
 		return true, nil
@@ -1731,8 +1738,56 @@ func TestRuleCRDGetterSeesCRDFields(t *testing.T) {
 	if got := al(crdGetter); got.CRDBundleVersion != "v1.4.0" || got.CRDChannel != "standard" || got.CRDField != "missing" {
 		t.Errorf("CRD getter's fields %+v, want the Gateway CRD's", got)
 	}
-	if got := al(restrictedUser); got.CRDBundleVersion != "" || got.CRDChannel != "" || got.CRDField != "" {
-		t.Errorf("restricted viewer's fields %+v, want none", got)
+	// The full read's proof leaves CRDs out, so it alone does not grant them.
+	if code, _ := fetch(t, srv, fullNoInputs, ruleBase+"/gateways/"+hiddenNS+"/hidden-gw"); code != http.StatusOK {
+		t.Fatalf("%s reads no hidden Gateway (%d): it lacks the full read", fullNoInputs, code)
+	}
+	for _, user := range []string{restrictedUser, fullNoInputs} {
+		if got := al(user); got.CRDBundleVersion != "" || got.CRDChannel != "" || got.CRDField != "" {
+			t.Errorf("%s's fields %+v, want none", user, got)
+		}
+	}
+	if got := al(fullUser); got.CRDBundleVersion != "v1.4.0" || got.CRDChannel != "standard" {
+		t.Errorf("full viewer's fields %+v, want the Gateway CRD's", got)
+	}
+}
+
+// TestRuleBackendYAMLIgnoresHiddenConsumer: a hidden route that starts naming a
+// readable Backend leaves its YAML answer unchanged for the restricted viewer,
+// 404 without a readable consumer and 200 with one (D-107); the full viewer's changes.
+func TestRuleBackendYAMLIgnoresHiddenConsumer(t *testing.T) {
+	const be = "lone-be"
+	world := func(visible, hidden bool) *httptest.Server {
+		s := ruleSnapshot(t)
+		s.add(testutil.Backend(ns0, be, nil))
+		if visible {
+			s.add(routeTo(ns0, "lone-consumer", gw0(), ns0, be, true))
+		}
+		if hidden {
+			s.add(routeTo(hiddenNS, "hidden-lone-consumer", hiddenGW("hidden-gw"), ns0, be, true))
+		}
+		return ruleServe(t, worldWith(t, s, ruleChange{name: "base"}))
+	}
+	path := ruleBase + "/resources/" + kinds.KgatewayGroup + "/Backend/" + ns0 + "/" + be
+	for _, visible := range []bool{false, true} {
+		before, after := world(visible, false), world(visible, true)
+		want := http.StatusNotFound
+		if visible {
+			want = http.StatusOK
+		}
+		for _, srv := range []*httptest.Server{before, after} {
+			if code, _ := fetch(t, srv, restrictedUser, path); code != want {
+				t.Errorf("visible consumer %v: restricted viewer got %d, want %d", visible, code, want)
+			}
+		}
+		if !visible {
+			if b, _ := fetch(t, before, fullUser, path); b != http.StatusNotFound {
+				t.Errorf("full viewer without a consumer got %d, want 404", b)
+			}
+			if a, _ := fetch(t, after, fullUser, path); a != http.StatusOK {
+				t.Errorf("full viewer with the hidden consumer got %d, want 200", a)
+			}
+		}
 	}
 }
 

@@ -98,9 +98,11 @@ func (l linker) admitWith(ref objects.Ref, named bool) Link {
 	if !ok {
 		return LinkNone
 	}
+	// A Backend joins through its consumer routes, which are not install context (D-107).
+	owned := a.Owned && (!a.Consumed || !l.v.omits() || l.v.readsAll() || l.v.anyOf(a.Referrers))
 	finding := a.Reason == explore.ReasonFinding && l.findingShown(ref, named)
 	byReferrer := a.Reason == explore.ReasonReferenced || a.Reason == explore.ReasonSelected || a.Reason == explore.ReasonFinding && !finding
-	candidate := a.Owned || finding || (byReferrer && l.v.anyOf(a.Referrers))
+	candidate := owned || finding || (byReferrer && l.v.anyOf(a.Referrers))
 	if !candidate && !a.NoParent {
 		return LinkNone
 	}
