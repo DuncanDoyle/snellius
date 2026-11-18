@@ -463,20 +463,63 @@ func TestBudgetSARDeniedList(t *testing.T) {
 // pollKey carries a poll's state through its request and the SARs it sends.
 type pollKey struct{}
 
-// pollState is one poll's SARs sent and, per check key, when its first counted miss was spent.
+// pollState is one poll's SARs sent and, per check key, when its first counted
+// miss was spent; denied keys are its deny refreshes spent, refreshed those answered.
 type pollState struct {
-	sars    atomic.Int64
-	mu      sync.Mutex
-	pending map[any]time.Time
+	sars      atomic.Int64
+	mu        sync.Mutex
+	pending   map[any]time.Time
+	denied    map[any]bool
+	refreshed int
 }
 
 // viewerLoad is one load viewer's polls: its first 200, then the scored polls
-// and those answered 200. A cut poll ran into the deadline and scores as a failure.
+// and those answered 200, and its deny refreshes answered in time. A cut poll
+// ended after the deadline and scores as a failure, whatever it answered.
 type viewerLoad struct {
 	ok, busy       atomic.Bool
 	first, last    time.Duration
 	after, afterOK int
-	cut            int
+	cut, refreshes int
+}
+
+// record scores a poll that started at start and ended at end (both since the
+// storm), answered code and completed refreshes deny refreshes; late marks one
+// that ended after the deadline.
+func (v *viewerLoad) record(start, end time.Duration, code, refreshes int, late bool) {
+	ok := code == http.StatusOK && !late
+	switch {
+	case v.ok.Load():
+		v.after, v.last = v.after+1, start
+		if !late {
+			v.refreshes += refreshes
+		}
+		if ok {
+			v.afterOK++
+		}
+	case ok:
+		v.first = end
+		v.ok.Store(true)
+	}
+	if late {
+		v.cut++
+	}
+}
+
+// A poll that ends after the deadline scores as a failure, a 200 too, and its deny refreshes give no coverage.
+func TestLoadScoresLatePollsAsFailures(t *testing.T) {
+	v := &viewerLoad{}
+	v.record(0, time.Second, http.StatusOK, 0, false)
+	v.record(5*time.Second, 6*time.Second, http.StatusOK, 1, false)
+	v.record(10*time.Second, 99*time.Second, http.StatusOK, 1, true)
+	if v.after != 2 || v.afterOK != 1 || v.cut != 1 || v.refreshes != 1 {
+		t.Errorf("after %d, 200 %d, cut %d, deny refreshes %d; want 2, 1, 1, 1", v.after, v.afterOK, v.cut, v.refreshes)
+	}
+	late := &viewerLoad{}
+	late.record(0, 99*time.Second, http.StatusOK, 0, true)
+	if late.ok.Load() || late.cut != 1 {
+		t.Errorf("a late first 200 counts as the first 200 (cut %d)", late.cut)
+	}
 }
 
 // answerKey is one viewer's check, as the authoriser keys it.
@@ -489,18 +532,16 @@ type answerKey struct {
 // its viewer's first 200: first ask, allow-expired, deny-refresh, or evicted
 // (answered before, absent now). It also keeps each check's longest wait from miss to SAR.
 type missTrace struct {
-	mu          sync.Mutex
-	answered    map[answerKey]bool
-	byBuild     map[int]map[string]int
-	byPhase     [2]map[string]int
-	denyRefresh map[string]int
+	mu       sync.Mutex
+	answered map[answerKey]bool
+	byBuild  map[int]map[string]int
+	byPhase  [2]map[string]int
 	// wait is the longest from a miss to its SAR; fullWait that of a cluster-wide list.
 	wait, fullWait time.Duration
 }
 
 func newMissTrace() *missTrace {
-	return &missTrace{answered: map[answerKey]bool{}, byBuild: map[int]map[string]int{},
-		byPhase: [2]map[string]int{{}, {}}, denyRefresh: map[string]int{}}
+	return &missTrace{answered: map[answerKey]bool{}, byBuild: map[int]map[string]int{}, byPhase: [2]map[string]int{{}, {}}}
 }
 
 func (m *missTrace) missed(user string, build int, reason string, key any, after bool) {
@@ -520,9 +561,6 @@ func (m *missTrace) missed(user string, build int, reason string, key any, after
 	phase := 0
 	if after {
 		phase = 1
-		if cause == "deny-refresh" {
-			m.denyRefresh[user]++
-		}
 	}
 	m.byPhase[phase][cause]++
 }
@@ -546,8 +584,8 @@ func (m *missTrace) waited(a sar.Attributes, d time.Duration) {
 // the D-100 limits, on a clock 10× wall time, until each is past its deny
 // refresh, under a hard deadline. Every viewer gets a first 200 within all
 // viewers' cold SARs at the default rate plus a minute, then scores at least
-// minScored polls through its deny refresh, of which at least 95 % answer 200;
-// a poll the deadline cuts scores as a failure. One viewer's cold SARs keep
+// minScored polls through an answered deny refresh, of which at least 95 % answer 200;
+// a poll that ends after the deadline scores as a failure. One viewer's cold SARs keep
 // p's D-100 target; no poll passes the check cap; a viewer warmed before the
 // storm answers quickly while cold requests queue; the SARs keep the in-flight,
 // rate and burst limits (D-116). It logs why each counted check missed.
@@ -600,7 +638,17 @@ func loadTest(t *testing.T, secure func(api.Authorizer, func() time.Time, ...api
 		sends = append(sends, now)
 		mu.Unlock()
 	}
-	c.answered = func(_ context.Context, user string, a sar.Attributes) { trace.answer(user, a) }
+	c.answered = func(ctx context.Context, user string, a sar.Attributes) {
+		trace.answer(user, a)
+		if ps, ok := ctx.Value(pollKey{}).(*pollState); ok {
+			ps.mu.Lock()
+			if ps.denied[a] {
+				delete(ps.denied, a)
+				ps.refreshed++
+			}
+			ps.mu.Unlock()
+		}
+	}
 	audit := func(r *http.Request, reason string) {
 		if r.Context().Err() != nil {
 			reason = "cut " + reason
@@ -616,6 +664,9 @@ func loadTest(t *testing.T, secure func(api.Authorizer, func() time.Time, ...api
 			if _, seen := ps.pending[key]; !seen {
 				ps.pending[key] = clk.Now()
 			}
+			if reason == api.MissDenyExpired {
+				ps.denied[key] = true
+			}
 			ps.mu.Unlock()
 		}
 		trace.missed(user, build, reason, key, after(user))
@@ -623,18 +674,21 @@ func loadTest(t *testing.T, secure func(api.Authorizer, func() time.Time, ...api
 	reg := obs.NewRegistry()
 	h := secure(newAuthz(c, clk, reg), clk.Now, api.WithAuthzAudit(audit), api.WithCheckTrace(missed),
 		api.WithCheckCapHit(func(*http.Request) { capHits.Add(1) }))
-	poll := func(ctx context.Context, user string) (code int, sars int64, took, wall time.Duration) {
-		ps := &pollState{pending: map[any]time.Time{}}
+	// poll also returns its deny refreshes whose SARs were answered.
+	poll := func(ctx context.Context, user string) (code int, sars int64, took, wall time.Duration, refreshed int) {
+		ps := &pollState{pending: map[any]time.Time{}, denied: map[any]bool{}}
 		rctx := context.WithValue(context.WithValue(ctx, userKey{}, user), pollKey{}, ps)
 		w := httptest.NewRecorder()
 		start, wstart := clk.Now(), time.Now()
 		h.ServeHTTP(w, httptest.NewRequestWithContext(rctx, http.MethodGet, p.path, nil))
-		return w.Code, ps.sars.Load(), clk.Since(start), time.Since(wstart)
+		ps.mu.Lock()
+		defer ps.mu.Unlock()
+		return w.Code, ps.sars.Load(), clk.Since(start), time.Since(wstart), ps.refreshed
 	}
 
 	// The warm viewer's answers are all cached before the storm; its allows live 60 s from here.
 	warmAt := clk.Now()
-	if code, _, _, _ := poll(context.Background(), warmUser); code != http.StatusOK {
+	if code, _, _, _, _ := poll(context.Background(), warmUser); code != http.StatusOK {
 		t.Fatalf("load %s: warm-up %d", p.name, code)
 	}
 	storm := clk.Now()
@@ -649,24 +703,15 @@ func loadTest(t *testing.T, secure func(api.Authorizer, func() time.Time, ...api
 			for next := clk.Now(); next.Before(end); {
 				start := clk.Since(storm)
 				v.busy.Store(true)
-				code, sars, _, _ := poll(ctx, user)
+				code, sars, _, _, refreshed := poll(ctx, user)
+				late := ctx.Err() != nil
 				v.busy.Store(false)
 				mu.Lock()
 				codes[code]++
 				maxPoll = max(maxPoll, sars)
 				mu.Unlock()
-				switch {
-				case v.ok.Load():
-					v.after, v.last = v.after+1, start
-					if code == http.StatusOK {
-						v.afterOK++
-					}
-				case code == http.StatusOK:
-					v.first = clk.Since(storm)
-					v.ok.Store(true)
-				}
-				if ctx.Err() != nil && code != http.StatusOK {
-					v.cut++
+				v.record(start, clk.Since(storm), code, refreshed, late)
+				if late {
 					break
 				}
 				// The next poll starts 5 s after this one started, or now if it took longer.
@@ -693,7 +738,7 @@ func loadTest(t *testing.T, secure func(api.Authorizer, func() time.Time, ...api
 					n++
 				}
 			}
-			code, sars, took, wall := poll(ctx, warmUser)
+			code, sars, took, wall, _ := poll(ctx, warmUser)
 			warm = append(warm, warmPoll{code, n, sars, took, wall})
 			clk.Sleep(every)
 		}
@@ -743,10 +788,10 @@ func loadTest(t *testing.T, secure func(api.Authorizer, func() time.Time, ...api
 		if fewest < 0 || v.after < fewest {
 			fewest = v.after
 		}
-		if v.after < minScored || v.last-v.first < sar.DenyTTL || trace.denyRefresh[user] == 0 {
+		if v.after < minScored || v.last-v.first < sar.DenyTTL || v.refreshes == 0 {
 			short++
 			t.Errorf("load %s: %s scored %d polls (want ≥ %d), the last %v after its first 200 (want ≥ %v), %d deny refreshes",
-				p.name, user, v.after, minScored, (v.last - v.first).Round(time.Second), sar.DenyTTL, trace.denyRefresh[user])
+				p.name, user, v.after, minScored, (v.last - v.first).Round(time.Second), sar.DenyTTL, v.refreshes)
 		}
 		share := 100 * float64(v.afterOK) / float64(max(v.after, 1))
 		if share < worst || share == worst && v.after < worstN {
