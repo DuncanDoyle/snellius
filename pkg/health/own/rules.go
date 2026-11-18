@@ -29,12 +29,12 @@ const (
 
 // rules reports KGWUI-015 on a route: a current RouteRuleReplaced or
 // RouteRuleDropped on one of the rule set's rejected condition types.
-func rules(ic InstallContext, u *unstructured.Unstructured, named Named, o *out) {
-	v := viewOf(ic.Views, u)
-	if ignored(ic, u, v) {
+func rules(ic InstallContext, u *unstructured.Unstructured, named Named, o *out, w *walk) {
+	w = w.of(ic, u)
+	if w.ignored {
 		return
 	}
-	eachCurrentBlock(ic, u, v, func(_ objects.ParentRef, cond metav1.Condition, extra string, owner []string) {
+	w.eachCurrentBlock(func(_ objects.ParentRef, cond metav1.Condition, extra string, owner []string) {
 		if _, _, refs := RefRuleFor(cond, false); refs || !ruleReplacedReason(cond, ic.Conditions.RouteRejected) {
 			return
 		}

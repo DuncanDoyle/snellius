@@ -35,6 +35,8 @@ type ownBase struct {
 	exp      map[objects.GroupKind]bool
 	byGVR    map[schema.GroupVersionResource]map[objects.Ref]*unstructured.Unstructured
 	services map[objects.Ref]*unstructured.Unstructured
+	// serviceAt indexes the snapshot's Service facts by ref.
+	serviceAt map[objects.Ref]int
 }
 
 // Object implements own.Named: it reads the snapshot by ref and records each ref asked.
@@ -42,7 +44,7 @@ func (rec *namedRecorder) Object(r objects.Ref) (*unstructured.Unstructured, boo
 	if !slices.Contains(rec.refs, r) {
 		rec.refs = append(rec.refs, r)
 	}
-	u := rec.base.object(*rec.base.in, r)
+	u := rec.base.object(rec.base.in, r)
 	if u != nil {
 		rec.returned = append(rec.returned, u)
 	}
@@ -59,18 +61,25 @@ func (rec *namedRecorder) FirstSeen(u *unstructured.Unstructured) time.Time {
 
 // object returns the snapshot object r names, or nil. A core Service is
 // built from the cache's Service facts: its name and ports.
-func (b *ownBase) object(in Input, r objects.Ref) *unstructured.Unstructured {
+func (b *ownBase) object(in *Input, r objects.Ref) *unstructured.Unstructured {
 	if in.Snapshot == nil {
 		return nil
 	}
 	if r.Group == "" && r.Kind == "Service" {
 		if b.services == nil {
-			b.services = make(map[objects.Ref]*unstructured.Unstructured, len(in.Snapshot.Services))
-			for _, s := range in.Snapshot.Services {
-				b.services[objects.Ref{Kind: "Service", Namespace: s.Namespace, Name: s.Name}] = serviceObject(s)
+			b.services = map[objects.Ref]*unstructured.Unstructured{}
+			b.serviceAt = make(map[objects.Ref]int, len(in.Snapshot.Services))
+			for i, s := range in.Snapshot.Services {
+				b.serviceAt[objects.Ref{Kind: "Service", Namespace: s.Namespace, Name: s.Name}] = i
 			}
 		}
-		return b.services[r]
+		// Built on first ask and kept, so one ref returns one object for the run.
+		u, ok := b.services[r]
+		if i, found := b.serviceAt[r]; !ok && found {
+			u = serviceObject(in.Snapshot.Services[i])
+			b.services[r] = u
+		}
+		return u
 	}
 	i := slices.IndexFunc(in.Served, func(s kinds.Served) bool { return s.Group == r.Group && s.Kind == r.Kind })
 	if i < 0 {
@@ -199,10 +208,11 @@ func (in Input) collected(gk objects.GroupKind, ns string) bool {
 	return ns == "" || len(in.Snapshot.RequestedNamespaces) == 0 || in.Snapshot.NamespaceAccess[gvr][ns].OK
 }
 
-// runOwn evaluates analyzer k on each resource through package own, and
-// passes each result's wake time to ctx. It is the only caller of own.Evaluate.
+// runOwn evaluates the analyzers ks on each resource through package own, in
+// one walk per resource, and passes each result's wake time to ctx; out[i] are
+// ks[i]'s findings. It is the only caller of own.EvaluateRoute.
 // One check run shares its base across calls, so membership is indexed once.
-func runOwn(ctx RunContext, k own.Kind, resources []*unstructured.Unstructured) []Finding {
+func runOwn(ctx RunContext, ks []own.Kind, resources []*unstructured.Unstructured) [][]Finding {
 	base := &ownBase{}
 	if ctx.sink != nil {
 		if ctx.sink.own == nil {
@@ -210,30 +220,39 @@ func runOwn(ctx RunContext, k own.Kind, resources []*unstructured.Unstructured) 
 		}
 		base = ctx.sink.own
 	}
-	rec := &namedRecorder{base: base}
-	var out []Finding
+	// Each analyzer names through its own recorder, so a basis is per resource and analyzer (D-108).
+	recs := make([]*namedRecorder, len(ks))
+	named := make([]own.Named, len(ks))
+	var ic own.InstallContext
+	for i := range ks {
+		recs[i] = &namedRecorder{base: base}
+		ic, named[i] = newOwnInput(ctx.Input, recs[i])
+	}
+	out := make([][]Finding, len(ks))
 	for _, u := range resources {
-		rec.resource, rec.refs, rec.returned = u, rec.refs[:0], rec.returned[:0]
-		ic, named := newOwnInput(ctx.Input, rec)
-		r := own.Evaluate(k, ic, u, named)
-		ctx.WakeAt(r.WakeAt())
-		var basis []objects.Ref
-		if len(r.Findings()) > 0 {
-			basis = slices.Clone(rec.refs) // findings keep it; the recorder is reused
+		for _, rec := range recs {
+			rec.resource, rec.refs, rec.returned = u, rec.refs[:0], rec.returned[:0]
 		}
-		for _, of := range r.Findings() {
-			f, ok := fromOwn(of, basis)
-			if !ok {
-				continue
+		for i, r := range own.EvaluateRoute(ks, ic, u, named) {
+			ctx.WakeAt(r.WakeAt())
+			var basis []objects.Ref
+			if len(r.Findings()) > 0 {
+				basis = slices.Clone(recs[i].refs) // findings keep it; the recorder is reused
 			}
-			f.Install, f.Resource = ctx.Install.ID(), ref(u)
-			if ctx.sink != nil {
-				if ctx.sink.owned == nil {
-					ctx.sink.owned = &ownedSet{}
+			for _, of := range r.Findings() {
+				f, ok := fromOwn(of, basis)
+				if !ok {
+					continue
 				}
-				ctx.sink.owned.add(f)
+				f.Install, f.Resource = ctx.Install.ID(), ref(u)
+				if ctx.sink != nil {
+					if ctx.sink.owned == nil {
+						ctx.sink.owned = &ownedSet{}
+					}
+					ctx.sink.owned.add(f)
+				}
+				out[i] = append(out[i], f)
 			}
-			out = append(out, f)
 		}
 	}
 	return out

@@ -133,18 +133,37 @@ const (
 	Rules                   // 015 on a route
 )
 
-// Evaluate is the only entry point: it dispatches k to an unexported analyzer.
+// Evaluate dispatches k to an unexported analyzer. It and EvaluateRoute are the only entry points.
 func Evaluate(k Kind, ic InstallContext, resource *unstructured.Unstructured, named Named) Result {
+	return evaluate(k, ic, resource, named, &walk{})
+}
+
+// EvaluateRoute returns, for each ks[i], what Evaluate(ks[i], ic, resource, named[i])
+// returns, from one walk of the route's parents; nil when the lengths differ.
+func EvaluateRoute(ks []Kind, ic InstallContext, resource *unstructured.Unstructured, named []Named) []Result {
+	if len(named) != len(ks) {
+		return nil
+	}
+	w := &walk{}
+	rs := make([]Result, len(ks))
+	for i, k := range ks {
+		rs[i] = evaluate(k, ic, resource, named[i], w)
+	}
+	return rs
+}
+
+// evaluate runs analyzer k; w is shared by the analyzers of one resource.
+func evaluate(k Kind, ic InstallContext, resource *unstructured.Unstructured, named Named, w *walk) Result {
 	o := &out{now: ic.Now}
 	switch k {
 	case Status:
-		status(ic, resource, named, o)
+		status(ic, resource, named, o, w)
 	case Parents:
-		parents(ic, resource, named, o)
+		parents(ic, resource, named, o, w)
 	case Refs:
-		refs(ic, resource, named, o)
+		refs(ic, resource, named, o, w)
 	case Rules:
-		rules(ic, resource, named, o)
+		rules(ic, resource, named, o, w)
 	default:
 		return Result{}
 	}
@@ -521,31 +540,84 @@ func statusFor(ic InstallContext, v routeView, p objects.ParentRef) *objects.Rou
 	return nil
 }
 
-// eachCurrentBlock calls fn for each False condition of each current status
-// block of route u, in parent and type order; owner is the parent's key.
-func eachCurrentBlock(ic InstallContext, u *unstructured.Unstructured, v routeView, fn func(p objects.ParentRef, cond metav1.Condition, extra string, owner []string)) {
+// walk is what the route analyzers of one resource share: its view and its
+// parents of this install with their status blocks. It is built from ic and u
+// alone, on first use, and reads nothing through Named.
+type walk struct {
+	built   bool
+	v       routeView
+	ignored bool
+	blocks  []block
+}
+
+// block is one parent of the walk with this install's status block for it.
+type block struct {
+	p  objects.ParentRef
+	st *objects.RouteParentStatus // nil when the controller wrote none
+	// why, kind and observed are the block's BlockFreshness; why is "" when current.
+	why, kind string
+	observed  int64
+	// falses are a current block's False conditions, in type order.
+	falses []*metav1.Condition
+	extra  string   // "parent " and ParentDesc(p), built on first use
+	owner  []string // parentKey(p), built on first use; analyzers copy it
+}
+
+// of returns w, built for route u on the first call.
+func (w *walk) of(ic InstallContext, u *unstructured.Unstructured) *walk {
+	if w.built {
+		return w
+	}
+	w.built, w.v = true, viewOf(ic.Views, u)
+	if w.ignored = ignored(ic, u, w.v); w.ignored {
+		return w
+	}
 	rr := routeRequired()
 	required, optional := rr[:], ic.Conditions.RouteOptional
-	eachRouteParent(ic, u, v, func(p objects.ParentRef) {
-		st := statusFor(ic, v, p)
-		if st == nil {
-			return
+	eachRouteParent(ic, u, w.v, func(p objects.ParentRef) {
+		b := block{p: p, st: statusFor(ic, w.v, p)}
+		if b.st != nil {
+			b.why, b.kind, b.observed = BlockFreshness(u, b.st.Conditions, required, optional)
 		}
-		if why, _, _ := BlockFreshness(u, st.Conditions, required, optional); why != "" {
-			return
-		}
-		var owner []string
-		for _, ts := range [2][]string{required, optional} {
-			for _, t := range ts {
-				if cond := objects.FindCondition(st.Conditions, t); cond != nil && cond.Status == metav1.ConditionFalse {
-					if owner == nil {
-						owner = parentKey(v, p)
+		if b.st != nil && b.why == "" {
+			for _, ts := range [2][]string{required, optional} {
+				for _, t := range ts {
+					if cond := objects.FindCondition(b.st.Conditions, t); cond != nil && cond.Status == metav1.ConditionFalse {
+						b.falses = append(b.falses, cond)
 					}
-					fn(p, *cond, "parent "+ParentDesc(p), owner)
 				}
 			}
 		}
+		w.blocks = append(w.blocks, b)
 	})
+	return w
+}
+
+// desc is "parent " and the block's ParentDesc.
+func (b *block) desc() string {
+	if b.extra == "" {
+		b.extra = "parent " + ParentDesc(b.p)
+	}
+	return b.extra
+}
+
+// key is the block's parentKey; callers copy it before they change it.
+func (b *block) key(v routeView) []string {
+	if b.owner == nil {
+		b.owner = parentKey(v, b.p)
+	}
+	return b.owner
+}
+
+// eachCurrentBlock calls fn for each False condition of each current status
+// block of the walk's route, in parent and type order; owner is the parent's key.
+func (w *walk) eachCurrentBlock(fn func(p objects.ParentRef, cond metav1.Condition, extra string, owner []string)) {
+	for i := range w.blocks {
+		b := &w.blocks[i]
+		for _, cond := range b.falses {
+			fn(b.p, *cond, b.desc(), b.key(w.v))
+		}
+	}
 }
 
 // RefRuleFor returns the code and slug for cond on a route parent or a

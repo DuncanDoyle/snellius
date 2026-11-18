@@ -430,8 +430,10 @@ func (c conditionsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 		listeners(gw, objects.RefOf(gw), v.Listeners, v.ListenerStatus, true)
 	}
 	// Own-object findings: 003 on a route, 002 from own status, 013, 014 and 015 on a route (D-106).
-	attached := ownRoutes(in.Owned)
-	parentFs := runOwn(ctx, own.Parents, attached)
+	// Owned routes come first in attached; each gets one walk for its four analyzers.
+	attached, routes := ownRoutes(in.Owned), len(in.Owned.Routes)
+	routeFs := runOwn(ctx, []own.Kind{own.Parents, own.Status, own.Refs, own.Rules}, attached[:routes])
+	parentFs := slices.Concat(routeFs[0], runOwn(ctx, []own.Kind{own.Parents}, attached[routes:])[0])
 	var byRef map[objects.Ref]*unstructured.Unstructured // built for the first route in grace
 	for _, f := range parentFs {
 		if f.Severity == SeverityInfo {
@@ -445,9 +447,12 @@ func (c conditionsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 		}
 	}
 	fs = append(fs, parentFs...)
-	fs = append(fs, runOwn(ctx, own.Status, slices.Concat(in.Owned.Gateways, in.Owned.ListenerSets, objectsOf(in.Owned.Routes), objectsOf(in.Owned.Policies)))...)
-	fs = append(fs, runOwn(ctx, own.Refs, objectsOf(in.Owned.Routes))...)
-	fs = append(fs, runOwn(ctx, own.Rules, objectsOf(in.Owned.Routes))...)
+	status := []own.Kind{own.Status}
+	fs = append(fs, runOwn(ctx, status, slices.Concat(in.Owned.Gateways, in.Owned.ListenerSets))[0]...)
+	fs = append(fs, routeFs[1]...)
+	fs = append(fs, runOwn(ctx, status, objectsOf(in.Owned.Policies))[0]...)
+	fs = append(fs, routeFs[2]...)
+	fs = append(fs, routeFs[3]...)
 	// Declared candidates: KGWUI-011's status trigger. Inside its grace the
 	// route is being processed, so this check is pending (design §6.2).
 	declared := len(fs)

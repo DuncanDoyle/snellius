@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -287,7 +288,7 @@ func TestEveryCodeClassified(t *testing.T) {
 }
 
 // A finding's class is set only in fromOwn (other packages cannot: it is
-// unexported), and own.Evaluate, own.InstallContext and
+// unexported), and own.Evaluate, own.EvaluateRoute, own.InstallContext and
 // own.Named are used or implemented only in ownrun.go. fromOwn refuses a
 // Finding that own did not build.
 func TestOwnFindingsOnlyFromOwn(t *testing.T) {
@@ -311,7 +312,7 @@ func TestOwnFindingsOnlyFromOwn(t *testing.T) {
 // ownUseViolations type-checks the non-test files of the package in dir and
 // returns, with extra files parsed into that package, each write of a
 // finding's class outside fromOwn other than a reset to ClassDerived, and each use of own.Evaluate,
-// own.InstallContext or a type implementing own.Named outside ownrun.go.
+// own.EvaluateRoute, own.InstallContext or a type implementing own.Named outside ownrun.go.
 // Types resolve, so aliased imports, variables and conversions are caught.
 func ownUseViolations(t *testing.T, dir string, extra ...string) []string {
 	t.Helper()
@@ -405,7 +406,7 @@ func ownUseViolations(t *testing.T, dir string, extra ...string) []string {
 	}
 	if ownPkg != nil {
 		for id, obj := range info.Uses {
-			if obj.Pkg() == ownPkg && slices.Contains([]string{"Evaluate", "InstallContext"}, obj.Name()) && !inRun(id) {
+			if obj.Pkg() == ownPkg && slices.Contains([]string{"Evaluate", "EvaluateRoute", "InstallContext"}, obj.Name()) && !inRun(id) {
 				bad = append(bad, at(id)+": own."+obj.Name()+" outside ownrun.go")
 			}
 		}
@@ -524,6 +525,37 @@ func ownFindings(in Input, k own.Kind, u *unstructured.Unstructured) ([]todayFin
 		out = append(out, todayFinding{f, f.Evidence, nil})
 	}
 	return out, rec.refs
+}
+
+// One walk per route gives each analyzer the findings, wake time and named refs
+// that evaluating it alone gives, on every route of every world.
+func TestOwnRouteWalkMatchesEach(t *testing.T) {
+	ks := []own.Kind{own.Parents, own.Status, own.Refs, own.Rules}
+	compared := 0
+	for name, w := range ownWorlds(t) {
+		for _, u := range ownRoutes(w.in.Owned) {
+			base := &ownBase{}
+			recs, named := make([]*namedRecorder, len(ks)), make([]own.Named, len(ks))
+			var ic own.InstallContext
+			for i := range ks {
+				recs[i] = &namedRecorder{base: base, resource: u}
+				ic, named[i] = newOwnInput(w.in, recs[i])
+			}
+			for i, got := range own.EvaluateRoute(ks, ic, u, named) {
+				rec := &namedRecorder{base: &ownBase{}, resource: u}
+				ic1, n1 := newOwnInput(w.in, rec)
+				want := own.Evaluate(ks[i], ic1, u, n1)
+				if !reflect.DeepEqual(got.Findings(), want.Findings()) || !got.WakeAt().Equal(want.WakeAt()) || !slices.Equal(recs[i].refs, rec.refs) {
+					t.Errorf("%s: analyzer %d on %s differs in one walk:\n got %+v %v %v\nwant %+v %v %v", name, ks[i], objects.RefOf(u),
+						got.Findings(), got.WakeAt(), recs[i].refs, want.Findings(), want.WakeAt(), rec.refs)
+				}
+				compared += len(want.Findings())
+			}
+		}
+	}
+	if compared == 0 {
+		t.Fatal("no route raised an own-object finding")
+	}
 }
 
 // objectByRef returns the snapshot object r names.

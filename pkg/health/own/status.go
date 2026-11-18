@@ -21,7 +21,7 @@ const DelegationNoChildDetail = "A delegating rule selects no child route the co
 // status reports KGWUI-002 from the resource's own status: a Gateway's or
 // ListenerSet's conditions and listeners, a route's parents, a policy's ancestors.
 // The 003, 013, 014, 015 and 017 that own a block or condition are reported elsewhere.
-func status(ic InstallContext, u *unstructured.Unstructured, named Named, o *out) {
+func status(ic InstallContext, u *unstructured.Unstructured, named Named, o *out, w *walk) {
 	gvk := u.GroupVersionKind()
 	k, ok := served(ic, gvk.Group, gvk.Kind)
 	if !ok {
@@ -46,11 +46,11 @@ func status(ic InstallContext, u *unstructured.Unstructured, named Named, o *out
 		conditionBlock(o, u, v.Conditions, GatewayRequired(), nil, "", self, "")
 		listenerBlocks(o, u, v.ListenerStatus)
 	case kinds.CategoryRoute:
-		v := viewOf(ic.Views, u)
-		if ignored(ic, u, v) {
+		w := w.of(ic, u)
+		if w.ignored {
 			return
 		}
-		eachCurrentBlock(ic, u, v, func(p objects.ParentRef, cond metav1.Condition, extra string, owner []string) {
+		w.eachCurrentBlock(func(p objects.ParentRef, cond metav1.Condition, extra string, owner []string) {
 			if _, _, refs := RefRuleFor(cond, false); refs || ruleReplacedReason(cond, ic.Conditions.RouteRejected) {
 				return
 			}

@@ -28,27 +28,24 @@ type parentsRun struct {
 // status block is missing or not current (D-006), and one per parentRef that
 // names a Gateway, ListenerSet or HTTPRoute that does not exist. Inside the
 // grace period it is info; after it, a warning.
-func parents(ic InstallContext, u *unstructured.Unstructured, named Named, o *out) {
-	r := parentsRun{ic: ic, u: u, v: viewOf(ic.Views, u), named: named, o: o}
-	if ignored(ic, u, r.v) {
+func parents(ic InstallContext, u *unstructured.Unstructured, named Named, o *out, w *walk) {
+	w = w.of(ic, u)
+	if w.ignored {
 		return
 	}
+	r := parentsRun{ic: ic, u: u, v: w.v, named: named, o: o}
 	hint := experimentalHint(ic, u)
-	rr := routeRequired()
-	required, optional := rr[:], ic.Conditions.RouteOptional
-	eachRouteParent(ic, u, r.v, func(p objects.ParentRef) {
-		extra := "parent " + ParentDesc(p)
-		st := statusFor(ic, r.v, p)
-		if st == nil {
-			named.Object(p.Ref())
-			r.notProcessed(p, notProcessedMessage, NoControllerStatus+" for "+extra+hint, r.evidence(FreshnessNeverWritten, 0))
-			return
+	for i := range w.blocks {
+		b := &w.blocks[i]
+		switch {
+		case b.st == nil:
+			named.Object(b.p.Ref())
+			r.notProcessed(b.p, notProcessedMessage, NoControllerStatus+" for "+b.desc()+hint, r.evidence(FreshnessNeverWritten, 0))
+		case b.why != "":
+			named.Object(b.p.Ref())
+			r.notProcessed(b.p, notProcessedMessage, b.why+within(b.desc())+hint, r.evidence(b.kind, b.observed))
 		}
-		if why, kind, observed := BlockFreshness(u, st.Conditions, required, optional); why != "" {
-			named.Object(p.Ref())
-			r.notProcessed(p, notProcessedMessage, why+within(extra)+hint, r.evidence(kind, observed))
-		}
-	})
+	}
 	// A parent of a kind the cache cannot read may only be missing from the
 	// cache; cluster access already reports it. An owned parent exists.
 	if !ic.InScope(u.GetNamespace()) {

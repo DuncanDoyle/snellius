@@ -126,13 +126,14 @@ func notServed(ic InstallContext, r objects.Ref) bool {
 
 // refs reports KGWUI-013 and 014 on a route: a current ResolvedRefs=False on
 // a parent, with the refs its rules write as candidates.
-func refs(ic InstallContext, u *unstructured.Unstructured, named Named, o *out) {
-	v := viewOf(ic.Views, u)
-	if ignored(ic, u, v) {
+func refs(ic InstallContext, u *unstructured.Unstructured, named Named, o *out, w *walk) {
+	w = w.of(ic, u)
+	if w.ignored {
 		return
 	}
+	v := w.v
 	var written []writtenRef
-	eachCurrentBlock(ic, u, v, func(_ objects.ParentRef, cond metav1.Condition, extra string, owner []string) {
+	w.eachCurrentBlock(func(_ objects.ParentRef, cond metav1.Condition, extra string, owner []string) {
 		code, slug, ok := RefRuleFor(cond, false)
 		if !ok {
 			return
