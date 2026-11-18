@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"runtime"
 	"slices"
 	"strings"
@@ -721,7 +723,21 @@ func newHeapAuthorizer(kinds int) (*Authorizer, *clocktesting.FakeClock) {
 		Metrics: obs.NewRegistry(), IdentityFrom: identityFrom, MaxInFlight: unlimited, Rate: unlimited, Burst: unlimited}), clk
 }
 
+// accountedHeapChildEnv makes TestAccountedBytesMatchHeap measure in this
+// process; the parent runs it in a fresh one, free of other tests' garbage.
+const accountedHeapChildEnv = "SNELLIUS_ACCOUNTED_HEAP_CHILD"
+
 func TestAccountedBytesMatchHeap(t *testing.T) {
+	if os.Getenv(accountedHeapChildEnv) == "" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestAccountedBytesMatchHeap$", "-test.count=1", "-test.v")
+		cmd.Env = append(os.Environ(), accountedHeapChildEnv+"=1")
+		out, err := cmd.CombinedOutput()
+		t.Logf("%s", out)
+		if err != nil {
+			t.Fatalf("measuring in a fresh process: %v", err)
+		}
+		return
+	}
 	const n = 10_000
 	a, _ := newHeapAuthorizer(0)
 	alice := user("alice")
