@@ -34,9 +34,9 @@ Base: 1e9f443616d93f699eb55162a4fbfa210c9c2a30
 Brief: docs/phases/phase-7/phase-7.6-brief.md
 
 ### Queue
-- [ ] Audit levels: reads, summaries, disclosure, requests, denial collapsing, metrics (plan 7.6 item 1) ← CURRENT
-- [ ] Busy message (user, 2026-11-18): a 503 from a full admission queue (D-116) gets its own reason and copy, distinct from `authz-unavailable`, whose text blames the API server; the user picks the wording
-- [ ] Docs: README trust model and secure-mode setup, chart README, upgrade notes, documentation notes (item 2)
+- [x] Audit levels: reads, summaries, disclosure, requests, denial collapsing, metrics (plan 7.6 item 1) — Codex review and fix round, `reviews/7.6-audit-codex.md`
+- [x] Busy message (user, 2026-11-18; `51e389b`, `503 authz-busy`): a 503 from a full admission queue (D-116) gets its own reason and copy, distinct from `authz-unavailable`, whose text blames the API server; the user picks the wording
+- [ ] Docs: README trust model and secure-mode setup, chart README, upgrade notes, documentation notes (item 2) ← CURRENT
 - [ ] Phase review (Codex) and stabilization (item 3)
 - [ ] v0.8.0 release, with the user's approval (item 4). Consumer notice approved by the user (2026-11-18): file a `cross-repo` issue in kgwctl at the tag naming E2 and `v0.8.0` (`path: unknown, no-path` for callers without computed views); the kgwctl session need not be running
 
