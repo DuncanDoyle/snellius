@@ -49,7 +49,8 @@ func RollUp(fs []Finding, cs []CheckResult) State {
 
 // ShownTo reports whether a viewer without the full read sees f (D-106): an
 // own-object finding when its resource and every object it named are
-// readable, a collection finding when its resource, if any, is. A derived
+// readable, a collection finding when its resource, if any, is. A named
+// object also counts when a NamedReadable may read it by name. A derived
 // finding needs the full read, under which Project is not called.
 func (f *Finding) ShownTo(rd Readable) bool {
 	switch {
@@ -57,8 +58,9 @@ func (f *Finding) ShownTo(rd Readable) bool {
 		if f.Resource == nil || !rd.Ref(*f.Resource) {
 			return false
 		}
+		nr, named := rd.(NamedReadable)
 		for _, r := range f.Basis.refs() {
-			if !rd.Ref(r) {
+			if !rd.Ref(r) && (!named || !nr.Named(r)) {
 				return false
 			}
 		}

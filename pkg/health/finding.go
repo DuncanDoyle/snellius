@@ -306,6 +306,12 @@ type Readable interface {
 	Ref(objects.Ref) bool
 }
 
+// NamedReadable is a Readable that also says which objects a viewer may read
+// by name: an object named in a readable one, present or absent (D-100 item 1).
+type NamedReadable interface {
+	Named(objects.Ref) bool
+}
+
 // Finding is one problem or notable fact about an install.
 type Finding struct {
 	// ID is stable across recomputes and restarts and unique within the
