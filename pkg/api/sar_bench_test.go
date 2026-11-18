@@ -704,14 +704,16 @@ func loadTest(t *testing.T, secure func(api.Authorizer, func() time.Time, ...api
 				start := clk.Since(storm)
 				v.busy.Store(true)
 				code, sars, _, _, refreshed := poll(ctx, user)
-				late := ctx.Err() != nil
+				// Late is decided by when the poll ended on the bench clock, not by when the deadline timer fired.
+				done := clk.Since(storm)
+				late := done > window+grace
 				v.busy.Store(false)
 				mu.Lock()
 				codes[code]++
 				maxPoll = max(maxPoll, sars)
 				mu.Unlock()
-				v.record(start, clk.Since(storm), code, refreshed, late)
-				if late {
+				v.record(start, done, code, refreshed, late)
+				if late || ctx.Err() != nil {
 					break
 				}
 				// The next poll starts 5 s after this one started, or now if it took longer.

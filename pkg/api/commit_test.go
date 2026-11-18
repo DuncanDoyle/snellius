@@ -1,11 +1,13 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -763,6 +765,36 @@ func TestCommitStalledBodyHoldsNoPlace(t *testing.T) {
 	<-answered
 	if got.Code != http.StatusOK || got.Body.String() != `{"build":2,"visible":3}`+"\n" {
 		t.Errorf("cold GET: %d %q", got.Code, got.Body.String())
+	}
+}
+
+// An upload that stalls past bodyReadTimeout answers 400, so its buffer is not held for long.
+func TestCommitStalledBodyTimesOut(t *testing.T) {
+	defer func(d time.Duration) { bodyReadTimeout = d }(bodyReadTimeout)
+	bodyReadTimeout = 200 * time.Millisecond
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &placeAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: true}, place: make(chan struct{}, 1)}
+	h := NewHandler(staticModel{}, fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}, a,
+		WithSecureMode(true), WithExtMounts(readBody(a, &builds{}, 3)), WithCommitClock(clk.Now))
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	// Ten of the hundred promised bytes, then nothing.
+	if _, err := fmt.Fprintf(conn, "POST /api/ext/u/n HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n0123456789"); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("no answer to a stalled upload: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("stalled upload: %d, want 400", resp.StatusCode)
 	}
 }
 

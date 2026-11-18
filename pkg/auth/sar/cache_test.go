@@ -723,19 +723,28 @@ func newHeapAuthorizer(kinds int) (*Authorizer, *clocktesting.FakeClock) {
 		Metrics: obs.NewRegistry(), IdentityFrom: identityFrom, MaxInFlight: unlimited, Rate: unlimited, Burst: unlimited}), clk
 }
 
-// accountedHeapChildEnv makes TestAccountedBytesMatchHeap measure in this
-// process; the parent runs it in a fresh one, free of other tests' garbage.
-const accountedHeapChildEnv = "SNELLIUS_ACCOUNTED_HEAP_CHILD"
+// heapChildEnv marks a test binary that measures the heap for its parent.
+const heapChildEnv = "SNELLIUS_HEAP_CHILD"
+
+// ranInFreshProcess runs t again in a fresh process, free of other tests'
+// garbage, and reports true; in that child it reports false, so t measures.
+func ranInFreshProcess(t *testing.T) bool {
+	t.Helper()
+	if os.Getenv(heapChildEnv) != "" {
+		return false
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.count=1", "-test.v")
+	cmd.Env = append(os.Environ(), heapChildEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	t.Logf("%s", out)
+	if err != nil {
+		t.Fatalf("measuring in a fresh process: %v", err)
+	}
+	return true
+}
 
 func TestAccountedBytesMatchHeap(t *testing.T) {
-	if os.Getenv(accountedHeapChildEnv) == "" {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestAccountedBytesMatchHeap$", "-test.count=1", "-test.v")
-		cmd.Env = append(os.Environ(), accountedHeapChildEnv+"=1")
-		out, err := cmd.CombinedOutput()
-		t.Logf("%s", out)
-		if err != nil {
-			t.Fatalf("measuring in a fresh process: %v", err)
-		}
+	if ranInFreshProcess(t) {
 		return
 	}
 	const n = 10_000
@@ -763,6 +772,9 @@ func TestAccountedBytesMatchHeap(t *testing.T) {
 
 // A long key is charged at least the heap it takes: its allocation's size class, not its length.
 func TestLongKeysAccountedAtSizeClass(t *testing.T) {
+	if ranInFreshProcess(t) {
+		return
+	}
 	const n = 2_000
 	for _, keyLen := range []int{100, 300, 1_100, 4_097, 40_000} {
 		a, _ := newHeapAuthorizer(0)
@@ -793,8 +805,9 @@ func TestLongKeysAccountedAtSizeClass(t *testing.T) {
 		}
 		keyHeap := heapNow() - before
 		runtime.KeepAlive(keys)
-		// 1 KiB of slack absorbs the runtime's own allocations, a few hundred bytes at most.
-		if charged+1024 < keyHeap {
+		// Slack of 16 KiB or 0.1 % absorbs the runtime's own allocations (up to
+		// about 10 KiB); one missed 16 B size step on 2,000 keys is 32 KiB.
+		if charged+max(16<<10, charged/1000) < keyHeap {
 			t.Errorf("%d-byte keys: charged %d B under their heap %d B", keyLen, charged, keyHeap)
 		}
 		// The cache holding them stays close to its accounting; a small map's slots cost a few percent more.

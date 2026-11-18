@@ -26,6 +26,9 @@ const commitAttempts = 2
 // HEAD, which commit reads in full before admission; a larger one answers 413.
 const MaxRequestBody = 1 << 20
 
+// bodyReadTimeout bounds reading that body, so a stalled upload holds no buffer for long.
+var bodyReadTimeout = 10 * time.Second
+
 // authzUnavailable is the error body of a request whose authorisation failed (design §6.3).
 const authzUnavailable = "authz-unavailable"
 
@@ -104,8 +107,13 @@ func commit(next http.Handler, admit Admitter, check func(http.ResponseWriter, *
 		body, buffered := []byte(nil), false
 		if base.Method != http.MethodGet && base.Method != http.MethodHead && base.Body != nil {
 			// Read before admission, so a stalled upload holds no place; every build reads it afresh.
+			rc := http.NewResponseController(w)
+			_ = rc.SetReadDeadline(time.Now().Add(bodyReadTimeout))
 			var err error
-			if body, err = io.ReadAll(http.MaxBytesReader(w, base.Body, MaxRequestBody)); err != nil {
+			body, err = io.ReadAll(http.MaxBytesReader(w, base.Body, MaxRequestBody))
+			if err != nil {
+				// The deadline stays, and the connection closes, so the server never waits to drain the rest.
+				w.Header().Set("Connection", "close")
 				if tooLarge := (*http.MaxBytesError)(nil); errors.As(err, &tooLarge) {
 					writeErr(w, http.StatusRequestEntityTooLarge, "request body too large")
 					return
@@ -113,6 +121,7 @@ func commit(next http.Handler, admit Admitter, check func(http.ResponseWriter, *
 				writeErr(w, http.StatusBadRequest, "request body unreadable")
 				return
 			}
+			_ = rc.SetReadDeadline(time.Time{})
 			buffered = true
 		}
 		if admit != nil && base.Method != http.MethodGet && base.Method != http.MethodHead {
