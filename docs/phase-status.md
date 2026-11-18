@@ -35,6 +35,7 @@ Brief: docs/phases/phase-7/phase-7.6-brief.md
 
 ### Queue
 - [ ] Audit levels: reads, summaries, disclosure, requests, denial collapsing, metrics (plan 7.6 item 1) ← CURRENT
+- [ ] Busy message (user, 2026-11-18): a 503 from a full admission queue (D-116) gets its own reason and copy, distinct from `authz-unavailable`, whose text blames the API server; the user picks the wording
 - [ ] Docs: README trust model and secure-mode setup, chart README, upgrade notes, documentation notes (item 2)
 - [ ] Phase review (Codex) and stabilization (item 3)
 - [ ] v0.8.0 release, with the user's approval (item 4). Consumer notice approved by the user (2026-11-18): file a `cross-repo` issue in kgwctl at the tag naming E2 and `v0.8.0` (`path: unknown, no-path` for callers without computed views); the kgwctl session need not be running
@@ -48,6 +49,7 @@ Provided to this repo: E4 and E5 from xdsview `v0.3.0` (renamed from krp; #15, #
 
 ## Carry-over (deferred to later phases)
 - (P3) After `v0.8.0` (user, 2026-11-18, D-118): compare how other Kubernetes UIs and platforms authorise per user, whether they hit the same check-rate limits, and whether Snellius's per-object visibility (D-085) causes them; what could be learned from their architecture. Include (user, 2026-11-18) an implicit namespace scope: derive the namespaces a viewer can read (cached SAR list answers, or SelfSubjectRulesReview as a hint only) and scope pages to them by default, SAR still deciding every object, shown in the UI with a way to widen; OpenShift's Projects API is the precedent
+- (P3) After `v0.8.0` (user, 2026-11-18): poll every 10 s instead of 5 s, pause while the tab is hidden and refresh on return (saves server work; check load follows answer lifetimes, not polls); a quiet "checking what you can see" hint after a few seconds of waiting; fairness between viewers in admission. No session cap for restricted viewers: idle sessions cost little, and D-116 already bounds concurrent work
 - (P3) REMIND USER at the start of each phase: file the upstream kgateway issue "Expose the controller's effective discovery scope through a read-only endpoint" (H9, D-009 §7). User chose to file it in a later phase (2026-10-20). Draft kept outside the repo (public repo). Before filing: confirm on a cluster that status stays after a namespace is deselected, and re-verify the file:line refs against kgateway main.
 - (P3) Scope verification for experimental Gateway API kinds: switch KGWUI-007 to the controller's enabled kinds once the upstream scope endpoint exists (D-017 §4) — src: phases/phase-1/reviews/phase-codex.md#5
 - (P3) Watch CRDs added or removed after startup without a restart — https://github.com/DuncanDoyle/kgateway-ui/issues/1
