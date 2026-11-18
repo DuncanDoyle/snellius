@@ -1711,3 +1711,12 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** Keep the default rate (D-100 item 6). The load bench requires each viewer to be sampled at least one deny TTL after its first 200, with at least one deny refresh and at least 20 scored polls, instead of a fixed 60 polls. The README says when to raise `auth.authz.rate` (`docs/documentation-notes.md`).
 
 **Consequences:** Near the default rate, polls slow down but answer. After `v0.8.0`: compare how other Kubernetes UIs and platforms authorise per user, whether they meet the same limits, and whether Snellius's per-object visibility model (D-085) is the cause; tracked in `phase-status.md`, Carry-over.
+
+## D-119 — In secure mode a build's authoriser only narrows SAR (2026-11-18, Phase 7)
+**Status:** decided by the author to fix a P1 from Codex's review (`phases/phase-7/reviews/7.5-web-gate-codex.md`, G1); reported to the user the same day. Replaces the 7.3 plan's "a registry authoriser is kept".
+
+**Context:** Opening the gate (7.5) made secure mode serve data. A downstream build that registered its own authoriser kept it in place of SubjectAccessReview, so a viewer could see objects their Kubernetes RBAC does not allow (the bundled example authorises by namespace alone).
+
+**Decision:** Secure mode always builds the SAR authoriser. A registered authoriser becomes a policy over it (`api.Narrowed`): every decision (named, list, batch, full read) needs both to allow; admission and caching stay SAR's. A policy that cannot answer list questions denies them. Local mode is unchanged. Extension helpers (`ViewerOf`, `Visible`) deny everything when given no authoriser in secure mode.
+
+**Consequences:** A downstream build can restrict what users see further, never widen it. A policy without list support hides everything gated on list permission (for example Pod and Event checks); a downstream build that wants those must answer list questions.

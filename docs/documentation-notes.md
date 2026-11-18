@@ -64,7 +64,7 @@ Topics the user-facing documentation must cover when it is written. Each entry s
 - **Two modes.** Flag `--auth-mode`, chart value `auth.mode`, default `local`. Explain what each means for who sees what.
 - **Local mode.** No sign-in. Snellius listens on `127.0.0.1:8080` in the pod, so only `kubectl port-forward` reaches it. Whoever can port-forward (needs `pods/portforward` in its namespace) sees everything Snellius reads. A banner on every page says so.
 - **Refusals.** A Host that is not localhost (or in `auth.allowedHosts`) gets 421; a cross-origin request gets 403. Explain both, and that the binary refuses a non-loopback `--listen` or host networking, and the chart refuses `httpRoute.enabled`.
-- **Secure mode.** OIDC sign-in with visibility that follows Kubernetes RBAC, from `v0.8.0`. Until then it answers `/api/` with 503 `secure-mode-incomplete`. Write the setup once the release exists.
+- **Secure mode.** OIDC sign-in with visibility that follows Kubernetes RBAC, from `v0.8.0`. Since 7.5 (cd667e0) it serves each signed-in user only what their RBAC allows; a custom policy can only narrow it. Write the setup in 7.6.
 - **Upgrade break.** An install with `httpRoute.enabled` needs `auth.mode: secure`. Explain why (an HTTPRoute exposed an unauthenticated view up to `v0.7.x`; local mode is loopback-only), give the two choices (secure mode from `v0.8.0`, or port-forward), and say not to upgrade it to a development build.
 
 ## Audit stream (2026-11-14, Phase 7 sub-phase 7.1)

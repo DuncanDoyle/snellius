@@ -324,7 +324,7 @@ Install surface (stated, per the team rule):
 - Nothing else changes: no new port, env or mount.
 
 **Interfaces:**
-- `app.Build` in secure mode: when the registry sets no authoriser (`noAuthorizer`), it wires `sar.New` with `sar.NewKubeChecker(c.Kube)`, the TTL, the 7.1 metrics registry and the app clock, and starts its sweeper in `Start`. A registry authoriser is kept, as `DenyAll` is today. `WithSecureMode(false)` stays.
+- `app.Build` in secure mode: when the registry sets no authoriser (`noAuthorizer`), it wires `sar.New` with `sar.NewKubeChecker(c.Kube)`, the TTL, the 7.1 metrics registry and the app clock, and starts its sweeper in `Start`. A registry authoriser only narrows SAR (D-119); `WithSecureMode` takes no argument since 7.5 opened the gate.
 - Extension `Deps.Authorizer` gets the same authoriser as the handler. Today `app.go:314` passes `reg.Authorizer` before the secure-mode substitution at `:343`, so extensions would see `AllowAll` in secure mode.
 - `sar.Kinds` from the watched served kinds plus a fixed core table of every non-CRD kind the cache watches (Service, EndpointSlice, Pod, Deployment, Namespace, and the rest found in `pkg/cache`); the kinds `key` follows the served-kinds monitor's catalog key.
 - `WithCommitCheck(sessions.StillSignedIn)` in secure mode (Task 19).
