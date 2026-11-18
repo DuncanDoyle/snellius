@@ -268,6 +268,8 @@ Route rows and route detail gain `config` and `path`, each `{state, reason}`; `p
 | restricted | healthy | unknown, incomplete | unknown |
 | restricted | warning | unknown, incomplete | warning |
 
+"Path problem" in this table is D-082's lift (a rejecting Gateway or a backend problem). The path signal (§8.1) also covers listeners and the route chain; a fault there shows in `path`, while `health` keeps D-082's meaning (7.5 ruling, `reviews/7.5-signals-codex.md`).
+
 `reason` keeps today's kinds; `backend-problem` and `gateway-rejecting` are only given to a viewer who can read the backend or Gateway (else the reason is `path-incomplete`, a new kind). kgwctl and other API users keep working; the API docs mark `health` as the summary.
 
 ### 8.4 UI

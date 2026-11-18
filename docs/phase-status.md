@@ -41,9 +41,9 @@ Design changes without a decisions.md entry and user approval; 7.6 work (audit l
 
 ### Queue
 - [x] Load: every cold viewer gets answers on /routes, /paths, /backends under the load bench (P2, 7.4 Deferred) — D-116 admission, D-117 cache entries 468 → 210 B, D-118 capacity accepted; Codex review, re-review and fix check with triage in `reviews/7.5-d116-codex.md`; load bench green on 0ad27f0. Separate PR later: `pkg/engine` `TestStaleMetricsAreNeverConfirmed` flaked once (60 reruns pass)
-- [ ] `pkg/explore`: `config`, `path`, `path.incomplete`, legacy `health`, `path-incomplete` (plan 7.5 item 1) ← CURRENT
-- [ ] API: route list and detail, Gateway and ListenerSet route tables, `config=` and `path=` filters (item 2)
-- [ ] Web: columns, header badges, problem strip, map nodes, wording (item 3)
+- [x] `pkg/explore`: `config`, `path`, `path.incomplete`, legacy `health`, `path-incomplete` (plan 7.5 item 1) — Codex review and three fix rounds, `reviews/7.5-signals-codex.md`. Open for the close (P3): a route readable by name only shows an empty trace
+- [x] API: route list and detail, Gateway and ListenerSet route tables, `config=` and `path=` filters (item 2)
+- [ ] Web: columns, header badges, problem strip, map nodes, wording (item 3) ← CURRENT
 - [x] D-115 follow-up: shared route walk in `own` (P3) — all four benchmarks within +15 % of `39c47c9` (D-115, Follow-up); Codex review with triage in `reviews/7.5-d115-codex.md`
 - [ ] Open the gate, rule tests on the new fields (item 4)
 
