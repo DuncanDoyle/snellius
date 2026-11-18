@@ -16,39 +16,96 @@ type Signal struct {
 	Incomplete bool
 }
 
-// RouteSignals are route row id's configuration and traffic path for vw
-// (design §8.1). Configuration is the worst shown finding on the route
-// itself. The path is the worst shown fault of a parent Gateway rejecting
-// config or a non-mirror backend, the install-wide unknown, and unknown when
-// vw.Perms leave it incomplete. backend is the backend that decides a
-// backend-problem path reason, else nil.
-func (ix *Index) RouteSignals(id RowID, vw Viewer) (config, path Signal, backend *objects.Ref) {
-	return ix.signals(&ix.Routes[id], vw)
+// PathRows is a route's traffic path read from its path rows (design §8.1):
+// the worst state over the rows the viewer may read, the reason that state
+// gives and the backend the reason names. Rows counts those rows.
+type PathRows struct {
+	State   health.State
+	Reason  *health.RowReason
+	Backend *objects.Ref
+	Rows    int
 }
 
-// ObjectSignals are RouteSignals for route u without a row: no Gateway or
-// backend fault reaches it, so only the install-wide unknown and
-// incompleteness move its path.
+// RouteSignals are route row id's configuration and traffic path for vw
+// (design §8.1). Configuration is the worst shown finding on the route
+// itself. The path is vw.Path's rows, or without it the index's rejecting
+// Gateways and backend faults; see path for the order. backend is the
+// backend a backend-problem path reason names, else nil.
+func (ix *Index) RouteSignals(id RowID, vw Viewer) (config, path Signal, backend *objects.Ref) {
+	r := &ix.Routes[id]
+	pr := ix.indexPath(r, vw)
+	if vw.Path != nil {
+		pr = vw.Path(id)
+	}
+	return ix.signals(r, vw, pr)
+}
+
+// ObjectSignals are RouteSignals for route u without a row, which has no
+// path rows: only incompleteness and the install-wide unknown move its path.
 func (ix *Index) ObjectSignals(u *unstructured.Unstructured, vw Viewer) (config, path Signal) {
-	config, path, _ = ix.signals(&RouteRow{Ref: objects.RefOf(u), Obj: u}, vw)
+	config, path, _ = ix.signals(&RouteRow{Ref: objects.RefOf(u), Obj: u}, vw, PathRows{State: health.StateHealthy})
 	return config, path
 }
 
-// signals is RouteSignals for route r.
-func (ix *Index) signals(r *RouteRow, vw Viewer) (config, path Signal, backend *objects.Ref) {
+// signals composes route r's configuration and its path from pr. A readable
+// error or warning decides the path, incomplete or not; then an incomplete
+// path is unknown, then an unknown row, the install-wide unknown, and a
+// route without rows is not attached (design §8.1).
+func (ix *Index) signals(r *RouteRow, vw Viewer, pr PathRows) (config, path Signal, backend *objects.Ref) {
 	unknown := ix.unknown
 	if vw.Shown != nil {
 		unknown = vw.Unknown
 	}
-	w := ix.WorstOf(r.Ref, vw)
-	config.State = w.State(unknown)
-	config.Reason = w.Reason(config.State)
-	// The first most severe fault decides, Gateways before backends as on the legacy reason.
+	config = ix.config(r.Ref, vw)
+	path.Incomplete = ix.incomplete(r, vw)
+	switch {
+	case pr.State == health.StateError || pr.State == health.StateWarning:
+		path.State, path.Reason, backend = pr.State, pr.Reason, pr.Backend
+	case path.Incomplete:
+		path.State, path.Reason = health.StateUnknown, &health.RowReason{Kind: health.ReasonPathIncomplete}
+	case pr.State == health.StateUnknown:
+		path.State, path.Reason = health.StateUnknown, pr.Reason
+	case unknown:
+		path.State, path.Reason = health.StateUnknown, &health.RowReason{Kind: health.ReasonUnknown}
+	case pr.Rows == 0:
+		path.State, path.Reason = health.StateUnknown, &health.RowReason{Kind: health.ReasonNotAttached}
+	default:
+		path.State = health.StateHealthy
+	}
+	return config, path, backend
+}
+
+// config is route ref's configuration signal for vw: its own shown findings.
+func (ix *Index) config(ref objects.Ref, vw Viewer) Signal {
+	unknown := ix.unknown
+	if vw.Shown != nil {
+		unknown = vw.Unknown
+	}
+	w := ix.WorstOf(ref, vw)
+	st := w.State(unknown)
+	return Signal{State: st, Reason: w.Reason(st)}
+}
+
+// incomplete reports whether vw cannot assess route r's whole path: its
+// permissions leave a ref unreadable, or it gets no delegation analysis
+// (D-114) and r names a parent route. Both are permissions alone.
+func (ix *Index) incomplete(r *RouteRow, vw Viewer) bool {
+	return vw.Perms != nil && (ix.routeIncomplete(r, vw.Perms) || vw.NoDelegation && len(ix.routeData(r).routeParents) > 0)
+}
+
+// indexPath is route r's path from the index alone, for a viewer without
+// path rows: the first most severe shown fault of a rejecting parent
+// Gateway or a non-mirror backend; one row when any parent accepted it.
+func (ix *Index) indexPath(r *RouteRow, vw Viewer) PathRows {
+	out := PathRows{State: health.StateHealthy}
+	if r.Flags&FlagAccepted != 0 {
+		out.Rows = 1
+	}
 	var fault *health.Finding
 	kind := ""
 	for _, g := range r.rejectedBy {
 		if f := ix.shownFinding(g, health.CodeXDSRejected, vw); f != nil && worse(f, fault) {
-			fault, kind, backend = f, health.ReasonGatewayRejecting, nil
+			fault, kind, out.Backend = f, health.ReasonGatewayRejecting, nil
 		}
 	}
 	for k := range r.problemBackends {
@@ -58,31 +115,20 @@ func (ix *Index) signals(r *RouteRow, vw Viewer) (config, path Signal, backend *
 			f = bw.Warning
 		}
 		if f != nil && worse(f, fault) {
-			fault, kind, backend = f, health.ReasonBackendProblem, &r.problemBackends[k]
+			fault, kind, out.Backend = f, health.ReasonBackendProblem, &r.problemBackends[k]
 		}
 	}
-	path.Incomplete = vw.Perms != nil && ix.routeIncomplete(r, vw.Perms)
-	// The row rule of Worst.State: error, then unknown, then warning.
-	switch {
-	case fault != nil && fault.Severity == health.SeverityError:
-		path.State = health.StateError
-	case unknown:
-		path.State, path.Reason = health.StateUnknown, &health.RowReason{Kind: health.ReasonUnknown}
-		fault, backend = nil, nil
-	case fault != nil:
-		path.State = health.StateWarning
-	case path.Incomplete:
-		path.State, path.Reason = health.StateUnknown, &health.RowReason{Kind: health.ReasonPathIncomplete}
-	default:
-		path.State = health.StateHealthy
+	if fault == nil {
+		return out
 	}
-	if fault != nil {
-		path.Reason = &health.RowReason{Kind: kind}
-		if kind == health.ReasonBackendProblem {
-			path.Reason.Code, path.Reason.Message = fault.Code, fault.Message
-		}
+	out.State, out.Reason = health.StateWarning, &health.RowReason{Kind: kind}
+	if fault.Severity == health.SeverityError {
+		out.State = health.StateError
 	}
-	return config, path, backend
+	if kind == health.ReasonBackendProblem {
+		out.Reason.Code, out.Reason.Message = fault.Code, fault.Message
+	}
+	return out
 }
 
 // worse reports whether f is more severe than cur, an error over a warning or anything over nil.
@@ -91,9 +137,9 @@ func worse(f, cur *health.Finding) bool {
 }
 
 // summary is the legacy health of route row id for vw (design §8.3): st,
-// raised from healthy to unknown when vw.Perms leave the path incomplete.
+// raised from healthy to unknown when vw cannot assess the whole path.
 func (ix *Index) summary(id RowID, vw Viewer, st health.State, r *health.RowReason) (health.State, *health.RowReason) {
-	if st != health.StateHealthy || vw.Perms == nil || !ix.PathIncomplete(id, vw.Perms) {
+	if st != health.StateHealthy || !ix.incomplete(&ix.Routes[id], vw) {
 		return st, r
 	}
 	return health.StateUnknown, &health.RowReason{Kind: health.ReasonPathIncomplete}

@@ -440,6 +440,9 @@ func (v *view) deniedInInstall(n int, ref func(explore.RowID) objects.Ref) int {
 // Ref implements health.Readable: whether the caller may read ref as a population member.
 func (v *view) Ref(ref objects.Ref) bool { return v.can(ref) }
 
+// Named implements health.NamedReadable: whether the caller may read ref by name (D-100 item 1).
+func (v *view) Named(ref objects.Ref) bool { return v.canNamed(ref) }
+
 // projects reports whether v projects findings and check results (D-106):
 // secure mode without the full read.
 func (v *view) projects() bool { return v.secure && v.off&stepFindings == 0 && !v.readsAll() }
@@ -465,16 +468,12 @@ func (v *view) viewer(i *engine.InstallModel) explore.Viewer {
 	return v.viewerIn(i, nil)
 }
 
-// viewerIn is viewer for a list under scope. A scoped list projects the
-// checks alone, so no finding outside the scope is asked about. Route paths
+// viewerIn is viewer for a list under scope. The install-wide unknown comes
+// from the checks alone, so no finding is asked about for it. Route paths
 // are decided incomplete from v's permissions where states are (design §8.1).
 func (v *view) viewerIn(i *engine.InstallModel, scope []string) explore.Viewer {
 	vw := explore.Viewer{Visible: v.visible(), NoDelegation: v.noDelegation()}
-	switch {
-	case !v.secure || v.off&stepRowState != 0 || v.readsAll():
-	case scope == nil:
-		vw.Shown, vw.Unknown, vw.Perms = v.shown, requiredNotOK(v.report(i).Checks), incompletePermissions{v}
-	default:
+	if v.secure && v.off&stepRowState == 0 && !v.readsAll() {
 		vw.Shown, vw.Unknown, vw.Perms = v.shown, requiredNotOK(health.Project(health.Report{Checks: i.Health.Checks}, v).Checks), incompletePermissions{v}
 	}
 	return vw
@@ -675,3 +674,6 @@ func (n namedSubject) Ref(r objects.Ref) bool {
 	}
 	return n.v.can(r)
 }
+
+// Named implements health.NamedReadable, as the view does.
+func (n namedSubject) Named(r objects.Ref) bool { return n.v.canNamed(r) }

@@ -11,13 +11,15 @@ import (
 // then Unknown is ignored. Unknown is the caller's install-wide unknown.
 // NoDelegation withholds delegation analysis, the dropped flag included (D-114).
 // Perms decides whether a route's traffic path is incomplete (design §8.1);
-// nil leaves every path complete.
+// nil leaves every path complete. Path reads a route row's path rows as the
+// caller sees them; nil derives the path from the index alone.
 type Viewer struct {
 	Visible      func(objects.Ref) bool
 	Shown        func(*health.Finding) bool
 	Unknown      bool
 	NoDelegation bool
 	Perms        Permissions
+	Path         func(RowID) PathRows
 }
 
 // WorstOf is ref's Worst over the findings vw shows.

@@ -536,7 +536,10 @@ func (h *handler) routeDetail(w http.ResponseWriter, r *http.Request) {
 	var config RouteSignal
 	var path PathSignal
 	if row {
-		config, path = routeSignals(d.ix, d.v, d.vw, d.l, id)
+		rp := d.h.routePaths(d.p, d.i, d.ix, d.v, func(r objects.Ref) bool { return r == ref })
+		vw := d.vw
+		vw.Path = rp.path
+		config, path = routeSignals(d.ix, d.v, vw, d.l, rp, id)
 	} else {
 		c, p := d.ix.ObjectSignals(u, d.vw)
 		config, path = RouteSignal{State: c.State, Reason: c.Reason}, PathSignal{State: p.State, Incomplete: p.Incomplete}

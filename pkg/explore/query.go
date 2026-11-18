@@ -352,10 +352,8 @@ func (ix *Index) queryRoutes(in Query, vw Viewer) (Page, int, error) {
 	// The path's incompleteness asks permissions, so only a health or path filter or the health sort reads it.
 	summarise := vw.Perms != nil && (len(q.Health) > 0 || q.Sort.Key == sortHealth)
 	signals := len(q.Config) > 0 || len(q.Path) > 0
-	sigVw := vw
-	if len(q.Path) == 0 {
-		sigVw.Perms = nil
-	}
+	// A viewer's row state asks about its shown findings, so only the health and state filters and sort read it.
+	stated := len(q.Health) > 0 || q.Sort.Key == sortHealth || q.States != 0
 	for _, id := range cands {
 		r := &ix.Routes[id]
 		// Out of scope before any check: no root bucket outside the scope is asked.
@@ -371,7 +369,9 @@ func (ix *Index) queryRoutes(in Query, vw Viewer) (Page, int, error) {
 				continue
 			}
 			// Status flags only under a state filter: they ask each parent, one SAR at a time.
-			st, f, _ = ix.routeState(id, vw, q.States != 0)
+			if stated {
+				st, f, _ = ix.routeState(id, vw, q.States != 0)
+			}
 		}
 		if summarise && (visible == nil || visible(r.Ref)) {
 			st, _ = ix.summary(id, vw, st, nil)
@@ -383,7 +383,7 @@ func (ix *Index) queryRoutes(in Query, vw Viewer) (Page, int, error) {
 			q.Listener == ListenerUnknown && !ix.unknownRef(id, *q.Parent, visible) ||
 			visible != nil && !visible(r.Ref) ||
 			q.Parent != nil && (q.Attachment != "" || visible != nil) && !ix.Under(id, *q.Parent, q.Attachment, visible) ||
-			signals && !q.signalsMatch(ix, id, sigVw) {
+			signals && !q.signalsMatch(ix, id, vw) {
 			continue
 		}
 		es = append(es, entry{id: id, ref: r.Ref, v: sortVal{group: r.Ref.Group, kind: r.Ref.Kind, n: healthRank(st)}})
@@ -391,10 +391,17 @@ func (ix *Index) queryRoutes(in Query, vw Viewer) (Page, int, error) {
 	return q.page(es), len(cands), nil
 }
 
-// signalsMatch reports whether route row id's signals for vw pass the config and path filters.
+// signalsMatch reports whether route row id's signals for vw pass the config
+// and path filters. Only a path filter reads the path, which asks permissions.
 func (q *query) signalsMatch(ix *Index, id RowID, vw Viewer) bool {
-	config, path, _ := ix.RouteSignals(id, vw)
-	return (len(q.Config) == 0 || slices.Contains(q.Config, config.State)) && (len(q.Path) == 0 || slices.Contains(q.Path, path.State))
+	if len(q.Config) > 0 && !slices.Contains(q.Config, ix.config(ix.Routes[id].Ref, vw).State) {
+		return false
+	}
+	if len(q.Path) == 0 {
+		return true
+	}
+	_, path, _ := ix.RouteSignals(id, vw)
+	return slices.Contains(q.Path, path.State)
 }
 
 // listenerRows are the distinct rows with a member on k whose dependencies

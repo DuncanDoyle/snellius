@@ -160,6 +160,8 @@ type Topology struct {
 	delegates bool
 	// withhold is Input.Withhold; the memo keeps such a topology apart.
 	withhold bool
+	// byRoute are, per route, the rows whose chain holds it, in row order.
+	byRoute map[objects.Ref][]int32
 }
 
 // builder holds Build's lookup tables, which the Topology does not retain.
@@ -218,8 +220,33 @@ func Build(in Input) *Topology {
 	t.Rows, t.Refs, t.deps = slices.Clone(t.Rows), slices.Clone(t.Refs), slices.Clone(t.deps)
 	t.hostnames = slices.Clone(t.hostnames)
 	t.atts, t.listeners, t.hops, t.ctxs = slices.Clone(t.atts), slices.Clone(t.listeners), slices.Clone(t.hops), slices.Clone(t.ctxs)
+	t.byRoute = map[objects.Ref][]int32{}
+	for i, r := range t.Rows {
+		c := t.chain(r)
+		for k, ri := range c {
+			// A chain names a route once; a repeat would list the row twice.
+			if !slices.Contains(c[:k], ri) {
+				ref := t.Refs[t.routes[ri].ref]
+				t.byRoute[ref] = append(t.byRoute[ref], int32(i)) // #nosec G115 -- a row count fits in int32
+			}
+		}
+	}
 	return t
 }
+
+// ChainHolds reports whether holds admits a route of row r's chain.
+func (t *Topology) ChainHolds(r Row, holds func(objects.Ref) bool) bool {
+	for _, ri := range t.chain(r) {
+		if holds(t.Refs[t.routes[ri].ref]) {
+			return true
+		}
+	}
+	return false
+}
+
+// RowsOf are the rows whose chain holds route, as the paths list's route
+// filter matches them, in row order. The caller must not change them.
+func (t *Topology) RowsOf(route objects.Ref) []int32 { return t.byRoute[route] }
 
 // ref interns r into the dependency table.
 func (b *builder) ref(r objects.Ref) int32 {
@@ -545,6 +572,9 @@ func (t *Topology) Bytes() int {
 		n += ruleBytes(t.routes[i].rules)
 	}
 	n += cap(t.hops)*4 + cap(t.ctxs)*int(unsafe.Sizeof(pathCtx{})) + cap(t.unknowns)*int(unsafe.Sizeof(computed.UnknownReason("")))
+	for _, rows := range t.byRoute {
+		n += int(unsafe.Sizeof(objects.Ref{})) + cap(rows)*4
+	}
 	return n
 }
 

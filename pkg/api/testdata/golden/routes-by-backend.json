@@ -64,7 +64,11 @@
         ],
         "path": {
           "incomplete": false,
-          "state": "healthy"
+          "reason": {
+            "code": "off",
+            "kind": "backend-problem"
+          },
+          "state": "unknown"
         },
         "ref": {
           "group": "gateway.networking.k8s.io",
@@ -136,7 +140,11 @@
         ],
         "path": {
           "incomplete": false,
-          "state": "healthy"
+          "reason": {
+            "code": "off",
+            "kind": "backend-problem"
+          },
+          "state": "unknown"
         },
         "ref": {
           "group": "gateway.networking.k8s.io",

@@ -1,7 +1,9 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -9,6 +11,9 @@ import (
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/pkg/api"
+	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
+	"github.com/DuncanDoyle/snellius/pkg/auth/sar"
+	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
 
@@ -31,24 +36,28 @@ var (
 	lsAllParam = objects.GatewayAPIGroup + "/ListenerSet/" + ns0 + "/" + lsAllName
 )
 
-// signals are a route's health, reason and two signals as sent.
+// signals are a route's health, reason and two signals as sent, every reason member included.
 type signals struct {
 	Health string          `json:"health"`
 	Reason json.RawMessage `json:"reason"`
 	Config *struct {
-		State  string `json:"state"`
-		Reason *struct {
-			Kind string `json:"kind"`
-			Code string `json:"code"`
-		} `json:"reason"`
+		State  string        `json:"state"`
+		Reason *signalReason `json:"reason"`
 	} `json:"config"`
 	Path *struct {
-		State  string `json:"state"`
-		Reason *struct {
-			Kind string `json:"kind"`
-		} `json:"reason"`
-		Incomplete bool `json:"incomplete"`
+		State      string        `json:"state"`
+		Reason     *signalReason `json:"reason"`
+		Incomplete bool          `json:"incomplete"`
 	} `json:"path"`
+}
+
+// signalReason is a signal's reason as sent.
+type signalReason struct {
+	Kind    string         `json:"kind"`
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	More    int            `json:"more"`
+	Backend *api.LinkedRef `json:"backend"`
 }
 
 // routeSurfaces are the route list, the Gateway and ListenerSet route tables and the route details of names.
@@ -133,43 +142,137 @@ func checkWant(t *testing.T, got map[[2]string]signals, user string, wants map[s
 
 // The incompleteness matrix on every route surface (design §8.1, brief): an
 // unreadable ref, absent or present, makes the path unknown and incomplete;
-// a readable ref to an absent Service is the ordinary 013 and complete; an
-// unattached route and one without path rows keep their ordinary path. The
-// full viewer is never incomplete.
+// a readable ref to an absent Service is the ordinary 013, in config and on
+// its path row, and complete; an unattached route keeps its pending path and
+// one without path rows is not attached. The full viewer is never incomplete.
 func TestRouteSignalsOnRouteSurfaces(t *testing.T) {
 	srv := ruleServe(t, worldPlus(t, signalNeighbours, ruleChange{name: "base"}))
 	// Details open for the routes below; names-absent's row is admitted by a hidden finding, freeRoute's for its YAML only.
 	names := []string{"svc-consumer", "absent-consumer", namesHidden, toHidden, unattachedRoute}
 	incomplete := want{"healthy", "", "unknown", "path-incomplete", true, "unknown"}
+	absent := want{"error", "KGWUI-013", "error", "path-problem", false, "error"}
+	unattached := want{"warning", "KGWUI-003", "unknown", "path-problem", false, "warning"}
+	notAttached := want{"healthy", "", "unknown", "not-attached", false, "healthy"}
 	checkWant(t, signalsOf(t, srv, restrictedUser, names...), restrictedUser, map[string]want{
 		"svc-consumer":    {"healthy", "", "healthy", "", false, "healthy"},
-		"absent-consumer": {"error", "KGWUI-013", "healthy", "", false, "error"},
+		"absent-consumer": absent,
 		namesHidden:       incomplete,
 		namesAbsent:       incomplete,
 		toHidden:          incomplete,
-		unattachedRoute:   {"warning", "KGWUI-003", "healthy", "", false, "warning"},
-		freeRoute:         {"healthy", "", "healthy", "", false, "healthy"},
+		unattachedRoute:   unattached,
+		freeRoute:         notAttached,
 	})
 	checkWant(t, signalsOf(t, srv, fullUser, names...), fullUser, map[string]want{
 		"svc-consumer":    {"healthy", "", "healthy", "", false, "healthy"},
-		"absent-consumer": {"error", "KGWUI-013", "healthy", "", false, "error"},
-		namesHidden:       {"healthy", "", "healthy", "", false, "healthy"},
-		toHidden:          {"healthy", "", "healthy", "", false, "healthy"},
-		unattachedRoute:   {"warning", "KGWUI-003", "healthy", "", false, "warning"},
-		freeRoute:         {"healthy", "", "healthy", "", false, "healthy"},
+		"absent-consumer": absent,
+		// hidden-gw's proxy is not ready (KGWUI-006): an error on names-hidden's path rows through it.
+		namesHidden:     {"healthy", "", "error", "path-problem", false, "healthy"},
+		toHidden:        {"healthy", "", "healthy", "", false, "healthy"},
+		unattachedRoute: unattached,
+		freeRoute:       notAttached,
 	})
 }
 
-// A hidden fault reaches the full viewer's path as its reason kind and the
+// A hidden fault reaches the full viewer's path with its reason and the
 // restricted viewer's not at all: the path stays incomplete (design §8.3).
 func TestRouteSignalsHiddenFault(t *testing.T) {
-	for _, c := range []struct {
-		change, route, reason string
-	}{{"rejecting", namesHidden, "gateway-rejecting"}, {"faulty", toHidden, "backend-problem"}} {
-		srv := ruleServe(t, worldPlus(t, signalNeighbours, change(c.change)))
-		checkWant(t, signalsOf(t, srv, fullUser, c.route), fullUser, map[string]want{c.route: {"healthy", "", "error", c.reason, false, "warning"}})
-		checkWant(t, signalsOf(t, srv, restrictedUser, c.route), restrictedUser,
-			map[string]want{c.route: {"healthy", "", "unknown", "path-incomplete", true, "unknown"}})
+	srv := ruleServe(t, worldPlus(t, signalNeighbours, change("faulty")))
+	checkWant(t, signalsOf(t, srv, fullUser, toHidden), fullUser, map[string]want{toHidden: {"healthy", "", "error", "backend-problem", false, "warning"}})
+	checkWant(t, signalsOf(t, srv, restrictedUser, toHidden), restrictedUser,
+		map[string]want{toHidden: {"healthy", "", "unknown", "path-incomplete", true, "unknown"}})
+}
+
+// namedServices is ruleChecker with the restricted viewer's Service list in
+// ns-001 denied: Services there are readable by name only (D-100 item 1).
+type namedServices struct{ ruleChecker }
+
+func (c namedServices) Check(ctx context.Context, id oidc.Identity, a sar.Attributes) (bool, error) {
+	if id.Username == restrictedUser && a.Verb == "list" && a.Resource == "services" && a.Namespace == testutil.ScaleNamespace(1) {
+		return false, nil
+	}
+	return c.ruleChecker.Check(ctx, id, a)
+}
+
+// A route's ref to an absent Service the viewer may get by name but not list
+// keeps its ordinary KGWUI-013 in config, and the path is complete.
+func TestNamedReadableAbsentTargetKeepsFinding(t *testing.T) {
+	ns1 := testutil.ScaleNamespace(1)
+	gw1 := []objects.ParentRef{testutil.GwRef(ns1, testutil.ScaleGateway(1))}
+	src := worldPlus(t, func(s ruleSnap) { s.add(failRefs(serviceRoute(ns1, "named-absent", gw1, ns1, "nowhere"))) }, ruleChange{name: "base"})
+	srv := ruleServeWith(t, src, namedServices{})
+	r := rowOf(t, decode[api.Page[api.RouteRow]](t, srv, restrictedUser, ruleBase+"/routes?limit=200&namespace="+ns1).Items, routeRowRef, ns1, "named-absent")
+	if r.Config.State != "error" || r.Config.Reason == nil || r.Config.Reason.Code != "KGWUI-013" || r.Path.Incomplete {
+		t.Errorf("config %+v, path %+v", r.Config, r.Path)
+	}
+}
+
+// worstRank orders path row states: error, warning, unknown, healthy.
+var worstRank = map[string]int{"error": 0, "warning": 1, "unknown": 2, "healthy": 3}
+
+// The route path is the worst of the route's /paths rows for every viewer
+// (design §8.1): never healthy while a readable row shows a problem.
+func TestRoutePathMatchesPaths(t *testing.T) {
+	for _, c := range []ruleChange{{name: "base"}, change("faulty"), change("rejecting")} {
+		srv := ruleServe(t, worldPlus(t, signalNeighbours, c))
+		for _, user := range []string{fullUser, restrictedUser} {
+			checked := 0
+			for _, r := range decode[api.Page[api.RouteRow]](t, srv, user, ruleBase+"/routes?limit=200&namespace="+ns0).Items {
+				ps := decode[api.PathsResponse](t, srv, user, ruleBase+"/paths?limit=200&route="+r.Ref.Group+"/"+r.Ref.Kind+"/"+r.Ref.Namespace+"/"+r.Ref.Name)
+				worst := "healthy"
+				for _, row := range ps.Rows {
+					if worstRank[string(row.Problem.State)] < worstRank[worst] {
+						worst = string(row.Problem.State)
+					}
+				}
+				var want string
+				switch {
+				case worst == "error" || worst == "warning":
+					want = worst
+				case r.Path.Incomplete || worst == "unknown" || len(ps.Rows) == 0:
+					want = "unknown"
+				default:
+					want = "healthy"
+				}
+				if string(r.Path.State) != want {
+					t.Errorf("%s %s %s: path %s, its %d /paths rows' worst %s", c.name, user, r.Ref.Name, r.Path.State, len(ps.Rows), worst)
+				}
+				if worst != "healthy" {
+					checked++
+				}
+			}
+			if checked == 0 {
+				t.Errorf("%s %s: no route with a path problem; the case is vacuous", c.name, user)
+			}
+		}
+	}
+}
+
+// twoPortSvc serves port 80 with ready endpoints and port 81 with none.
+const twoPortSvc = "two-port"
+
+// portWorld adds twoPortSvc and a route to each of its ports.
+func portWorld(s ruleSnap) {
+	s.Services = append(s.Services, cache.ServiceFact{Namespace: ns0, Name: twoPortSvc, Type: "ClusterIP",
+		Ports: []cache.ServicePort{{Name: "a", Port: 80, Target: 8080, Protocol: "TCP"}, {Name: "b", Port: 81, Target: 8081, Protocol: "TCP"}}})
+	s.EndpointSlices = append(s.EndpointSlices, cache.SliceFact{Namespace: ns0, Service: twoPortSvc,
+		Ports: []cache.SlicePort{{Name: "a", Port: 8080}, {Name: "b", Port: 8081}}, Ready: []int{2, 0}, Total: 2, AddressType: "IPv4"})
+	for _, p := range []int64{80, 81} {
+		u := serviceRoute(ns0, fmt.Sprintf("port-%d", p), gw0(), ns0, twoPortSvc)
+		u.Object["spec"].(map[string]any)["rules"].([]any)[0].(map[string]any)["backendRefs"].([]any)[0].(map[string]any)["port"] = p
+		s.add(u)
+	}
+}
+
+// A Service port without ready endpoints colours only the routes that use
+// that port: the path follows the row's port, as /paths does.
+func TestRoutePathPortAttribution(t *testing.T) {
+	srv := ruleServe(t, worldPlus(t, portWorld, ruleChange{name: "base"}))
+	for _, user := range []string{fullUser, restrictedUser} {
+		got := signalsOf(t, srv, user)
+		ok, bad := got[[2]string{"/routes?limit=200", "port-80"}], got[[2]string{"/routes?limit=200", "port-81"}]
+		if ok.Path == nil || bad.Path == nil || ok.Path.State != "healthy" || bad.Path.State == "healthy" {
+			t.Errorf("%s: port 80 path %+v, port 81 path %+v", user, ok.Path, bad.Path)
+		}
 	}
 }
 
@@ -192,7 +295,7 @@ func TestRouteSignalFilters(t *testing.T) {
 		{restrictedUser, "&path=unknown&path=healthy", []string{namesHidden, "svc-consumer"}, nil},
 		{restrictedUser, "&config=error", []string{"absent-consumer"}, []string{namesHidden, namesAbsent}},
 		{restrictedUser, "&config=healthy&path=unknown", []string{namesHidden, namesAbsent}, []string{"absent-consumer", "svc-consumer"}},
-		{fullUser, "&config=warning&path=healthy", []string{namesAbsent}, []string{"absent-consumer", namesHidden}},
+		{fullUser, "&config=warning&path=unknown", []string{namesAbsent}, []string{"absent-consumer", namesHidden}},
 		{restrictedUser, "&parent=" + gw0Param + "&path=unknown", []string{namesHidden, toHidden}, []string{"svc-consumer"}},
 		{fullUser, "&path=unknown", nil, []string{namesHidden, toHidden}},
 	} {
@@ -216,17 +319,19 @@ func TestRouteSignalFilters(t *testing.T) {
 }
 
 // The rule case per signal field (D-085): under each hidden change the
-// restricted viewer's field is byte-equal on every route surface, the full
-// viewer's moves, and turning the row-state projection off moves it.
+// restricted viewer's field, reason members included, is byte-equal on every
+// route surface and the full viewer's moves. Turning the row-state step off
+// moves config and health. No step admits a path row with a hidden
+// dependency (design §7.4 rule 4), so path has none to turn off.
 func TestRuleRouteSignals(t *testing.T) {
 	for _, c := range []struct {
 		field, change, route string
+		step                 bool
 	}{
-		{"config", "computedTrigger", "child"},
-		{"path", "rejecting", namesHidden},
-		{"path", "faulty", toHidden},
-		{"health", "rejecting", namesHidden},
-		{"health", "faulty", toHidden},
+		{"config", "computedTrigger", "child", true},
+		{"path", "faulty", toHidden, false},
+		{"health", "rejecting", namesHidden, true},
+		{"health", "faulty", toHidden, true},
 	} {
 		field := func(s signals) string {
 			b, _ := json.Marshal(map[string]any{"config": s.Config, "path": s.Path, "health": s.Health}[c.field])
@@ -255,8 +360,42 @@ func TestRuleRouteSignals(t *testing.T) {
 		if !moved(fullUser) {
 			t.Errorf("%s under %s does not reach the full viewer", c.field, c.change)
 		}
-		if !moved(restrictedUser, api.WithProjectionStepOff("rowState")) {
+		if c.step && !moved(restrictedUser, api.WithProjectionStepOff("rowState")) {
 			t.Errorf("%s under %s holds without the row-state projection", c.field, c.change)
+		}
+	}
+}
+
+// path.incomplete is decided by permissions alone: for the restricted viewer
+// it is byte-equal under every hidden change on every route surface, and the
+// full viewer's is always false.
+func TestRulePathIncomplete(t *testing.T) {
+	incomplete := func(user string, c ruleChange) map[[2]string]bool {
+		out := map[[2]string]bool{}
+		for k, s := range signalsOf(t, ruleServe(t, worldPlus(t, signalNeighbours, c)), user, namesHidden, toHidden, "svc-consumer") {
+			if s.Path == nil {
+				t.Fatalf("%v: no path", k)
+			}
+			out[k] = s.Path.Incomplete
+		}
+		return out
+	}
+	base := incomplete(restrictedUser, ruleChange{name: "base"})
+	if !base[[2]string{"/routes?limit=200", namesHidden}] || base[[2]string{"/routes?limit=200", "svc-consumer"}] {
+		t.Fatalf("restricted base incompleteness %v", base)
+	}
+	for _, c := range ruleChanges {
+		after := incomplete(restrictedUser, c)
+		for k, b := range base {
+			// Deleting hidden-gw takes child out of the install (D-107).
+			if a, ok := after[k]; (!ok || a != b) && (c.name != "deleted" || k[1] != "child") {
+				t.Errorf("%s: %v incomplete %v, was %v", c.name, k, a, b)
+			}
+		}
+		for k, v := range incomplete(fullUser, c) {
+			if v {
+				t.Errorf("%s: full %v incomplete", c.name, k)
+			}
 		}
 	}
 }

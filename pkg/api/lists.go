@@ -25,6 +25,8 @@ type list struct {
 	f  facts
 	// vw is v's explore form for the install.
 	vw explore.Viewer
+	// paths reads the route rows' traffic paths; set by the routes list.
+	paths *routePaths
 }
 
 // startList finds the install and parses the query, or writes 503, 404 or 400.
@@ -113,12 +115,25 @@ func (h *handler) routes(w http.ResponseWriter, r *http.Request) {
 			ls.addInScope(add, ls.ix.Routes[i].Ref)
 		}
 	})
+	// The path filter reads every scoped route's path rows; otherwise only the page's are read.
+	if len(ls.q.Path) > 0 {
+		ls.paths = h.routePaths(ls.p, ls.i, ls.ix, ls.v, func(ref objects.Ref) bool { return explore.InScope(ls.q.Scope, ref.Namespace) })
+		ls.vw.Path = ls.paths.path
+	}
 	pg, err := ls.ix.QueryRoutesAs(ls.q, ls.vw)
 	if err != nil {
 		fail(w, err)
 		return
 	}
 	ls.prefetchRouteRows(pg.IDs)
+	if ls.paths == nil {
+		onPage := make(map[objects.Ref]bool, len(pg.IDs))
+		for _, id := range pg.IDs {
+			onPage[ls.ix.Routes[id].Ref] = true
+		}
+		ls.paths = h.routePaths(ls.p, ls.i, ls.ix, ls.v, func(ref objects.Ref) bool { return onPage[ref] })
+		ls.vw.Path = ls.paths.path
+	}
 	items := make([]RouteRow, 0, len(pg.IDs))
 	for _, id := range pg.IDs {
 		items = append(items, ls.routeRow(id))
@@ -175,7 +190,7 @@ func (ls *list) routeRow(id explore.RowID) RouteRow {
 	out := RouteRow{Ref: ls.l.linked(r.Ref), Hostnames: r.Hostnames, Parents: make([]ParentSummary, 0, len(r.Parents)),
 		ParentRoutes: make([]LinkedRef, 0, len(r.ParentRoutes)), Children: r.Children, Flags: flags.Names(), Health: st,
 		Reason: routeReason(ls.ix, ls.v, ls.vw, ls.l, id)}
-	out.Config, out.Path = routeSignals(ls.ix, ls.v, ls.vw, ls.l, id)
+	out.Config, out.Path = routeSignals(ls.ix, ls.v, ls.vw, ls.l, ls.paths, id)
 	if out.Hostnames == nil {
 		out.Hostnames = []string{}
 	}
@@ -218,19 +233,20 @@ func routeReason(ix *explore.Index, v *view, vw explore.Viewer, l linker, id exp
 	return out
 }
 
-// routeSignals are route row id's two signals for vw on the wire. A
-// backend-problem path reason names its backend as routeReason does.
-func routeSignals(ix *explore.Index, v *view, vw explore.Viewer, l linker, id explore.RowID) (RouteSignal, PathSignal) {
+// routeSignals are route row id's two signals for vw, whose path rp reads,
+// on the wire. A path reason from a finding carries its shown message; a
+// backend-problem names its backend as routeReason does.
+func routeSignals(ix *explore.Index, v *view, vw explore.Viewer, l linker, rp *routePaths, id explore.RowID) (RouteSignal, PathSignal) {
 	config, path, b := ix.RouteSignals(id, vw)
 	out := PathSignal{State: path.State, Incomplete: path.Incomplete}
 	if path.Reason != nil {
 		out.Reason = &RouteReason{RowReason: *path.Reason}
-		switch {
-		case b != nil && v.can(*b):
+		if k := path.Reason.Kind; k == health.ReasonBackendProblem || k == health.ReasonPathProblem {
+			out.Reason.Message = rp.message(id)
+		}
+		if b != nil && v.can(*b) {
 			lr := l.linked(*b)
 			out.Reason.Backend = &lr
-		case b != nil:
-			out.Reason.Message = ""
 		}
 	}
 	return RouteSignal{State: config.State, Reason: config.Reason}, out

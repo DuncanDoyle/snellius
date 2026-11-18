@@ -23,7 +23,10 @@
         "parents": [],
         "path": {
           "incomplete": false,
-          "state": "healthy"
+          "reason": {
+            "kind": "not-attached"
+          },
+          "state": "unknown"
         },
         "reason": {
           "code": "KGWUI-011",
@@ -71,7 +74,10 @@
         ],
         "path": {
           "incomplete": false,
-          "state": "healthy"
+          "reason": {
+            "kind": "not-attached"
+          },
+          "state": "unknown"
         },
         "reason": {
           "code": "KGWUI-003",
@@ -130,7 +136,10 @@
         ],
         "path": {
           "incomplete": false,
-          "state": "healthy"
+          "reason": {
+            "kind": "not-attached"
+          },
+          "state": "unknown"
         },
         "reason": {
           "code": "KGWUI-002",
@@ -179,7 +188,11 @@
         ],
         "path": {
           "incomplete": false,
-          "state": "healthy"
+          "reason": {
+            "code": "ResolvedRefs",
+            "kind": "path-problem"
+          },
+          "state": "error"
         },
         "ref": {
           "group": "gateway.networking.k8s.io",

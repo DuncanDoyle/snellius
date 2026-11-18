@@ -12,6 +12,11 @@ const (
 	ReasonBackendProblem = "backend-problem"
 	// ReasonPathIncomplete: the viewer may not read everything the route's traffic path needs (design §8.1).
 	ReasonPathIncomplete = "path-incomplete"
+	// ReasonNotAttached: the route has no path rows, so no traffic path to assess (design §8.1).
+	ReasonNotAttached = "not-attached"
+	// ReasonPathProblem: a signal on the route's path rows other than its Gateway's
+	// rejection or a backend's, such as a listener condition; Code is the signal's code.
+	ReasonPathProblem = "path-problem"
 )
 
 // RowReason says why a list or overview row is not healthy; healthy rows have

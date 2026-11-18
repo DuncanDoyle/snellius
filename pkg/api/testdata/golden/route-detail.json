@@ -982,7 +982,12 @@
     ],
     "path": {
       "incomplete": false,
-      "state": "healthy"
+      "reason": {
+        "code": "KGWUI-013",
+        "kind": "path-problem",
+        "message": "Backend not found"
+      },
+      "state": "error"
     },
     "reason": {
       "code": "KGWUI-013",

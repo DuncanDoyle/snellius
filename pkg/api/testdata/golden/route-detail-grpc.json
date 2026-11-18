@@ -293,7 +293,11 @@
     ],
     "path": {
       "incomplete": false,
-      "state": "healthy"
+      "reason": {
+        "code": "Programmed",
+        "kind": "path-problem"
+      },
+      "state": "error"
     },
     "ref": {
       "group": "gateway.networking.k8s.io",
