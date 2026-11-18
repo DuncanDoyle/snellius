@@ -522,7 +522,8 @@ func (h *handler) routeDetail(w http.ResponseWriter, r *http.Request) {
 	id, row := d.ix.Row(ref)
 	var rp *routePaths
 	if row {
-		rp = d.h.routePaths(d.p, d.i, d.ix, d.v, func(r objects.Ref) bool { return r == ref })
+		// The detail opened by name, so its own rows admit it by name too.
+		rp = d.h.routePaths(d.p, d.i, d.ix, d.v, func(r objects.Ref) bool { return r == ref }, &ref)
 		d.vw.Path = rp.pathFunc()
 	}
 	switch {

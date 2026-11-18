@@ -14,6 +14,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/auth/sar"
 	"github.com/DuncanDoyle/snellius/pkg/cache"
+	"github.com/DuncanDoyle/snellius/pkg/ctrlmetrics"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
 
@@ -23,12 +24,25 @@ const (
 	// unattachedRoute has readable refs and no status; freeRoute names no parent and no backend.
 	unattachedRoute = "sig-unattached"
 	freeRoute       = "sig-free"
+	// rulelessRoute is accepted on gw0 and writes no rule; lostRoute is accepted
+	// on a listener gw0 does not have, as when the Gateway lost it.
+	rulelessRoute = "sig-ruleless"
+	lostRoute     = "sig-lost"
+	// mirrorRoute sends to the readable Service shared and mirrors to the hidden hidden-svc.
+	mirrorRoute = "sig-mirror"
 )
 
-// signalNeighbours adds toHidden, unattachedRoute and freeRoute.
+// signalNeighbours adds toHidden and the sig- routes.
 func signalNeighbours(s ruleSnap) {
 	neighbours(s)
-	s.add(routeTo(ns0, unattachedRoute, gw0(), ns0, "be-0000", false), testutil.HTTPRoute(ns0, freeRoute, nil))
+	lost := gw0()[0]
+	lost.SectionName = "gone"
+	mirror := serviceRoute(ns0, mirrorRoute, gw0(), ns0, "shared")
+	mirror.Object["spec"].(map[string]any)["rules"].([]any)[0].(map[string]any)["filters"] = []any{map[string]any{"type": "RequestMirror",
+		"requestMirror": map[string]any{"backendRef": map[string]any{"name": "hidden-svc", "namespace": hiddenNS, "port": int64(80)}}}}
+	s.add(routeTo(ns0, unattachedRoute, gw0(), ns0, "be-0000", false), testutil.HTTPRoute(ns0, freeRoute, nil),
+		testutil.HTTPRoute(ns0, rulelessRoute, gw0(), testutil.AcceptedBy(gw0()[0], testutil.Controller)),
+		routeTo(ns0, lostRoute, []objects.ParentRef{lost}, ns0, "be-0000", true), mirror)
 }
 
 var (
@@ -210,7 +224,9 @@ func TestNamedReadableAbsentTargetKeepsFinding(t *testing.T) {
 var worstRank = map[string]int{"error": 0, "warning": 1, "unknown": 2, "healthy": 3}
 
 // The route path is the worst of the route's /paths rows for every viewer
-// (design §8.1): never healthy while a readable row shows a problem.
+// (design §8.1): never healthy while a readable row shows a problem. In this
+// world every written target is list-readable where it is readable at all,
+// so the route's rows and /paths admit the same rows.
 func TestRoutePathMatchesPaths(t *testing.T) {
 	for _, c := range []ruleChange{{name: "base"}, change("faulty"), change("rejecting")} {
 		srv := ruleServe(t, worldPlus(t, signalNeighbours, c))
@@ -218,8 +234,13 @@ func TestRoutePathMatchesPaths(t *testing.T) {
 			checked := 0
 			for _, r := range decode[api.Page[api.RouteRow]](t, srv, user, ruleBase+"/routes?limit=200&namespace="+ns0).Items {
 				ps := decode[api.PathsResponse](t, srv, user, ruleBase+"/paths?limit=200&route="+r.Ref.Group+"/"+r.Ref.Kind+"/"+r.Ref.Namespace+"/"+r.Ref.Name)
-				worst := "healthy"
+				// Mirror rows are no path rows (D-111).
+				worst, rows := "healthy", 0
 				for _, row := range ps.Rows {
+					if row.Mirror {
+						continue
+					}
+					rows++
 					if worstRank[string(row.Problem.State)] < worstRank[worst] {
 						worst = string(row.Problem.State)
 					}
@@ -228,13 +249,16 @@ func TestRoutePathMatchesPaths(t *testing.T) {
 				switch {
 				case worst == "error" || worst == "warning":
 					want = worst
-				case r.Path.Incomplete || worst == "unknown" || len(ps.Rows) == 0:
+				case r.Path.Incomplete || worst == "unknown":
+					want = "unknown"
+				// Without rows: not attached or no path, unless the route writes no rule.
+				case rows == 0 && r.Ref.Name != rulelessRoute:
 					want = "unknown"
 				default:
 					want = "healthy"
 				}
 				if string(r.Path.State) != want {
-					t.Errorf("%s %s %s: path %s, its %d /paths rows' worst %s", c.name, user, r.Ref.Name, r.Path.State, len(ps.Rows), worst)
+					t.Errorf("%s %s %s: path %s, its %d /paths rows' worst %s", c.name, user, r.Ref.Name, r.Path.State, rows, worst)
 				}
 				if worst != "healthy" {
 					checked++
@@ -397,5 +421,82 @@ func TestRulePathIncomplete(t *testing.T) {
 				t.Errorf("%s: full %v incomplete", c.name, k)
 			}
 		}
+	}
+}
+
+// An accepted route without path rows: one whose Gateway lost the listener
+// has no path, for every viewer and without a permission gap; one writing no
+// rule is healthy. Health stays today's (design §8.3); the full viewer also
+// gets the derived KGWUI-012 on the lost route's config.
+func TestRoutePathAcceptedWithoutRows(t *testing.T) {
+	srv := ruleServe(t, worldPlus(t, signalNeighbours, ruleChange{name: "base"}))
+	for user, lost := range map[string]want{
+		fullUser:       {"warning", "KGWUI-012", "unknown", "no-path", false, "warning"},
+		restrictedUser: {"healthy", "", "unknown", "no-path", false, "healthy"},
+	} {
+		checkWant(t, signalsOf(t, srv, user, lostRoute, rulelessRoute), user, map[string]want{
+			lostRoute:     lost,
+			rulelessRoute: {"healthy", "", "healthy", "", false, "healthy"},
+		})
+	}
+}
+
+// Mirror rows never decide the path or its completeness (D-111): a hidden
+// mirror target beside a readable primary leaves the path healthy and
+// complete, and the full viewer's faulty mirror target does not reach it.
+func TestRoutePathIgnoresMirror(t *testing.T) {
+	healthy := map[string]want{mirrorRoute: {"healthy", "", "healthy", "", false, "healthy"}}
+	srv := ruleServe(t, worldPlus(t, signalNeighbours, change("faulty")))
+	checkWant(t, signalsOf(t, srv, restrictedUser, mirrorRoute), restrictedUser, healthy)
+	got := signalsOf(t, srv, fullUser, mirrorRoute)
+	for k, s := range got {
+		if k[1] == mirrorRoute && (s.Path == nil || s.Path.State != "healthy") {
+			t.Errorf("full %s: path %+v", k[0], s.Path)
+		}
+	}
+}
+
+// namedRoutes is ruleChecker with HTTPRoute list in ns-002 denied for namedRouteUser, who gets them by name.
+type namedRoutes struct{ ruleChecker }
+
+const namedRouteUser = "named-route"
+
+func (c namedRoutes) Check(ctx context.Context, id oidc.Identity, a sar.Attributes) (bool, error) {
+	if id.Username == namedRouteUser && a.Verb == "list" && a.Resource == "httproutes" && a.Namespace == testutil.ScaleNamespace(2) {
+		return false, nil
+	}
+	return c.ruleChecker.Check(ctx, id, a)
+}
+
+// A route read by name only opens its detail with its ordinary path and
+// health: its own rows admit it by name, as the detail does.
+func TestNamedOnlyRouteDetailPath(t *testing.T) {
+	ns2 := testutil.ScaleNamespace(2)
+	src := worldPlus(t, func(s ruleSnap) {
+		s.Services = append(s.Services, service(ns2, "named-svc"))
+		s.EndpointSlices = append(s.EndpointSlices, slice(ns2, "named-svc", 2))
+		s.add(serviceRoute(ns2, "named-route", []objects.ParentRef{testutil.GwRef(ns2, testutil.ScaleGateway(2))}, ns2, "named-svc"))
+	}, ruleChange{name: "base"})
+	srv := ruleServeWith(t, src, namedRoutes{})
+	d := decode[api.RouteDetail](t, srv, namedRouteUser, ruleBase+"/routes/"+objects.GatewayAPIGroup+"/HTTPRoute/"+ns2+"/named-route")
+	full := decode[api.RouteDetail](t, srv, fullUser, ruleBase+"/routes/"+objects.GatewayAPIGroup+"/HTTPRoute/"+ns2+"/named-route")
+	if d.Path.State != full.Path.State || d.Path.Incomplete || d.Health != full.Health {
+		t.Errorf("named-only: path %+v health %s; full: path %+v health %s", d.Path, d.Health, full.Path, full.Health)
+	}
+}
+
+// The findings projection decides the path's finding signals on an admitted
+// row: gw0's derived KGWUI-001 reaches the restricted viewer's path only with
+// that step off (D-106).
+func TestPathFindingsProjection(t *testing.T) {
+	extra := func(s ruleSnap) { s.add(routeTo(ns0, "to-be0", gw0(), ns0, "be-0000", true)) }
+	rejects := ruleChange{name: "gw0Rejects", rejects: []ctrlmetrics.GatewayKey{{Namespace: ns0, Name: testutil.ScaleGateway(0)}}}
+	path := func(opts ...api.HandlerOption) string {
+		srv := ruleServe(t, worldPlus(t, extra, rejects), opts...)
+		return string(rowOf(t, decode[api.Page[api.RouteRow]](t, srv, restrictedUser, ruleBase+"/routes?limit=200&namespace="+ns0).Items,
+			routeRowRef, ns0, "to-be0").Path.State)
+	}
+	if on, off := path(), path(api.WithProjectionStepOff("findings")); on != "healthy" || off != "error" {
+		t.Errorf("restricted path %s with the projection, %s without; want healthy, error", on, off)
 	}
 }

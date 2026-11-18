@@ -151,8 +151,9 @@ func TestRouteSignalsUnknownKeepsReadableFault(t *testing.T) {
 }
 
 // Viewer.Path's rows decide the path: their worst state and reason, with
-// incompleteness from permissions and from an accepted route without a
-// readable row; a route no parent accepted and without rows is not attached.
+// incompleteness from permissions alone. Without rows, a route no parent
+// accepted is not attached; an accepted one with rules has no path, for every
+// viewer; one without rules is healthy.
 func TestRouteSignalsFromPathRows(t *testing.T) {
 	ix := signalWorld(t)
 	listener := &health.RowReason{Kind: health.ReasonPathProblem, Code: "ResolvedRefs"}
@@ -160,8 +161,18 @@ func TestRouteSignalsFromPathRows(t *testing.T) {
 		"cart":    {State: health.StateError, Reason: listener, Rows: 2},
 		"both":    {State: health.StateWarning, Reason: listener, Rows: 1},
 		"vaulted": {State: health.StateHealthy, Rows: 1},
+		"absent":  {State: health.StateHealthy},
 		"bare":    {State: health.StateHealthy},
 		"free":    {State: health.StateHealthy},
+	}
+	noPath := sigWant{health.StateHealthy, health.StateUnknown, health.StateHealthy, health.ReasonNoPath, false}
+	for _, vw := range []Viewer{vaultViewer(), {}} {
+		vw.Path = func(id RowID) PathRows { return rows[ix.Routes[id].Ref.Name] }
+		checkSignals(t, ix, vw, map[string]sigWant{
+			"absent": noPath,
+			"bare":   {health.StateHealthy, health.StateHealthy, health.StateHealthy, "", false},
+			"free":   {health.StateHealthy, health.StateUnknown, health.StateHealthy, health.ReasonNotAttached, false},
+		})
 	}
 	vw := vaultViewer()
 	vw.Path = func(id RowID) PathRows { return rows[ix.Routes[id].Ref.Name] }
@@ -169,9 +180,6 @@ func TestRouteSignalsFromPathRows(t *testing.T) {
 		"cart":    {health.StateHealthy, health.StateError, health.StateHealthy, health.ReasonPathProblem, false},
 		"both":    {health.StateHealthy, health.StateWarning, health.StateUnknown, health.ReasonPathProblem, true},
 		"vaulted": {health.StateHealthy, health.StateUnknown, health.StateUnknown, health.ReasonPathIncomplete, true},
-		// Accepted, yet no row the viewer may read: incomplete. Never accepted: not attached.
-		"bare": {health.StateHealthy, health.StateUnknown, health.StateUnknown, health.ReasonPathIncomplete, true},
-		"free": {health.StateHealthy, health.StateUnknown, health.StateHealthy, health.ReasonNotAttached, false},
 	})
 }
 

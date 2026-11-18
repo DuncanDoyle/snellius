@@ -49,8 +49,9 @@ func (ix *Index) ObjectSignals(u *unstructured.Unstructured, vw Viewer) (config,
 
 // signals composes route r's configuration and its path from pr. A readable
 // error or warning decides the path, incomplete or not; then an incomplete
-// path is unknown, then an unknown row, the install-wide unknown, and a
-// route without rows that no parent accepted is not attached (design §8.1).
+// path is unknown, then an unknown row, the install-wide unknown; a route
+// without rows is not attached when no parent accepted it, else it has no
+// path, unless it writes no rule (design §8.1).
 func (ix *Index) signals(r *RouteRow, vw Viewer, pr PathRows) (config, path Signal, backend *objects.Ref) {
 	unknown := ix.unknown
 	if vw.Shown != nil {
@@ -69,10 +70,21 @@ func (ix *Index) signals(r *RouteRow, vw Viewer, pr PathRows) (config, path Sign
 		path.State, path.Reason = health.StateUnknown, &health.RowReason{Kind: health.ReasonUnknown}
 	case pr.Rows == 0 && r.Flags&FlagAccepted == 0:
 		path.State, path.Reason = health.StateUnknown, &health.RowReason{Kind: health.ReasonNotAttached}
+	case pr.Rows == 0 && hasRules(r):
+		// Accepted, yet no path row: say so, never healthy and never a permission gap.
+		path.State, path.Reason = health.StateUnknown, &health.RowReason{Kind: health.ReasonNoPath}
 	default:
 		path.State = health.StateHealthy
 	}
 	return config, path, backend
+}
+
+// hasRules reports whether route r writes any rule; a route without one has no path rows by design.
+func hasRules(r *RouteRow) bool {
+	if r.View != nil {
+		return len(r.View.Rules) > 0
+	}
+	return r.Obj != nil && len(objects.DecodeRouteRules(r.Obj)) > 0
 }
 
 // config is route ref's configuration signal for vw: its own shown findings.
@@ -87,21 +99,10 @@ func (ix *Index) config(ref objects.Ref, vw Viewer) Signal {
 }
 
 // incomplete reports whether vw cannot assess route r's whole path: its
-// permissions leave a ref unreadable, it gets no delegation analysis (D-114)
-// and r names a parent route, or r's status says accepted while vw.Path
-// admits none of its rows. Rows are admitted by readable dependencies only.
+// permissions leave a ref unreadable, or it gets no delegation analysis
+// (D-114) and r names a parent route. Both are permissions alone.
 func (ix *Index) incomplete(r *RouteRow, vw Viewer) bool {
-	if vw.Perms == nil {
-		return false
-	}
-	if ix.routeIncomplete(r, vw.Perms) || vw.NoDelegation && len(ix.routeData(r).routeParents) > 0 {
-		return true
-	}
-	if vw.Path == nil || r.Flags&FlagAccepted == 0 {
-		return false
-	}
-	id, ok := ix.Row(r.Ref)
-	return ok && vw.Path(id).Rows == 0
+	return vw.Perms != nil && (ix.routeIncomplete(r, vw.Perms) || vw.NoDelegation && len(ix.routeData(r).routeParents) > 0)
 }
 
 // indexPath is route r's path from the index alone, for a viewer without

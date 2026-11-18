@@ -348,27 +348,31 @@ func (v *view) allowTable(t *paths.Topology, d explore.DepSet) bool {
 	return v.allowTableNamed(t, d, nil)
 }
 
-// allowTableNamed is allowTable with named, when set, checked by canNamed: a
-// ref written in a readable object. Its answer never enters the population memo.
-func (v *view) allowTableNamed(t *paths.Topology, d explore.DepSet, named *objects.Ref) bool {
+// allowTableNamed is allowTable with each set ref of named checked by
+// canNamed: a ref written in a readable object, or a detail's subject. Its
+// answer never enters the population memo.
+func (v *view) allowTableNamed(t *paths.Topology, d explore.DepSet, named ...*objects.Ref) bool {
 	if v.readsAll() {
 		return true
 	}
 	if v.table != t {
 		v.table, v.tableDeps = t, make([]int8, len(t.Refs))
 	}
+	isNamed := func(ref objects.Ref) bool {
+		return slices.ContainsFunc(named, func(n *objects.Ref) bool { return n != nil && *n == ref })
+	}
 	// A final prefetched denial anywhere in d hides it before any check runs,
 	// so a hidden route never asks about the refs it names.
 	if v.listFinal {
 		for _, i := range d {
-			if v.tableDeps[i] == 0 && (named == nil || t.Refs[i] != *named) && v.denied(t.Refs[i]) {
+			if v.tableDeps[i] == 0 && !isNamed(t.Refs[i]) && v.denied(t.Refs[i]) {
 				return false
 			}
 		}
 	}
 	for _, i := range d {
-		if named != nil && t.Refs[i] == *named {
-			if !v.canNamed(*named) {
+		if isNamed(t.Refs[i]) {
+			if !v.canNamed(t.Refs[i]) {
 				return false
 			}
 			continue

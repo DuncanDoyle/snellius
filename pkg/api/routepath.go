@@ -28,17 +28,24 @@ type routePaths struct {
 }
 
 // routePaths is the path reader of install i for the caller of v over the
-// routes covers admits; covers runs on route refs before any check. Nil
-// without computed views, which derive no path rows: the index decides then.
-func (h *handler) routePaths(p *engine.Published, i *engine.InstallModel, ix *explore.Index, v *view, covers func(objects.Ref) bool) *routePaths {
+// routes covers admits; covers runs on route refs before any check. subject,
+// when set, is a detail's route, which its rows admit by name as the page
+// itself was. Mirror rows are no path rows (D-111). Nil without computed
+// views, which derive no path rows: the index decides then.
+func (h *handler) routePaths(p *engine.Published, i *engine.InstallModel, ix *explore.Index, v *view, covers func(objects.Ref) bool, subject *objects.Ref) *routePaths {
 	if i.Computed == nil {
 		return nil
 	}
 	t, proj, _ := h.pathModel(p, i, v)
-	pick := func(r paths.Row) bool { return t.ChainHolds(r, covers) }
+	pick := func(r paths.Row) bool {
+		_, mirror := t.Mirror(r)
+		return !mirror && t.ChainHolds(r, covers)
+	}
 	prefetchRows(v, t, pick)
-	// The target a route writes is read by name, as the route detail's trace reads it (D-100 item 1).
-	visible := func(r paths.Row) bool { return pick(r) && v.allowTableNamed(t, t.Deps(r), writtenTarget(t, r)) }
+	// The written target is read by name, as the detail's trace reads it (D-100 item 1); /paths reads it as a list member.
+	visible := func(r paths.Row) bool {
+		return pick(r) && v.allowTableNamed(t, t.Deps(r), writtenTarget(t, r), subject)
+	}
 	proj = proj.For(t, v.projectInput(p, i), v.scopedFilter(i, t, visible))
 	return &routePaths{v: v, i: i, ix: ix, t: t, proj: proj, visible: visible,
 		deciding: map[explore.RowID]paths.Signal{}, done: map[explore.RowID]explore.PathRows{}}
