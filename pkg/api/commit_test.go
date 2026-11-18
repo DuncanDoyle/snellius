@@ -688,6 +688,148 @@ func TestCommitAdmissionKeepsRebuild(t *testing.T) {
 	}
 }
 
+// placeAuthz is expiringAuthz with one admission place, waited for under the request's context.
+type placeAuthz struct {
+	*expiringAuthz
+	place chan struct{}
+}
+
+func (a *placeAuthz) Admit(r *http.Request) (func(), error) {
+	select {
+	case a.place <- struct{}{}:
+		return sync.OnceFunc(func() { <-a.place }), nil
+	case <-r.Context().Done():
+		return nil, r.Context().Err()
+	}
+}
+
+// stallReader is a request body that closes reading on its first Read, then blocks until resume closes.
+type stallReader struct {
+	reading, resume chan struct{}
+	once            sync.Once
+}
+
+func (s *stallReader) Read([]byte) (int, error) {
+	s.once.Do(func() { close(s.reading) })
+	<-s.resume
+	return 0, io.EOF
+}
+
+// readBody mounts POST /api/ext/u/n: it reads the body, checks n refs and writes both.
+func readBody(a Authorizer, b *builds, n int) ExtMount {
+	return ExtMount{Name: "u", Pattern: "POST /n", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b.mu.Lock()
+		b.n++
+		run := b.n
+		b.mu.Unlock()
+		body, _ := io.ReadAll(r.Body)
+		items := make([]int, n)
+		for i := range items {
+			items[i] = i
+		}
+		vis, _ := Visible(r, a, items, func(i int) objects.Ref { return objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: fmt.Sprint(i)} })
+		WriteJSON(w, map[string]any{"build": run, "body": string(body), "visible": len(vis)})
+	})}
+}
+
+// An upload whose body stalls holds no admission place: its body is read
+// before it waits, so a cold request takes the only place meanwhile (D-116).
+func TestCommitStalledBodyHoldsNoPlace(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &placeAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: true}, place: make(chan struct{}, 1)}
+	b := &builds{}
+	h := NewHandler(staticModel{}, fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}, a,
+		WithSecureMode(true), WithExtMounts(b.mount(a, 3), readBody(a, &builds{}, 3)), WithCommitClock(clk.Now))
+	body := &stallReader{reading: make(chan struct{}), resume: make(chan struct{})}
+	posted := make(chan struct{})
+	go func() {
+		defer close(posted)
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/ext/u/n", body))
+	}()
+	<-body.reading
+	got := httptest.NewRecorder()
+	answered := make(chan struct{})
+	go func() {
+		defer close(answered)
+		h.ServeHTTP(got, httptest.NewRequest(http.MethodGet, "/api/ext/b/n", nil))
+	}()
+	select {
+	case <-answered:
+	case <-time.After(10 * time.Second):
+		t.Error("a cold request is still waiting behind the stalled upload")
+	}
+	close(body.resume)
+	<-posted
+	<-answered
+	if got.Code != http.StatusOK || got.Body.String() != `{"build":2,"visible":3}`+"\n" {
+		t.Errorf("cold GET: %d %q", got.Code, got.Body.String())
+	}
+}
+
+// Every build of a request reads its whole body, a rebuild after an expired allow too.
+// A body over MaxRequestBody answers 413 before any build.
+func TestCommitRebuildRereadsBody(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &expiringAuthz{clock: clk, step: func(n int) {
+		if n == 3 {
+			clk.Step(time.Minute)
+		}
+	}}
+	b := &builds{}
+	srv := secureServer(t, staticModel{}, a, WithExtMounts(readBody(a, b, 3)), WithCommitClock(clk.Now))
+	post := func(body string) (int, string) {
+		resp, err := http.Post(srv.URL+"/api/ext/u/n", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		got, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(got)
+	}
+	if code, got := post(`{"x":1}`); code != http.StatusOK || got != `{"body":"{\"x\":1}","build":2,"visible":3}`+"\n" {
+		t.Errorf("rebuilt POST: %d %q", code, got)
+	}
+	if code, _ := post(strings.Repeat("x", MaxRequestBody+1)); code != http.StatusRequestEntityTooLarge || b.count() != 2 {
+		t.Errorf("oversized POST: %d after %d builds, want 413 and no build", code, b.count())
+	}
+}
+
+// watchWriter calls at before its first status or byte.
+type watchWriter struct {
+	*httptest.ResponseRecorder
+	at func()
+}
+
+func (w watchWriter) WriteHeader(code int) { w.at(); w.ResponseRecorder.WriteHeader(code) }
+
+func (w watchWriter) Write(p []byte) (int, error) { w.at(); return w.ResponseRecorder.Write(p) }
+
+// A session that ends during the admitted build answers 401 after giving its place back.
+func TestCommitEndedSessionReleasesFirst(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &admitAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: true}}
+	checks := 0
+	ended := WithCommitCheck(func(w http.ResponseWriter, r *http.Request) (*http.Request, error) {
+		if checks++; checks == 1 {
+			return r, nil
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		return nil, nil
+	})
+	h := NewHandler(staticModel{}, fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}, a,
+		WithSecureMode(true), WithExtMounts((&builds{}).mount(a, 3)), WithCommitClock(clk.Now), ended)
+	var held int32 = -1
+	w := watchWriter{httptest.NewRecorder(), func() {
+		if held < 0 {
+			held = a.admits.Load() - a.releases.Load()
+		}
+	}}
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/ext/b/n", nil))
+	if w.Code != http.StatusUnauthorized || a.admits.Load() != 1 || held != 0 {
+		t.Errorf("%d after %d admits; %d places held when the 401 was written, want 401, 1, 0", w.Code, a.admits.Load(), held)
+	}
+}
+
 // Methods other than GET and HEAD are admitted before their first build, so
 // admission never builds them twice; their place is given back (D-116 item 3).
 func TestCommitAdmitsOtherMethodsFirst(t *testing.T) {

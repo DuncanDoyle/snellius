@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"errors"
+	"io"
 	"maps"
 	"net/http"
 	"strings"
@@ -20,6 +21,10 @@ const (
 
 // commitAttempts is how many times commit builds a response whose allows expired (D-100).
 const commitAttempts = 2
+
+// MaxRequestBody bounds the body of a secure /api/ request other than GET or
+// HEAD, which commit reads in full before admission; a larger one answers 413.
+const MaxRequestBody = 1 << 20
 
 // authzUnavailable is the error body of a request whose authorisation failed (design §6.3).
 const authzUnavailable = "authz-unavailable"
@@ -66,7 +71,8 @@ func WithCommitClock(now func() time.Time) HandlerOption {
 // replaced, is built once more from fresh request state, keeping only the check
 // count. With admit, a GET or HEAD build that needs an uncached check before
 // admission is discarded, the request waits for admission and is built afresh
-// in the same attempt; other methods are admitted before their first build.
+// in the same attempt; other methods have their body read, up to MaxRequestBody,
+// then are admitted before their first build, and every build reads that body.
 // Admission is given back once the response is final, before it is written
 // (D-116). Other paths pass through.
 func commit(next http.Handler, admit Admitter, check func(http.ResponseWriter, *http.Request) (*http.Request, error), audit func(*http.Request, string), capHit func(*http.Request), trace func(*http.Request, int, string, any), now func() time.Time) http.Handler {
@@ -95,6 +101,20 @@ func commit(next http.Handler, admit Admitter, check func(http.ResponseWriter, *
 			w.Header().Set("Cache-Control", "no-store")
 			writeErr(w, http.StatusServiceUnavailable, authzUnavailable)
 		}
+		body, buffered := []byte(nil), false
+		if base.Method != http.MethodGet && base.Method != http.MethodHead && base.Body != nil {
+			// Read before admission, so a stalled upload holds no place; every build reads it afresh.
+			var err error
+			if body, err = io.ReadAll(http.MaxBytesReader(w, base.Body, MaxRequestBody)); err != nil {
+				if tooLarge := (*http.MaxBytesError)(nil); errors.As(err, &tooLarge) {
+					writeErr(w, http.StatusRequestEntityTooLarge, "request body too large")
+					return
+				}
+				writeErr(w, http.StatusBadRequest, "request body unreadable")
+				return
+			}
+			buffered = true
+		}
 		if admit != nil && base.Method != http.MethodGet && base.Method != http.MethodHead {
 			// Never built twice for admission: its body or side effects may not replay.
 			rel, err := admit.Admit(base)
@@ -108,6 +128,9 @@ func commit(next http.Handler, admit Admitter, check func(http.ResponseWriter, *
 		checks, builds := 0, 0
 		for attempt := 1; ; attempt++ {
 			r, st := withAuthzStateFrom(base, checks, gated)
+			if buffered {
+				r.Body = io.NopCloser(bytes.NewReader(body))
+			}
 			if builds++; trace != nil {
 				build := builds
 				st.trace = func(reason string, key any) { trace(r, build, reason, key) }
@@ -121,7 +144,8 @@ func commit(next http.Handler, admit Admitter, check func(http.ResponseWriter, *
 			// that error answers 503 before a stale or replaced identity is looked at.
 			cur, stale := r, error(nil)
 			if check != nil {
-				if cur, stale = check(w, r); cur == nil && stale == nil {
+				// A response the check writes, such as an ended session's 401, gives admission back first.
+				if cur, stale = check(releasingWriter{w, done}, r); cur == nil && stale == nil {
 					return
 				}
 			}
@@ -166,6 +190,22 @@ func commit(next http.Handler, admit Admitter, check func(http.ResponseWriter, *
 			checks = st.spent()
 		}
 	})
+}
+
+// releasingWriter calls release before the first status or byte reaches its ResponseWriter.
+type releasingWriter struct {
+	http.ResponseWriter
+	release func()
+}
+
+func (w releasingWriter) WriteHeader(code int) {
+	w.release()
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w releasingWriter) Write(p []byte) (int, error) {
+	w.release()
+	return w.ResponseWriter.Write(p)
 }
 
 // auditReason names why a request answered authz-unavailable.
