@@ -295,7 +295,7 @@ func TestErrorsNeverCached(t *testing.T) {
 func cached(c *cache, id oidc.Identity, a Attributes) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.decisions[flightKey{hashIdentity(id), a}] != nil
+	return c.find(hashIdentity(id), a) != nil
 }
 
 // setMax sets the cache's budget, returning what it accounts now.

@@ -89,7 +89,7 @@ func cachedFullOf(f *fixture, id oidc.Identity) (entry, bool) {
 	if ie == nil || ie.full == nil {
 		return entry{}, false
 	}
-	return *ie.full.Value.(*entry), true
+	return *ie.full, true
 }
 
 func TestFullReadAllowed(t *testing.T) {
