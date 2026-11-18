@@ -365,6 +365,25 @@ func TestOwnCopyChangedIsDerived(t *testing.T) {
 	if d := f.Derived(); d.class != ClassDerived || d.Basis != nil || f.class != ClassOwn || f.Basis == nil {
 		t.Errorf("Derived: copy class %d basis %v, source class %d basis %v", d.class, d.Basis, f.class, f.Basis)
 	}
+	// A changed copy rekeyed before or after its original, as ordinalKeys may, leaves the entry to the original.
+	for _, copyFirst := range []bool{true, false} {
+		reowned := &ownedSet{}
+		orig := f
+		reowned.add(&orig)
+		changed := orig
+		changed.Detail = "derived content"
+		rekeyCopy := func() { reowned.rekey(&changed, func() { changed.Key = append(slices.Clone(changed.Key), "2") }) }
+		if copyFirst {
+			rekeyCopy()
+		}
+		reowned.rekey(&orig, func() { orig.Key = append(slices.Clone(orig.Key), "1") })
+		if !copyFirst {
+			rekeyCopy()
+		}
+		if got, _ := confine(conditionsCheck{}, []Finding{changed, orig}, CheckResult{}, reowned); got[0].class != ClassDerived || got[1].class != ClassOwn {
+			t.Errorf("copy rekeyed first %v: classes %d and %d, want derived and own", copyFirst, got[0].class, got[1].class)
+		}
+	}
 	// Nothing registered: no finding keeps ClassOwn.
 	if got, _ := confine(conditionsCheck{}, []Finding{f}, CheckResult{}, nil); got[0].class != ClassDerived {
 		t.Error("an own-object finding no run registered stays own-object")

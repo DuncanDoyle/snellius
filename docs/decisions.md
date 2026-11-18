@@ -1675,6 +1675,8 @@ Measured on the reference machine, 5 runs per world:
 
 **Consequences:** About 10–16 ms more per warm recompute at Large on the reference machine, within the absolute budgets. Later PRs compare against the slower `main`, so this cost no longer shows in an A/B; the follow-up carries acceptance criteria instead: the four benchmarks above within +15 % of `main` before Phase 7 ([`39c47c9`](https://github.com/DuncanDoyle/snellius/commit/39c47c93e494fbf7012e4e77eeebb08d2411cbbd)) on the reference machine. The registry stays: it stops a changed or copied finding from keeping own-object visibility.
 
+**Follow-up (2026-11-18, 7.5):** done. The four own route analyzers share one walk per route, and an own-object finding carries its registry entry, so confine and rekey no longer search; confine still compares content and key (`phases/phase-7/reviews/7.5-d115-codex.md`). A/B against `39c47c9` on the reference machine (7 interleaved runs, medians): Compute/large +5.5 %, large-contradicting +10.8 %, large-contradicting-worst +12.6 %, large-hit +8.3 %, all within the +15 % target.
+
 ## D-116 — Permission checks admit a few requests at a time (2026-11-17, Phase 7)
 **Status:** accepted by the user (2026-11-17): "Few loads at a time (Recommended)". Codex recommended it (`phases/phase-7/reviews/7.5-load-codex.md`).
 

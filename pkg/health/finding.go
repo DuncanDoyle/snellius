@@ -145,10 +145,12 @@ type ownedSet struct {
 }
 
 // ownedEntry is one registered finding: the digest of its print, and its key.
+// was is the key it was registered under, once rekey has moved it.
 type ownedEntry struct {
-	digest [sha256.Size]byte
-	key    []string
-	taken  bool
+	digest   [sha256.Size]byte
+	key, was []string
+	moved    bool
+	taken    bool
 }
 
 // unprinted are the fields ownedSet compares apart from a print: Key, and reg, which names the entry.
@@ -176,19 +178,47 @@ func (o *ownedSet) entry(f *Finding) *ownedEntry {
 		return nil
 	}
 	e := &o.entries[f.reg-1]
-	if e.taken || (e.key == nil) != (f.Key == nil) || !slices.Equal(e.key, f.Key) {
+	if e.taken || !sameKey(e.key, f.Key) {
 		return nil
 	}
 	return e
 }
 
+// sameKey compares keys as a print would: a nil key and an empty one differ.
+func sameKey(a, b []string) bool {
+	return (a == nil) == (b == nil) && slices.Equal(a, b)
+}
+
+// claim is the entry rekey may move for f. A finding still under the registered
+// key that the entry has moved from must also match its digest: a changed copy
+// rekeyed first cannot keep the entry from the original, whichever comes first.
+func (o *ownedSet) claim(f *Finding) *ownedEntry {
+	if o == nil || f.reg <= 0 || int(f.reg) > len(o.entries) {
+		return nil
+	}
+	e := &o.entries[f.reg-1]
+	switch {
+	case e.taken:
+		return nil
+	case sameKey(e.key, f.Key):
+		if !e.moved {
+			e.was, e.moved = e.key, true
+		}
+		return e
+	case e.moved && sameKey(e.was, f.Key):
+		if d, ok := o.digest(f); ok && d == e.digest {
+			return e
+		}
+	}
+	return nil
+}
+
 // rekey runs rewrite, which changes only f's Key; a registered own-object
 // finding stays registered under its new key. Only the key normalisers call it.
-// A copy changed elsewhere may move its entry's key: take still compares content.
 func (o *ownedSet) rekey(f *Finding, rewrite func()) {
 	var e *ownedEntry
 	if f.class == ClassOwn {
-		e = o.entry(f)
+		e = o.claim(f)
 	}
 	rewrite()
 	if e != nil {
