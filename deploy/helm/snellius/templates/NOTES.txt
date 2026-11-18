@@ -25,7 +25,7 @@ Check that the cluster accepts your token with:
 Allowed permission checks are reused for {{ include "snellius.authzValue" (dict "root" . "key" "cacheTTL") | default "60s" }} (auth.authz.cacheTTL).
 That is how long a revoked permission can stay visible in Snellius;
 a longer TTL trades that freshness for fewer checks on the API server.
-Denied checks are reused for 5m, so a new grant shows within 5 minutes.
+Denied checks are reused for 4 to 5 minutes, so a new grant shows within 5 minutes.
 {{- if .Values.httpRoute.enabled }}
 It is exposed through an HTTPRoute.
 {{- end }}
