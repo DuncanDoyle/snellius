@@ -13,7 +13,20 @@ export type ListName = "routes" | "gateways" | "listenersets" | "findings" | "pr
 
 /** The params each list's server documents (design §7.2), in the order they are sent. listener is 2.3 and never sent. */
 const API_PARAMS: Record<ListName, string[]> = {
-  routes: ["namespace", "kind", "parent", "attachment", "state", "health", "backend", "q", "sort", "cursor"],
+  routes: [
+    "namespace",
+    "kind",
+    "parent",
+    "attachment",
+    "state",
+    "health",
+    "config",
+    "path",
+    "backend",
+    "q",
+    "sort",
+    "cursor",
+  ],
   gateways: ["namespace", "health", "q", "sort", "cursor"],
   listenersets: ["namespace", "parent", "health", "q", "sort", "cursor"],
   findings: ["severity", "code", "kind", "namespace", "group", "q", "sort", "cursor"],
@@ -32,7 +45,18 @@ const DEFAULT_SORT: Record<ListName, string> = {
   backends: "problem.asc",
 };
 /** Repeatable params; the page URL holds them comma-joined (no value of theirs can contain a comma). */
-const REPEATED = new Set(["namespace", "kind", "state", "health", "backend", "severity", "code", "gateway"]);
+const REPEATED = new Set([
+  "namespace",
+  "kind",
+  "state",
+  "health",
+  "config",
+  "path",
+  "backend",
+  "severity",
+  "code",
+  "gateway",
+]);
 /** Params a list takes once although other lists repeat them; only the first URL value is sent. */
 const SINGLE: Partial<Record<ListName, Set<string>>> = {
   paths: new Set(["namespace", "kind"]),
@@ -51,6 +75,8 @@ export const FILTER_PARAMS = [
   "attachment",
   "state",
   "health",
+  "config",
+  "path",
   "backend",
   "severity",
   "code",

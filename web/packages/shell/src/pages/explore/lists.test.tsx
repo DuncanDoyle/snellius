@@ -77,6 +77,9 @@ function mountWithLocation(path: string) {
   );
 }
 
+/** A chip of the Health group; the routes list also has Configuration and Traffic path groups of the same chips. */
+const healthChip = (name: RegExp) =>
+  within(screen.getByRole("group", { name: "Health" })).getByRole("button", { name });
 const rowOf = (name: string) => screen.getAllByRole("row").find((r) => within(r).queryByText(name)) as HTMLElement;
 
 afterEach(() => {
@@ -123,8 +126,8 @@ it("filters, sort and cursor round-trip through the URL", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Previous page" }));
   await waitFor(() => expect(search().get("cursor")).toBe("p0"));
   // A filter change also drops the cursor; health is repeatable.
-  await userEvent.click(screen.getByRole("button", { name: /Error/ }));
-  await userEvent.click(screen.getByRole("button", { name: /Warning/ }));
+  await userEvent.click(healthChip(/Error/));
+  await userEvent.click(healthChip(/Warning/));
   await waitFor(() => expect(search().get("health")).toBe("error,warning"));
   expect(search().has("cursor")).toBe(false);
   await waitFor(() => expect(listCalls("routes").at(-1)?.searchParams.getAll("health")).toEqual(["error", "warning"]));
@@ -163,7 +166,7 @@ it("a filter change keeps the rows on screen until the new page arrives", async 
   );
   mount(`/i/${ID}/routes`);
   await screen.findByText("rejected");
-  await userEvent.click(screen.getByRole("button", { name: /Error/ }));
+  await userEvent.click(healthChip(/Error/));
   await waitFor(() => expect(vi.mocked(fetch).mock.calls.some((c) => String(c[0]).includes("health="))).toBe(true));
   expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
   expect(screen.getByText("rejected")).toBeInTheDocument();
@@ -186,7 +189,7 @@ it("while a new query loads, the old rows are marked busy, and their text keeps 
   await screen.findByText("rejected");
   const table = screen.getByRole("table");
   expect(table).toHaveAttribute("aria-busy", "false");
-  await userEvent.click(screen.getByRole("button", { name: /Error/ }));
+  await userEvent.click(healthChip(/Error/));
   await waitFor(() => expect(table).toHaveAttribute("aria-busy", "true"));
   const body = table.querySelector("tbody") as HTMLElement;
   // No opacity on the text: muted text stays at its tested 4.5:1, icons dim, and a bar marks the load.
@@ -208,7 +211,7 @@ it("an error on a new query never shows the previous query's rows", async () => 
   );
   mount(`/i/${ID}/routes`);
   await screen.findByText("rejected");
-  await userEvent.click(screen.getByRole("button", { name: /Error/ }));
+  await userEvent.click(healthChip(/Error/));
   expect(await screen.findByRole("heading", { name: "Cannot load routes" })).toBeInTheDocument();
   expect(screen.queryByText("rejected")).toBeNull();
   expect(screen.queryByText("11 routes")).toBeNull();
@@ -221,10 +224,10 @@ it("a failed query keeps its title and filters, and Clear filters recovers", asy
   );
   mountWithLocation(`/i/${ID}/routes`);
   await screen.findByText("rejected");
-  await userEvent.click(screen.getByRole("button", { name: /Error/ }));
+  await userEvent.click(healthChip(/Error/));
   expect(await screen.findByRole("heading", { name: "Cannot load routes" })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Routes", level: 1 })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /Error/ })).toHaveAttribute("aria-pressed", "true");
+  expect(healthChip(/Error/)).toHaveAttribute("aria-pressed", "true");
   expect(screen.queryByTestId("page-notice")).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Clear filters" }));
   expect(await screen.findByText("rejected")).toBeInTheDocument();
@@ -298,6 +301,8 @@ const yamlRow = (name: string, kind: string, flags: string[] = []): RouteRow => 
   children: 0,
   flags,
   health: "healthy",
+  config: { state: "healthy" },
+  path: { state: "healthy", incomplete: false },
 });
 
 it("GRPCRoute rows open the YAML view", async () => {
@@ -380,6 +385,40 @@ describe("shows each list state", () => {
     await waitFor(() => expect(location()).toBe(`/i/${ID}/routes?sort=kind.asc`));
   });
 
+  it("shows a Configuration and a Traffic path column, with the path reason on hover", async () => {
+    serve((u) => (u.pathname.endsWith("/routes") ? routes() : undefined));
+    mount(`/i/${ID}/routes`);
+    await screen.findByText("posts");
+    expect(screen.getByRole("columnheader", { name: "Configuration" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Traffic path" })).toBeInTheDocument();
+    // posts: configuration warning, path unknown because no Gateway took it.
+    const cells = within(rowOf("posts")).getAllByRole("cell");
+    const path = within(cells[2] as HTMLElement).getByTestId("health-reason");
+    await userEvent.hover(path);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Not attached to a Gateway");
+    await userEvent.unhover(path);
+    // via-ls: both signals healthy, so no reason triggers in its signal cells.
+    const api = within(rowOf("via-ls")).getAllByRole("cell");
+    expect(within(api[1] as HTMLElement).queryByTestId("health-reason")).toBeNull();
+    expect(within(api[2] as HTMLElement).queryByTestId("health-reason")).toBeNull();
+  });
+
+  it("the Configuration and Traffic path chips write config= and path= and send them to the API", async () => {
+    serve((u) => (u.pathname.endsWith("/routes") ? routes() : undefined));
+    mountWithLocation(`/i/${ID}/routes`);
+    await screen.findByText("posts");
+    await userEvent.click(
+      within(screen.getByRole("group", { name: "Configuration" })).getByRole("button", { name: /Warning/ }),
+    );
+    await userEvent.click(
+      within(screen.getByRole("group", { name: "Traffic path" })).getByRole("button", { name: /Unknown/ }),
+    );
+    await waitFor(() => expect(search().get("config")).toBe("warning"));
+    expect(search().get("path")).toBe("unknown");
+    await waitFor(() => expect(listCalls("routes").at(-1)?.searchParams.getAll("config")).toEqual(["warning"]));
+    expect(listCalls("routes").at(-1)?.searchParams.getAll("path")).toEqual(["unknown"]);
+  });
+
   it("empty without filters offers no Clear filters", async () => {
     serve((u) => (u.pathname.endsWith("/routes") ? { ...routes(), items: [], total: 0 } : undefined));
     mount(`/i/${ID}/routes`);
@@ -400,7 +439,8 @@ describe("shows each list state", () => {
     expect(await screen.findByTestId("page-notice")).toHaveTextContent("Cannot load routes: boom");
     expect(screen.getByText("rejected")).toBeInTheDocument();
     // Unconfirmed data is not evidence: the badges turn unknown, as on the install page.
-    expect(within(rowOf("rejected")).getByText("Unknown")).toBeInTheDocument();
+    // Status, Configuration and Traffic path all turn unknown.
+    expect(within(rowOf("rejected")).getAllByText("Unknown")).toHaveLength(3);
   });
 
   it("404 says the install is out of scope, with a link back", async () => {
@@ -731,13 +771,14 @@ describe("a row's Error or Warning explains itself in a tooltip (D-063)", () => 
     serve((u) => (u.pathname.endsWith(`/${c.list}`) ? body : undefined));
     mount(`/i/${ID}/${c.list}`);
     await screen.findByText(c.name);
-    const trigger = within(rowOf(c.name)).getByTestId("health-reason");
+    // A route row has a reason trigger per signal; the Status column's is the first.
+    const trigger = within(rowOf(c.name)).getAllByTestId("health-reason")[0] as HTMLElement;
     await userEvent.hover(trigger);
     expect(screen.getByRole("tooltip")).toHaveTextContent(c.tip);
     await userEvent.unhover(trigger);
     expect(screen.queryByRole("tooltip")).toBeNull();
     for (const [name, tip] of "others" in c ? c.others : []) {
-      const other = within(rowOf(name)).getByTestId("health-reason");
+      const other = within(rowOf(name)).getAllByTestId("health-reason")[0] as HTMLElement;
       await userEvent.hover(other);
       expect(screen.getByRole("tooltip")).toHaveTextContent(tip);
       await userEvent.unhover(other);
@@ -747,7 +788,9 @@ describe("a row's Error or Warning explains itself in a tooltip (D-063)", () => 
     expect(screen.getByRole("tooltip")).toHaveTextContent(c.tip);
     // Healthy rows carry no reason, so no tooltip trigger.
     for (const row of screen.getAllByRole("row")) {
-      if (within(row).queryByText("Healthy")) expect(within(row).queryByTestId("health-reason")).toBeNull();
+      const status = within(row).queryAllByRole("cell")[0];
+      if (status && within(status).queryByText("Healthy"))
+        expect(within(status).queryByTestId("health-reason")).toBeNull();
     }
   });
 });

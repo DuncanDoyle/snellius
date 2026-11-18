@@ -185,7 +185,8 @@ for (const p of CORE_PAGES) {
     if (p.name === "resource") await expect(page.getByTestId("yaml")).toBeVisible();
     else {
       await expect(page.getByTestId("detail-skeleton")).toHaveCount(0);
-      await expect(header.getByTestId(/^health-icon-/)).toBeVisible();
+      // A route's header has an icon per signal.
+      await expect(header.getByTestId(/^health-icon-/).first()).toBeVisible();
     }
     expect(await headBoxes(page)).toEqual(before);
   });

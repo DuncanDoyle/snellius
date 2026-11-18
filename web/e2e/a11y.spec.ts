@@ -35,7 +35,13 @@ async function dataRows(table: Locator): Promise<Locator> {
 /** Waits until an explorer detail page has replaced its skeleton with data. */
 async function detailLoaded(page: Page) {
   await expect(page.getByTestId("detail-skeleton")).toHaveCount(0);
-  await expect(page.getByTestId("detail-header").getByTestId(/^health-icon-/)).toBeVisible();
+  // A route's header has an icon per signal.
+  await expect(
+    page
+      .getByTestId("detail-header")
+      .getByTestId(/^health-icon-/)
+      .first(),
+  ).toBeVisible();
 }
 
 async function openGateway(page: Page) {

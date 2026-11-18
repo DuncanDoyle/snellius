@@ -57,11 +57,13 @@ interface HealthBadgeProps {
   label?: string;
   /** Why the state is not healthy: shown in a tooltip on hover and keyboard focus. */
   reason?: RowReason;
+  /** Added to the tooltip after the reason, e.g. that the assessment is incomplete. */
+  note?: string;
   stylesOverride?: SerializedStyles;
 }
 
 /** Icon + colour + text for a health state. */
-export function HealthBadge({ state: given, label, reason, stylesOverride }: HealthBadgeProps) {
+export function HealthBadge({ state: given, label, reason, note, stylesOverride }: HealthBadgeProps) {
   const state = useShownState(given);
   const badge = (
     <Badge state={state} stylesOverride={stylesOverride}>
@@ -73,7 +75,7 @@ export function HealthBadge({ state: given, label, reason, stylesOverride }: Hea
   // The reason explains the given state only, so a stale view drops it with that state.
   if (!reason || state !== given || state === "healthy") return badge;
   return (
-    <Tooltip label={rowReasonText(reason)} placement="start" wrap>
+    <Tooltip label={note ? `${rowReasonText(reason)} ${note}` : rowReasonText(reason)} placement="start" wrap>
       <Focusable tabIndex={0} data-testid="health-reason">
         {badge}
       </Focusable>

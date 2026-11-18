@@ -121,6 +121,8 @@ function signalNode(s: PathSignal, r: PathRow, ids: RowIds): string {
 export interface GraphOptions {
   stateFiltered?: boolean;
   collapsed?: ReadonlySet<string>;
+  /** Each route's summary health by refParam, as its page shows it; a route node takes it over the path rows' state. */
+  routeHealth?: ReadonlyMap<string, HealthState>;
 }
 
 /** The ids of a row's route chain, root first; a delegated route's id is its chain from the root. */
@@ -281,6 +283,10 @@ export function buildGraph(
     if (h) n.hiddenRoutes = h.size;
     const p = hiddenProblems.get(n.id);
     if (p) n.hiddenProblems = [...p.values()];
+    // A route node shows the route's summary, so the map and the route page agree; a collapsed node keeps its hidden routes' worst.
+    const summary = n.kind === "route" && n.ref ? opts.routeHealth?.get(refParam(n.ref)) : undefined;
+    if (summary)
+      n.state = (n.hiddenProblems ?? []).reduce((s, h) => h.signals.reduce((t, x) => worse(t, x.state), s), summary);
   }
   const stateFiltered = !!opts.stateFiltered;
   return {

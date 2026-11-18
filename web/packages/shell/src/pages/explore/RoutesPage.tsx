@@ -18,10 +18,20 @@ import { LinkedName } from "../../explore/LinkedName";
 import { ListFrame } from "../../explore/ListFrame";
 import { listValues, useListPage } from "../../explore/listQuery";
 import { type ObjectColumn, ObjectTable } from "../../explore/ObjectTable";
+import { signalColumns } from "../../explore/RouteSignals";
 import { type FilterOption, StateFilter } from "../../explore/StateFilter";
 import { HealthBadge } from "../../health/HealthBadge";
 import { ResourceName } from "../../resource/ResourceName";
-import { attachmentLabel, ListFilters, Muted, NameCell, OneLine, refText, useShownPage } from "./listParts";
+import {
+  attachmentLabel,
+  healthOptions,
+  ListFilters,
+  Muted,
+  NameCell,
+  OneLine,
+  refText,
+  useShownPage,
+} from "./listParts";
 
 // region Styles
 /** The name and its Mirror tag on one line; the name shrinks first. */
@@ -94,6 +104,7 @@ function columns(installId: string): ObjectColumn<RouteRow>[] {
       sortKey: "health",
       cell: (r) => <HealthBadge state={r.health} reason={r.reason} />,
     },
+    ...signalColumns<RouteRow>(),
     {
       id: "name",
       header: columnCopy.route,
@@ -187,8 +198,23 @@ export function RoutesPage({ stylesOverride }: RoutesPageProps = {}) {
         <ListFilters
           params={l.params}
           setFilter={l.setFilter}
+          titled
           tags={["namespace", "kind", "parent", "attachment", "backend"]}
         >
+          <StateFilter
+            label={listCopy.configState}
+            title={listCopy.configState}
+            options={healthOptions}
+            selected={listValues(l.params, "config")}
+            onChange={(v) => l.setFilter({ config: v.join(",") })}
+          />
+          <StateFilter
+            label={listCopy.pathState}
+            title={listCopy.pathState}
+            options={healthOptions}
+            selected={listValues(l.params, "path")}
+            onChange={(v) => l.setFilter({ path: v.join(",") })}
+          />
           <StateFilter
             label={listCopy.routeState}
             options={options}

@@ -12,6 +12,13 @@ const Group = styled.div<{ stylesOverride?: SerializedStyles }>`
   gap: ${(p) => p.theme.space(1)};
   ${(p) => p.stylesOverride}
 `;
+/** Names a group on screen when several groups hold the same chips. */
+const GroupTitle = styled.span`
+  align-self: center;
+  padding: 0 ${(p) => p.theme.space(1)};
+  color: ${(p) => p.theme.color.textMuted};
+  font-size: ${(p) => p.theme.font.size.sm};
+`;
 const Tag = styled.span`
   display: inline-flex;
   align-items: center;
@@ -60,13 +67,16 @@ interface StateFilterProps {
   options: FilterOption[];
   selected: string[];
   onChange: (selected: string[]) => void;
+  /** Shown before the chips, for a page with several groups of the same chips; the group's aria-label already names it. */
+  title?: string;
   stylesOverride?: SerializedStyles;
 }
 
 /** A group of toggle chips over one repeatable filter; selected values are OR-ed by the server. */
-export function StateFilter({ label, options, selected, onChange, stylesOverride }: StateFilterProps) {
+export function StateFilter({ label, options, selected, onChange, title, stylesOverride }: StateFilterProps) {
   return (
     <Group role="group" aria-label={label} stylesOverride={stylesOverride}>
+      {title ? <GroupTitle aria-hidden="true">{title}</GroupTitle> : null}
       {options.map((o) => {
         const on = selected.includes(o.value);
         return (

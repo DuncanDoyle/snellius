@@ -309,7 +309,8 @@ it("stale route data turns every state on the page unknown", async () => {
   mount(MID_OPEN);
   await loaded();
   await screen.findByText(/Data is stale/);
-  expect(within(screen.getByTestId("detail-header")).getByText("Unknown")).toBeInTheDocument();
+  // Both signals read Unknown.
+  expect(within(screen.getByTestId("detail-header")).getAllByText("Unknown")).toHaveLength(2);
   const states = Array.from(document.querySelectorAll('[data-testid^="health-icon-"]')).map((e) =>
     e.getAttribute("data-testid"),
   );

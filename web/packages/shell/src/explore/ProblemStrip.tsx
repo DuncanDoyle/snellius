@@ -2,8 +2,8 @@ import type { SerializedStyles } from "@emotion/react";
 import styled from "@emotion/styled";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
-import type { Condition, DetailReason } from "../api/types";
-import { problemCopy } from "../copy/explorer";
+import type { Condition, DetailReason, LinkedRef } from "../api/types";
+import { problemCopy, rowReasonCopy } from "../copy/explorer";
 import { rowReasonText } from "../health/HealthBadge";
 import { HealthIcon } from "../health/HealthIcon";
 import { stateLabel } from "../health/state";
@@ -11,6 +11,7 @@ import { findingPath } from "../pages/findings/FindingsPage";
 import type { HealthState } from "../theme/tokens";
 import { conditionState } from "./ConditionList";
 import { LinkedName } from "./LinkedName";
+import { objectPath } from "./objectPath";
 
 // region Styles
 /** The strip's element id; the header's state badge links to it. */
@@ -54,6 +55,16 @@ const Strip = styled.section<{ $state: HealthState; stylesOverride?: SerializedS
   .label {
     color: ${(p) => p.theme.color.textMuted};
   }
+  /* Names the signal that decided: a full border, text colour for contrast on every tint. */
+  .signal {
+    padding: 0 6px;
+    border-radius: ${(p) => p.theme.radius.sm};
+    border: 1px solid ${(p) => p.theme.color.borderStrong};
+    font-size: ${(p) => p.theme.font.size.xs};
+    font-weight: ${(p) => p.theme.font.weight.semibold};
+    color: ${(p) => p.theme.color.text};
+    white-space: nowrap;
+  }
   /* Body text colour, not accent: it keeps AA on every status tint. */
   .jump {
     padding: 0 4px;
@@ -91,6 +102,12 @@ export interface ProblemStripProps {
   conditionsId?: string;
   /** Where the fix goes when it is not this object, e.g. a ListenerSet's parent Gateway. */
   parent?: { label: string; name: ReactNode };
+  /** The signal that decided the state, shown as a small badge before the reason. */
+  signal?: string;
+  /** The Gateway to open when the reason is that it rejects config. */
+  gateway?: LinkedRef;
+  /** Set when a fault shows although the viewer cannot read the whole path. */
+  incomplete?: boolean;
   stylesOverride?: SerializedStyles;
 }
 
@@ -102,10 +119,14 @@ export function ProblemStrip({
   condition,
   conditionsId,
   parent,
+  signal,
+  gateway,
+  incomplete,
   stylesOverride,
 }: ProblemStripProps) {
   const finding =
     reason?.kind === "finding" && reason.finding ? findingPath(installId, { id: reason.finding }) : undefined;
+  const gatewayTo = reason?.kind === "gateway-rejecting" && gateway ? objectPath(installId, gateway) : undefined;
   return (
     <Strip
       id={PROBLEM_ID}
@@ -119,6 +140,11 @@ export function ProblemStrip({
       <span className="state">{stateLabel(state)}</span>
       {reason ? (
         <span className="line" data-testid="problem-reason">
+          {signal ? (
+            <span className="signal" data-testid="problem-signal">
+              {signal}
+            </span>
+          ) : null}
           {reason.kind === "backend-problem" && reason.backend && reason.message ? (
             <>
               <span className="label">{problemCopy.backend}</span>
@@ -133,6 +159,16 @@ export function ProblemStrip({
               {problemCopy.openFinding}
             </Link>
           ) : null}
+          {gatewayTo ? (
+            <Link className="jump" to={gatewayTo}>
+              {problemCopy.viewGateway} →
+            </Link>
+          ) : null}
+        </span>
+      ) : null}
+      {incomplete && reason?.kind !== "path-incomplete" ? (
+        <span className="line label" data-testid="problem-incomplete">
+          {rowReasonCopy.incompleteNote}
         </span>
       ) : null}
       {condition ? (

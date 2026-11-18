@@ -27,6 +27,8 @@ export const listCopy = {
   searchRoutes: "Filter by name, namespace or hostname", // S09
   health: "Health", // S10
   routeState: "Route state", // S11
+  configState: "Configuration", // S849
+  pathState: "Traffic path", // S850
   removeFilter: (tag: string) => `Remove filter ${tag}`, // S20
   clearFilters: "Clear filters", // S21
   empty: (many: string) => `No ${many} in this install.`, // S22
@@ -65,6 +67,8 @@ export const columnCopy = {
   none: "None", // S30
   inherited: "Inherited", // S31
   mirror: "Mirror", // S35 (fixed)
+  configuration: "Configuration", // S849
+  trafficPath: "Traffic path", // S850
 };
 
 /** Route state filter chips (design §6.1). */
@@ -95,6 +99,11 @@ export const rowReasonCopy = {
   "gateway-rejecting": "The parent Gateway rejects config.",
   backendProblem: (backend: string, message: string) => `Backend ${backend}: ${message}`, // S836
   backendHidden: (code: string) => `${code}: A backend you can't view has a problem.`, // S837
+  "no-path": "Accepted, but no path to a backend", // S844
+  "not-attached": "Not attached to a Gateway", // S845
+  "path-problem": "Traffic path has errors", // S846
+  "path-incomplete": "You don't have permission to check the whole path.", // S847
+  incompleteNote: "Assessment incomplete with your current permissions.", // S848
 };
 
 /** View B's computed flag (2.4); offered only when /meta advertises filters.delegation. */
@@ -148,6 +157,8 @@ export const problemCopy = {
   openFinding: "Open finding", // S826
   badgeLink: (state: string) => `${state}, go to the problem`, // S827
   backend: "Backend", // S838
+  viewGateway: "View Gateway", // S851
+  signalLink: (signal: string, state: string) => `${signal}: ${state}, go to the problem`, // S852
 };
 
 // region Gateway page

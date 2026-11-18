@@ -174,8 +174,10 @@ import type {
   RefsEvidence,
   ReleaseModeCount,
   RouteAttachment,
+  RouteConfigSignal,
   RouteCounts,
   RouteDetail,
+  RoutePathSignal,
   RouteRow,
   RowReason,
   Rule,
@@ -539,6 +541,22 @@ const rowReason: Shape = {
         { backend: linkedRef },
         { kind: { "backend-problem": 1 } },
       ),
+      "path-incomplete": shape<Extract<RowReason, { kind: "path-incomplete" }>>(
+        { kind: "!" },
+        {},
+        { kind: { "path-incomplete": 1 } },
+      ),
+      "not-attached": shape<Extract<RowReason, { kind: "not-attached" }>>(
+        { kind: "!" },
+        {},
+        { kind: { "not-attached": 1 } },
+      ),
+      "no-path": shape<Extract<RowReason, { kind: "no-path" }>>({ kind: "!" }, {}, { kind: { "no-path": 1 } }),
+      "path-problem": shape<Extract<RowReason, { kind: "path-problem" }>>(
+        { kind: "!", code: "?", message: "?" },
+        {},
+        { kind: { "path-problem": 1 } },
+      ),
     } satisfies Record<RowReason["kind"], Shape>,
   },
 };
@@ -665,6 +683,16 @@ const parentSummary = shape<ParentSummary>(
   { ref: linkedRef, via: linkedRef, computed: computedAttachment },
   { attachment: { accepted: 1, "not-accepted": 1, pending: 1, unwatched: 1, declared: 1 } },
 );
+const routeConfigSignal = shape<RouteConfigSignal>(
+  { state: "!", reason: "?" },
+  { reason: rowReason },
+  { state: healthState },
+);
+const routePathSignal = shape<RoutePathSignal>(
+  { state: "!", reason: "?", incomplete: "!" },
+  { reason: rowReason },
+  { state: healthState },
+);
 const routeRow = shape<RouteRow>(
   {
     ref: "!",
@@ -676,8 +704,17 @@ const routeRow = shape<RouteRow>(
     health: "!",
     reason: "?",
     mirror: "?",
+    config: "!",
+    path: "!",
   },
-  { ref: linkedRef, reason: rowReason, parents: parentSummary, parentRoutes: linkedRef },
+  {
+    ref: linkedRef,
+    reason: rowReason,
+    parents: parentSummary,
+    parentRoutes: linkedRef,
+    config: routeConfigSignal,
+    path: routePathSignal,
+  },
   { health: healthState },
 );
 const gatewayListRow = shape<GatewayListRow>(
@@ -1002,10 +1039,14 @@ const routeDetail = shape<RouteDetail>(
     declaredCount: "!",
     delegationNotChecked: "?",
     collectedAt: "!",
+    config: "!",
+    path: "!",
   },
   {
     ref: linkedRef,
     reason: detailReason,
+    config: routeConfigSignal,
+    path: routePathSignal,
     candidate,
     annotations: shape<RouteDetail["annotations"]>({ inheritParentMatcher: "?" }),
     parentRefs: specParentRef,

@@ -48,6 +48,12 @@ function permissionText(d: RouteDetail) {
   return routes.length ? routeCopy.allows(routes) : routeCopy.allowsNone;
 }
 
+/** The route's one parent Gateway, for the strip's link; none when it has several, as the rejecting one is not named. */
+function soleGateway(d: RouteDetail): LinkedRef | undefined {
+  const gws = d.parentRefs.filter((p) => p.kind === "Gateway" && p.target).map((p) => p.target as LinkedRef);
+  return gws.length === 1 ? gws[0] : undefined;
+}
+
 const refKey = (p: ParentRef) => [p.group, p.kind, p.namespace, p.name, p.sectionName, p.port].join("/");
 
 /** Status entries' refs that no spec parentRef names, once each: a child's implicit parent (design §5.1). */
@@ -150,6 +156,7 @@ export function RoutePage({ stylesOverride }: RoutePageProps = {}) {
         data && {
           condition: firstFailing(data.parents.filter((p) => p.ours).flatMap((p) => p.conditions)),
           conditionsId: "route-parents",
+          gateway: soleGateway(data),
         }
       }
       trailRefs={trailRefs}

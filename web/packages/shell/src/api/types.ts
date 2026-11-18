@@ -150,7 +150,11 @@ export type RowReason =
   | { kind: "finding"; code: string; message: string; more?: number }
   | { kind: "unknown" }
   | { kind: "gateway-rejecting" }
-  | { kind: "backend-problem"; code: string; message?: string; backend?: LinkedRef };
+  | { kind: "backend-problem"; code: string; message?: string; backend?: LinkedRef }
+  | { kind: "path-incomplete" }
+  | { kind: "not-attached" }
+  | { kind: "no-path" }
+  | { kind: "path-problem"; code?: string; message?: string };
 export interface GatewayRow {
   ref: Ref;
   class: string;

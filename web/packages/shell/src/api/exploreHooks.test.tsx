@@ -25,6 +25,8 @@ const row = (name: string): RouteRow => ({
   children: 0,
   flags: [],
   health: "healthy",
+  config: { state: "healthy" },
+  path: { state: "healthy", incomplete: false },
 });
 const list = (install: string, ...names: string[]): RouteList => ({
   install,

@@ -59,7 +59,7 @@ export const Muted = styled.span`
 
 // region Helpers
 const HEALTH: HealthState[] = ["error", "warning", "unknown", "healthy"];
-const healthOptions: FilterOption[] = HEALTH.map((h) => ({
+export const healthOptions: FilterOption[] = HEALTH.map((h) => ({
   value: h,
   label: stateLabel(h),
   icon: <HealthIcon state={h} />,
@@ -88,8 +88,15 @@ export function useShownPage<T extends { health: HealthState }>(
 ): Page<T> | undefined {
   const now = useNow();
   if (!page || (!failed && !isStale(page.collectedAt, now))) return page;
-  // The reason explained the row's own state, so it goes with it.
-  return { ...page, items: page.items.map((r) => ({ ...r, health: "unknown" as const, reason: undefined })) };
+  // The reason explained the row's own state, so it goes with it; a route's two signals turn unknown as well.
+  const signals = (r: T) => ({
+    ...("config" in r ? { config: { state: "unknown" as const } } : {}),
+    ...("path" in r ? { path: { state: "unknown" as const, incomplete: false } } : {}),
+  });
+  return {
+    ...page,
+    items: page.items.map((r) => ({ ...r, health: "unknown" as const, reason: undefined, ...signals(r) })),
+  };
 }
 
 /** Table cells hold one line: content is cut with an ellipsis and the full text is in a Tooltip (design §8.7). */
@@ -119,15 +126,18 @@ interface FiltersProps {
   setFilter: (c: ParamChanges) => void;
   /** URL params shown as removable tags, in order. */
   tags: string[];
+  /** Names the health chips on screen, for a list that has other groups of the same chips. */
+  titled?: boolean;
   children?: React.ReactNode;
 }
 
 /** Health chips, any list-specific chips, and tags for filters set through the URL. */
-export function ListFilters({ params, setFilter, tags, children }: FiltersProps) {
+export function ListFilters({ params, setFilter, tags, titled, children }: FiltersProps) {
   return (
     <>
       <StateFilter
         label={listCopy.health}
+        title={titled ? listCopy.health : undefined}
         options={healthOptions}
         selected={listValues(params, "health")}
         onChange={(v) => setFilter({ health: v.join(",") })}
