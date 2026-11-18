@@ -1700,3 +1700,12 @@ Measured on the reference machine, 5 runs per world:
 3. Raise the budget only if both fall short, and only with the user's approval and a fresh memory measurement against D-100's 64 MiB.
 
 **Consequences:** The load bench's per-viewer assertions (`pkg/api/sar_bench_test.go`) are the acceptance test.
+
+## D-118 — The default check rate's capacity is accepted and documented (2026-11-18, Phase 7)
+**Status:** accepted by the user (2026-11-18): "Accept and document (your recommendation), but I do want to think about this some more: Do other platforms have the same capacity, and do they hit the same kind of limits? Or is this due to Snellius architecture and how we approach access control and visibility. [...] I think we can finish phase 7 first, and release v0.8.0, and after that think about this some more".
+
+**Context:** With D-116 and D-117 ([`c479b13`](https://github.com/DuncanDoyle/snellius/commit/c479b13): an answer costs about 210 B, 0 evictions in the load bench), every target confirmed for 7.5 passes on `/routes`, `/paths` and `/backends`. But 50 restricted viewers polling `/backends` every 5 s need about 95 refresh checks/s against the default 100/s (deny refreshes about 32,800, allow refreshes about 14,800 after the first pages), so their polls take about 12 s and each scores about 35 polls in 7 minutes.
+
+**Decision:** Keep the default rate (D-100 item 6). The load bench requires each viewer to be sampled at least one deny TTL after its first 200, with at least one deny refresh and at least 20 scored polls, instead of a fixed 60 polls. The README says when to raise `auth.authz.rate` (`docs/documentation-notes.md`).
+
+**Consequences:** Near the default rate, polls slow down but answer. After `v0.8.0`: compare how other Kubernetes UIs and platforms authorise per user, whether they meet the same limits, and whether Snellius's per-object visibility model (D-085) is the cause; tracked in `phase-status.md`, Carry-over.

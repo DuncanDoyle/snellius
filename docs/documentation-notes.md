@@ -114,3 +114,8 @@ Topics the user-facing documentation must cover when it is written. Each entry s
 - **Where it lives.** One browser setting for every install, kept across reloads. Explain the marker on the header and the scoped empty state with "Show all namespaces".
 - **Why use it.** A scoped page asks about a tenth of the permission checks on a large cluster. Give the measured numbers from the 7.4 bench.
 - **API.** `namespaces=` on the seven lists (at most 100 names, `400` on a bad value) and `GET /api/v1/installs/{id}/namespaces`.
+
+## Many viewers at once (2026-11-18, Phase 7 sub-phase 7.5, D-116 to D-118)
+- When many restricted viewers open pages at the same moment (for example after a Snellius restart), page loads are answered in turn, oldest first; the last can wait minutes. Viewers with full read access and polls with cached answers don't wait.
+- Capacity at the default 100 checks/s: on a cluster of about 100 namespaces, 50 restricted viewers polling `/backends` every 5 s need about 95 checks/s, so their polls slow to about 12 s. Raise `auth.authz.rate` if the API server can take it; scoping a page to a namespace cuts its checks sharply.
+- The permission cache stays at 8 MiB and holds about 40,000 answers (about 210 B each).

@@ -40,7 +40,7 @@ Features within the approved design (§8, §2 gate); the load fix and D-115 foll
 Design changes without a decisions.md entry and user approval; 7.6 work (audit levels, release docs).
 
 ### Queue
-- [ ] Load: every cold viewer gets answers on /routes, /paths, /backends under the load bench (P2, 7.4 Deferred) ← CURRENT. D-116 implemented (67409dd, 83d5b3f, 9c503f0); Codex review `reviews/7.5-d116-codex.md`. Fix round 1 paused 2026-11-17 after 905cca8 (R1 release before write, R8 other methods admitted first) and 7f6e44b (miss reasons, admission tests watch the queue); tree clean, auth/api/app tests pass. Next: check which of R2, R5, R6, R7 remain against the triage table, finish them, run the gates and the full `TestBudgetSARDeniedList`, then Codex re-review. Separate PR later: `pkg/engine` `TestStaleMetricsAreNeverConfirmed` flaked once (60 reruns pass)
+- [ ] Load: every cold viewer gets answers on /routes, /paths, /backends under the load bench (P2, 7.4 Deferred) ← CURRENT. D-116 implemented (67409dd, 83d5b3f, 9c503f0); Codex review `reviews/7.5-d116-codex.md`. Fix round 1 paused 2026-11-17 after 905cca8 (R1 release before write, R8 other methods admitted first) and 7f6e44b (miss reasons, admission tests watch the queue); R5/R6 in 0605d85; cache entries 468 → 210 B (D-117, c479b13); capacity accepted (D-118). Next: full `TestBudgetSARDeniedList` green, then Codex re-review of c0f2a03..HEAD. Separate PR later: `pkg/engine` `TestStaleMetricsAreNeverConfirmed` flaked once (60 reruns pass)
 - [ ] `pkg/explore`: `config`, `path`, `path.incomplete`, legacy `health`, `path-incomplete` (plan 7.5 item 1)
 - [ ] API: route list and detail, Gateway and ListenerSet route tables, `config=` and `path=` filters (item 2)
 - [ ] Web: columns, header badges, problem strip, map nodes, wording (item 3)
@@ -55,6 +55,7 @@ Open `cross-repo` issues (2026-11-13): here #15, #21 (xdsview E4/E5, for Phase 1
 Provided to this repo: E4 and E5 from xdsview `v0.3.0` (renamed from krp; #15, #21) are for UI Phase 12 (was 11 before D-084).
 
 ## Carry-over (deferred to later phases)
+- (P3) After `v0.8.0` (user, 2026-11-18, D-118): compare how other Kubernetes UIs and platforms authorise per user, whether they hit the same check-rate limits, and whether Snellius's per-object visibility (D-085) causes them; what could be learned from their architecture
 - (P3) REMIND USER at the start of each phase: file the upstream kgateway issue "Expose the controller's effective discovery scope through a read-only endpoint" (H9, D-009 §7). User chose to file it in a later phase (2026-10-20). Draft kept outside the repo (public repo). Before filing: confirm on a cluster that status stays after a namespace is deselected, and re-verify the file:line refs against kgateway main.
 - (P3) Scope verification for experimental Gateway API kinds: switch KGWUI-007 to the controller's enabled kinds once the upstream scope endpoint exists (D-017 §4) — src: phases/phase-1/reviews/phase-codex.md#5
 - (P3) Watch CRDs added or removed after startup without a restart — https://github.com/DuncanDoyle/kgateway-ui/issues/1
