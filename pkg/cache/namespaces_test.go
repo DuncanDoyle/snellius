@@ -82,9 +82,11 @@ func bothPaths(t *testing.T, build func() *nsWorld, ready func(*Snapshot) bool) 
 	t.Cleanup(cancel)
 	c.Start(ctx)
 	var watched *Snapshot
+	// Every informer settles to what the one-shot list saw: Synced alone can come
+	// before an optional kind reports its access.
 	waitFor(t, "the informer cache ready", func() bool {
 		watched = c.Snapshot()
-		return watched.Synced && ready(watched)
+		return watched.Synced && ready(watched) && reflect.DeepEqual(watched.Access, listed.Access)
 	})
 	return map[string]*Snapshot{ModeList: listed, ModeWatch: watched}
 }
