@@ -349,7 +349,11 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		mode = ModeLocal
 	}
 	metrics.Gauge("snellius_auth_mode", "Authentication mode of this process; 1 for the active mode.", "mode").Set(1, mode)
-	auditLog := audit.New(auditOut, levels, metrics)
+	auditOpts := []audit.Option{audit.WithServer(serverName())}
+	if o.Clock != nil {
+		auditOpts = append(auditOpts, audit.WithClock(o.Clock))
+	}
+	auditLog := audit.New(auditOut, levels, metrics, auditOpts...)
 	// Extensions get the same authoriser as the core handler. In secure mode
 	// SAR always decides, and a registry authoriser can only narrow it.
 	authz := reg.Authorizer
@@ -419,7 +423,8 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 			clk = o.Clock
 		}
 		hopts = append(hopts, api.WithSecureMode(), api.WithCommitCheck(sessions.StillSignedIn),
-			api.WithAuthzAudit(authzAuditor(auditLog)), api.WithCheckCapHit(capHitter(lim, eng.Installs)), api.WithCommitClock(clk.Now))
+			api.WithAuthzAudit(authzAuditor(auditLog)), api.WithCheckCapHit(capHitter(lim, eng.Installs)), api.WithCommitClock(clk.Now),
+			api.WithRequestAudit(requestAuditor(auditLog), auditLog.Enabled(audit.LevelDisclosure)))
 	}
 	h := api.NewHandler(eng, o.UI, authz, hopts...)
 	return &App{Engine: eng, oidc: prov, flow: flow, oidcErr: oidcErr, sessions: sessions, sar: sarAuthz, Handler: h, Metrics: metrics, Audit: auditLog, cfg: cfg, cache: ca, kinds: mon, opts: o, authz: authz, discovered: discovered, reg: reg,
