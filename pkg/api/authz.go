@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"reflect"
 	"sync"
 	"time"
 
@@ -106,10 +107,10 @@ type authzState struct {
 	// passed is set by the check that first passes CheckLimit, so a rebuild never reports it again.
 	passed bool
 	err    error
-	// fullOnce asks the full read at most once, when a population first needs it (D-100).
-	fullOnce sync.Once
-	// full is its answer; fullFailed, under mu, marks that it recorded the request's error.
-	full, fullFailed bool
+	// fulls memoises each authoriser's full read, asked when a population first needs it (D-100).
+	fulls map[any]*fullMemo
+	// fullFailed marks that a full read recorded the request's error.
+	fullFailed bool
 	// allowExp is the earliest expiry of an allow the request used; zero means none (D-100).
 	allowExp time.Time
 	// gated refuses uncached checks until the request is admitted; refused marks that one was (D-116).
@@ -168,7 +169,13 @@ func (s *authzState) failed() error {
 	return s.err
 }
 
-// fullRead reports whether r's request runs under a full read, asking a the
+// fullMemo is one authoriser's full-read answer within a request.
+type fullMemo struct {
+	once sync.Once
+	full bool
+}
+
+// fullRead reports whether r's request runs under a's full read, asking a the
 // first time (design §6.4, D-100). An error is recorded and answered false.
 func fullRead(r *http.Request, a Authorizer) bool {
 	s := authzStateOf(r)
@@ -176,9 +183,9 @@ func fullRead(r *http.Request, a Authorizer) bool {
 	if s == nil || !ok {
 		return false
 	}
-	s.fullOnce.Do(func() {
+	ask := func() bool {
 		if authzFailed(r) {
-			return
+			return false
 		}
 		all, err := fr.FullRead(r)
 		if err != nil {
@@ -186,11 +193,26 @@ func fullRead(r *http.Request, a Authorizer) bool {
 			s.mu.Lock()
 			s.fullFailed = true
 			s.mu.Unlock()
-			return
+			return false
 		}
-		s.full = all
-	})
-	return s.full
+		return all
+	}
+	// The memo is keyed by a itself; an authoriser that cannot be a map key is asked every time.
+	if !reflect.ValueOf(a).Comparable() {
+		return ask()
+	}
+	s.mu.Lock()
+	m := s.fulls[a]
+	if m == nil {
+		if s.fulls == nil {
+			s.fulls = map[any]*fullMemo{}
+		}
+		m = &fullMemo{}
+		s.fulls[a] = m
+	}
+	s.mu.Unlock()
+	m.once.Do(func() { m.full = ask() })
+	return m.full
 }
 
 // fullReadFailed reports whether the full read recorded the request's error.

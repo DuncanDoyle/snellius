@@ -89,6 +89,27 @@ func TestNarrowedFullRead(t *testing.T) {
 	}
 }
 
+// One authoriser's full read never answers another's in the same request.
+func TestFullReadIsPerAuthorizer(t *testing.T) {
+	r, _ := withAuthzState(httptest.NewRequest(http.MethodGet, "/api/ext/x/y", nil))
+	other := &fullAuthz{errAuthz: &errAuthz{}, all: true}
+	sar := &fullAuthz{errAuthz: &errAuthz{}, all: false}
+	if !ViewerOf(r, other).ReadsAll() {
+		t.Fatal("the separate FullReader's yes is not a full read")
+	}
+	if ViewerOf(r, Narrowed{Base: sar, Policy: fullPolicy{all: true}}).ReadsAll() {
+		t.Error("the narrowed view got a full read its base denies")
+	}
+	if sar.readCount() != 1 {
+		t.Errorf("the narrowed view's base was asked %d times, want 1", sar.readCount())
+	}
+	// The same authoriser is still asked once per request.
+	ViewerOf(r, other).ReadsAll()
+	if other.readCount() != 1 {
+		t.Errorf("the separate FullReader was asked %d times, want 1", other.readCount())
+	}
+}
+
 // A narrowed authoriser keeps the base's admission, and extensions' Visible ANDs the policy.
 func TestNarrowedKeepsAdmission(t *testing.T) {
 	clk := clocktesting.NewFakeClock(commitT0)
