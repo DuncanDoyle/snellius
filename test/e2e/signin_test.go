@@ -230,3 +230,74 @@ func TestSignIn(t *testing.T) {
 		t.Errorf("alice after bob's logout: %d %+v", code, m)
 	}
 }
+
+// summaryWait covers the summary window (design §9.4) plus the log's delay.
+const summaryWait = 6 * time.Minute
+
+// TestAuditRecords reads a route and lists routes as alice, then finds the
+// read record at once and the list's summary after its window, in the
+// server's stdout. It takes up to one summary window.
+func TestAuditRecords(t *testing.T) {
+	if os.Getenv("SECURE") != "1" {
+		t.Skip("needs SECURE=1 and a secure-mode install (test/e2e/setup.sh)")
+	}
+	alice := signIn(t, "alice")
+	code, body := call(t, alice, http.MethodGet, "/api/v1/installs", nil)
+	var insts []api.InstallSummary
+	if err := json.Unmarshal(body, &insts); code != http.StatusOK || err != nil {
+		t.Fatalf("/api/v1/installs = %d %s", code, body)
+	}
+	const route = "gateway.networking.k8s.io/HTTPRoute/shop/good"
+	read := false
+	for _, in := range insts {
+		if code, body = call(t, alice, http.MethodGet, "/api/v1/installs/"+in.ID+"/routes?namespace=shop", nil); code != http.StatusOK {
+			t.Fatalf("routes of %s = %d %s", in.ID, code, body)
+		}
+		if code, _ = call(t, alice, http.MethodGet, "/api/v1/installs/"+in.ID+"/routes/"+route, nil); code == http.StatusOK {
+			read = true
+		}
+	}
+	if !read {
+		t.Fatalf("no install opened %s for alice", route)
+	}
+	find := func(want func(rec auditLine) bool) func() error {
+		return func() error {
+			out, err := kubectlRun(t, "-n", "snellius", "logs", "deploy/ui-snellius", "--since=15m")
+			if err != nil {
+				return fmt.Errorf("server logs: %v", err)
+			}
+			for _, l := range strings.Split(string(out), "\n") {
+				var rec auditLine
+				if json.Unmarshal([]byte(l), &rec) == nil && rec.Log == "snellius.audit" && rec.Kube.Username == "oidc:alice" && want(rec) {
+					return nil
+				}
+			}
+			return fmt.Errorf("no matching audit record yet")
+		}
+	}
+	eventually(t, find(func(rec auditLine) bool {
+		return rec.Level == "reads" && rec.Action == "read" && slices.Contains(rec.Refs, route) && rec.Session != ""
+	}))
+	deadline := time.Now().Add(summaryWait)
+	summary := find(func(rec auditLine) bool {
+		return rec.Level == "summaries" && rec.Request.Route == "GET /api/v1/installs/{id}/routes" && rec.Request.Filters["namespace"] == "shop" && rec.Count >= 1
+	})
+	for err := summary(); err != nil; err = summary() {
+		if time.Now().After(deadline) {
+			t.Fatalf("list summary: %v", err)
+		}
+		time.Sleep(10 * time.Second)
+	}
+}
+
+// auditLine is the part of an audit record TestAuditRecords checks.
+type auditLine struct {
+	Log, Level, Action, Session string
+	Refs                        []string
+	Count                       int
+	Kube                        struct{ Username string }
+	Request                     struct {
+		Route   string
+		Filters map[string]string
+	}
+}
