@@ -553,8 +553,9 @@ func (m *missTrace) waited(a sar.Attributes, d time.Duration) {
 // rate and burst limits (D-116). It logs why each counted check missed.
 func loadTest(t *testing.T, secure func(api.Authorizer, func() time.Time, ...api.HandlerOption) http.Handler, p page) {
 	const viewers, scale, lat, every = 50, 10, 2 * time.Millisecond, 5 * time.Second
-	// minScored is a deny TTL of polls: at 95 %, three failures in 60 still pass, and a coarser count would not.
-	const minScored = int(sar.DenyTTL / every)
+	// minScored is the fewest polls that make the 95 % share meaningful: one failure in 20 still passes.
+	// Polls slow down when refreshes near the default rate (D-118), so coverage is a deny TTL of time, not of polls.
+	const minScored = 20
 	// Four admission places (32 in flight ÷ 8 per request): more cold viewers in a poll means some queue.
 	const places = 4
 	const warmUser = "warm"
@@ -793,7 +794,7 @@ func loadTest(t *testing.T, secure func(api.Authorizer, func() time.Time, ...api
 	t.Logf("load: one cold viewer %d SARs (%s); polls %v (%d), %.1f%% answered 200, %d cut by the deadline; 503 reasons %v; cap passed %d; first 200 per viewer p50 %v max %v (bound %v)",
 		cold.sars, p.mark(cold.sars), codes, total, 100*float64(codes[http.StatusOK])/float64(max(total, 1)), cut, got, capHits.Load(),
 		q(firstOK, 50).Round(time.Second), q(firstOK, 100).Round(time.Second), bound.Round(time.Second))
-	t.Logf("load: after the first 200, worst viewer %.1f%% answered 200 of %d scored polls (fewest %d, minimum %d; %d viewers short of a deny refresh); most SARs in one poll %d",
+	t.Logf("load: after the first 200, worst viewer %.1f%% answered 200 of %d scored polls (fewest %d, minimum %d; %d viewers short of polls, time or a deny refresh); most SARs in one poll %d",
 		worst, worstN, fewest, minScored, short, maxPoll)
 	t.Logf("load: warm viewer %d polls during the storm, p50 %v max %v (wall p50 %v max %v)",
 		len(warm), q(warmTook, 50), q(warmTook, 100), q(warmWall, 50), q(warmWall, 100))
