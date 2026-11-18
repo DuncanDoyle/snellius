@@ -16,19 +16,22 @@ export class ApiError extends Error {
 }
 
 /** Fetches JSON from the backend API. */
-export async function apiFetch<T>(path: string): Promise<T> {
-  return (await apiFetchWithHeaders<T>(path)).body;
+export async function apiFetch<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return (await apiFetchWithHeaders<T>(path, signal)).body;
 }
 
 /** apiFetch, plus the response headers. */
-export async function apiFetchWithHeaders<T>(path: string): Promise<{ body: T; headers: Headers }> {
+export async function apiFetchWithHeaders<T>(
+  path: string,
+  signal?: AbortSignal,
+): Promise<{ body: T; headers: Headers }> {
   const settled = trackRequest();
   const authSettled = trackAuthRequest();
   try {
     // In secure mode, protected paths wait for /auth/status, so a 401 never outruns the sign-in pages.
     const guarded = isSecureMode() && (path.startsWith("/api/") || path === "/auth/me");
     if (guarded) await signInStatus().catch(() => {});
-    const res = await request<T>(path);
+    const res = await request<T>(path, signal);
     // A protected answer means this tab has a session; a later 401 then never redirects by itself.
     if (guarded) markHadSession();
     return res;
@@ -38,10 +41,10 @@ export async function apiFetchWithHeaders<T>(path: string): Promise<{ body: T; h
   }
 }
 
-async function request<T>(path: string): Promise<{ body: T; headers: Headers }> {
+async function request<T>(path: string, signal?: AbortSignal): Promise<{ body: T; headers: Headers }> {
   let res: Response;
   try {
-    res = await fetch(path, { headers: { Accept: "application/json" } });
+    res = await fetch(path, { headers: { Accept: "application/json" }, signal });
   } catch (e) {
     throw new ApiError(0, `Cannot reach the UI backend: ${(e as Error).message}`);
   }

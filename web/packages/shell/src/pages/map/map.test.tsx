@@ -1086,6 +1086,60 @@ it("child queries run two at a time", async () => {
   expect(peak).toBe(2);
 });
 
+it("a changed parent set aborts the old pool, so pools never run more than two queries together", async () => {
+  let active = 0;
+  let peak = 0;
+  const started: string[] = [];
+  const release: (() => void)[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init?: RequestInit) => {
+      started.push(new URL(url, "http://ui").searchParams.get("parent") ?? "");
+      peak = Math.max(peak, ++active);
+      // Stays in flight until released or aborted.
+      return new Promise<Response>((resolve, reject) => {
+        const done = () => {
+          active--;
+          release.splice(release.indexOf(done), 1);
+        };
+        release.push(() => {
+          done();
+          resolve(Response.json(emptyRoutes()));
+        });
+        init?.signal?.addEventListener("abort", () => {
+          done();
+          reject(new DOMException("aborted", "AbortError"));
+        });
+      });
+    }),
+  );
+  const refs = (prefix: string) =>
+    Array.from({ length: 4 }, (_, k) => ({
+      group: "gateway.networking.k8s.io",
+      kind: "HTTPRoute",
+      namespace: "shop",
+      name: `${prefix}${k}`,
+      link: "detail" as const,
+    }));
+  const { rerender } = renderHook(({ parents }) => useChildRouteHealth(ID, parents), {
+    wrapper: hookWrapper,
+    initialProps: { parents: refs("a") },
+  });
+  await waitFor(() => expect(active).toBe(2));
+  rerender({ parents: refs("b") });
+  // The old pool's two in-flight queries abort and the new pool starts its own two.
+  await waitFor(() => expect(started).toHaveLength(4));
+  expect(active).toBe(2);
+  // Drain the new pool: the old pool never starts its pending queries.
+  for (const r of [...release]) r();
+  await waitFor(() => expect(started).toHaveLength(6));
+  for (const r of [...release]) r();
+  await waitFor(() => expect(active).toBe(0));
+  expect(started.filter((s) => s.includes("/a"))).toHaveLength(2);
+  expect(started.filter((s) => s.includes("/b"))).toHaveLength(4);
+  expect(peak).toBe(2);
+});
+
 it("find locates a route its collapsed parent hides: the parent opens and the route is selected", async () => {
   serve(() => edgePaths());
   mount(`?tab=map&collapse=${encodeURIComponent(API_ROUTE)}`);

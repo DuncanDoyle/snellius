@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import useSWR from "swr";
 import { ApiError, apiFetch } from "../../api/client";
 import { forInstall, withQuery } from "../../api/exploreHooks";
@@ -16,26 +16,39 @@ const IN_FLIGHT = 2;
 const RETRIES = 2;
 export const backoff = { ms: 300 };
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Waits ms, or until the signal aborts. */
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(t);
+        resolve();
+      },
+      { once: true },
+    );
+  });
 
-/** apiFetch that retries a 503 a few times with a short backoff, then throws it. */
-async function fetchRetrying<T>(path: string): Promise<T> {
+/** apiFetch that retries a 503 a few times with a short backoff, then throws it. An aborted signal ends it. */
+async function fetchRetrying<T>(path: string, signal: AbortSignal): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     try {
-      return await apiFetch<T>(path);
+      return await apiFetch<T>(path, signal);
     } catch (e) {
-      if (!(e instanceof ApiError && e.status === 503) || attempt > RETRIES) throw e;
-      await sleep(backoff.ms * attempt);
+      if (signal.aborted || !(e instanceof ApiError && e.status === 503) || attempt > RETRIES) throw e;
+      await sleep(backoff.ms * attempt, signal);
+      if (signal.aborted) throw e;
     }
   }
 }
 
-/** Runs the tasks with at most limit in flight, keeping the results in order. */
-async function pooled<T>(tasks: readonly (() => Promise<T>)[], limit: number): Promise<T[]> {
+/** Runs the tasks with at most limit in flight, keeping the results in order; an aborted signal starts no more. */
+async function pooled<T>(tasks: readonly (() => Promise<T>)[], limit: number, signal: AbortSignal): Promise<T[]> {
   const out: T[] = new Array(tasks.length);
   let next = 0;
   const worker = async () => {
-    while (next < tasks.length) {
+    while (next < tasks.length && !signal.aborted) {
       const i = next++;
       out[i] = await (tasks[i] as () => Promise<T>)();
     }
@@ -57,18 +70,28 @@ export function delegatingRoutes(rows: readonly PathRow[]): LinkedRef[] {
  */
 export function useChildRouteHealth(installId: string, parents: readonly LinkedRef[]) {
   const key = installId && parents.length > 0 ? ["childRouteHealth", installId, ...parents.map(refParam)] : null;
+  // Only the newest pool runs: starting one, or unmounting, aborts the previous so pools never add up.
+  const current = useRef<AbortController | null>(null);
+  useEffect(() => () => current.current?.abort(), []);
   const { data } = useSWR<(Page<RouteRow> | undefined)[]>(
     key,
-    () =>
-      pooled(
+    () => {
+      current.current?.abort();
+      const ctl = new AbortController();
+      current.current = ctl;
+      const { signal } = ctl;
+      return pooled(
         parents.map(
           (p) => () =>
             fetchRetrying<Page<RouteRow>>(
               withQuery(`${installApi(installId)}/routes`, new URLSearchParams({ parent: refParam(p), limit: "200" })),
+              signal,
             ).catch(() => undefined),
         ),
         IN_FLIGHT,
-      ),
+        signal,
+      );
+    },
     { ...live, keepPreviousData: true },
   );
   return useMemo(() => {
