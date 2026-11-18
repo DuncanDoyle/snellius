@@ -107,12 +107,10 @@ func (ix *Index) incomplete(r *RouteRow, vw Viewer) bool {
 
 // indexPath is route r's path from the index alone, for a viewer without
 // path rows: the first most severe shown fault of a rejecting parent
-// Gateway or a non-mirror backend; one row when any parent accepted it.
+// Gateway or a non-mirror backend. It has no rows, so without a fault the
+// zero-row outcomes apply, as for computed rows.
 func (ix *Index) indexPath(r *RouteRow, vw Viewer) PathRows {
 	out := PathRows{State: health.StateHealthy}
-	if r.Flags&FlagAccepted != 0 {
-		out.Rows = 1
-	}
 	var fault *health.Finding
 	kind := ""
 	for _, g := range r.rejectedBy {

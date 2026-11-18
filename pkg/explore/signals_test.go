@@ -78,6 +78,31 @@ func checkSignals(t *testing.T, ix *Index, vw Viewer, want map[string]sigWant) {
 	}
 }
 
+// withRows is vw with one healthy path row for every route a parent accepted, as computed views give.
+func withRows(ix *Index, vw Viewer) Viewer {
+	vw.Path = func(id RowID) PathRows {
+		if ix.Routes[id].Flags&FlagAccepted != 0 {
+			return PathRows{State: health.StateHealthy, Rows: 1}
+		}
+		return PathRows{State: health.StateHealthy}
+	}
+	return vw
+}
+
+// Without computed views the index has no path rows: an accepted route with
+// rules and no fault has no path, never a healthy one; one without rules is
+// healthy, and one no parent accepted is not attached.
+func TestIndexPathZeroRows(t *testing.T) {
+	ix := signalWorld(t)
+	for _, vw := range []Viewer{{}, vaultViewer()} {
+		checkSignals(t, ix, vw, map[string]sigWant{
+			"cart": {health.StateHealthy, health.StateUnknown, health.StateHealthy, health.ReasonNoPath, false},
+			"bare": {health.StateHealthy, health.StateHealthy, health.StateHealthy, "", false},
+			"free": {health.StateHealthy, health.StateUnknown, health.StateHealthy, health.ReasonNotAttached, false},
+		})
+	}
+}
+
 // The incompleteness matrix (design §8.1): a readable ref to an absent
 // object is the ordinary finding and complete; an unreadable ref is
 // incomplete; an unattached route and one without path rows are not
@@ -93,7 +118,7 @@ func TestRouteSignalsIncompletenessMatrix(t *testing.T) {
 		"free":       {health.StateHealthy, health.StateUnknown, health.StateHealthy, health.ReasonNotAttached, false},
 		"vaulted":    {health.StateHealthy, health.StateUnknown, health.StateUnknown, health.ReasonPathIncomplete, true},
 	}
-	checkSignals(t, ix, vaultViewer(), restrictedWant)
+	checkSignals(t, ix, withRows(ix, vaultViewer()), restrictedWant)
 	full := map[string]sigWant{}
 	for name, w := range restrictedWant {
 		full[name] = sigWant{w.config, health.StateHealthy, w.config, "", false}
@@ -101,7 +126,7 @@ func TestRouteSignalsIncompletenessMatrix(t *testing.T) {
 			full[name] = w
 		}
 	}
-	checkSignals(t, ix, Viewer{}, full)
+	checkSignals(t, ix, withRows(ix, Viewer{}), full)
 	// The restricted viewer's unreadable ref is incomplete whether the target has findings or not.
 	hidden := signalWorld(t, finding(health.CodeBackendNoReadyEndpoints, health.SeverityWarning, sigHidden))
 	checkSignals(t, hidden, vaultViewer(), map[string]sigWant{"vaulted": restrictedWant["vaulted"]})
@@ -252,11 +277,11 @@ func TestQuerySignalFilters(t *testing.T) {
 		want []string
 	}{
 		{vaultViewer(), Query{Config: []health.State{health.StateError}}, []string{"absent"}},
-		{vaultViewer(), Query{Path: []health.State{health.StateUnknown}}, []string{"free", "vaulted"}},
-		{vaultViewer(), Query{Path: []health.State{health.StateUnknown, health.StateWarning}}, []string{"both", "cart", "free", "unattached", "vaulted"}},
+		{withRows(ix, vaultViewer()), Query{Path: []health.State{health.StateUnknown}}, []string{"both", "free", "unattached", "vaulted"}},
+		{vaultViewer(), Query{Path: []health.State{health.StateUnknown, health.StateWarning}}, []string{"absent", "both", "cart", "free", "unattached", "vaulted"}},
 		{vaultViewer(), Query{Config: []health.State{health.StateHealthy}, Path: []health.State{health.StateWarning}}, []string{"both", "cart", "unattached"}},
 		{vaultViewer(), Query{Health: []health.State{health.StateUnknown}}, []string{"vaulted"}},
-		{Viewer{}, Query{Path: []health.State{health.StateUnknown}}, []string{"free"}},
+		{withRows(ix, Viewer{}), Query{Path: []health.State{health.StateUnknown}}, []string{"free", "unattached"}},
 		{Viewer{}, Query{Health: []health.State{health.StateUnknown}}, []string{}},
 	} {
 		if got := q(c.vw, c.q); !slices.Equal(got, c.want) {
