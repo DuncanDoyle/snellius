@@ -26,8 +26,19 @@ var (
 // the viewer can get and their refs, never an object a ref names or the
 // reported edges, which hidden objects decide.
 func (ix *Index) PathIncomplete(id RowID, p Permissions) bool {
-	seen := map[objects.Ref]bool{ix.Routes[id].Ref: true}
-	queue := []pathData{ix.routeData(&ix.Routes[id])}
+	return ix.routeIncomplete(&ix.Routes[id], p)
+}
+
+// routeIncomplete is PathIncomplete for route r, which need not have a row.
+// An HTTPRoute without a decoded view is decoded from its object.
+func (ix *Index) routeIncomplete(r *RouteRow, p Permissions) bool {
+	if r.View == nil && r.Obj != nil && isHTTPRoute(r.Ref.Group, r.Ref.Kind) {
+		c := *r
+		c.View = objects.DecodeHTTPRoute(r.Obj)
+		r = &c
+	}
+	seen := map[objects.Ref]bool{r.Ref: true}
+	queue := []pathData{ix.routeData(r)}
 	for len(queue) > 0 {
 		d := queue[0]
 		queue = queue[1:]

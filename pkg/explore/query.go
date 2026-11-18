@@ -47,8 +47,8 @@ type Sort struct {
 const ListenerUnknown = "_unknown"
 
 // Query is one list request after parsing (design §7.2). Zero fields do not
-// filter. Kinds, Parent, Attachment, Listener, Backends and States apply to
-// routes only; Parent on ListenerSets is a Gateway.
+// filter. Kinds, Parent, Attachment, Listener, Backends, States, Config and
+// Path apply to routes only; Parent on ListenerSets is a Gateway.
 type Query struct {
 	Namespaces []string
 	// Scope limits rows to these namespaces before any viewer check (D-100
@@ -64,8 +64,10 @@ type Query struct {
 	Backends []objects.Ref
 	States   Flag
 	Health   []health.State
-	Q        string
-	Sort     Sort
+	// Config and Path match a route's two signals (design §8.2); each ORs its states, and they AND.
+	Config, Path []health.State
+	Q            string
+	Sort         Sort
 	// Limit is 1–MaxLimit; 0 means DefaultLimit.
 	Limit  int
 	Cursor string
@@ -168,9 +170,11 @@ func prepare(q Query, keys ...string) (query, error) {
 	case q.Limit < 0 || q.Limit > MaxLimit:
 		return query{}, fmt.Errorf("%w: limit %d", ErrBadQuery, q.Limit)
 	}
-	for _, h := range q.Health {
-		if !validHealth(h) {
-			return query{}, fmt.Errorf("%w: health %q", ErrBadQuery, h)
+	for i, hs := range [][]health.State{q.Health, q.Config, q.Path} {
+		for _, h := range hs {
+			if !validHealth(h) {
+				return query{}, fmt.Errorf("%w: %s %q", ErrBadQuery, [...]string{"health", "config", "path"}[i], h)
+			}
 		}
 	}
 	p := query{Query: q, q: strings.ToLower(q.Q)}
@@ -345,6 +349,13 @@ func (ix *Index) queryRoutes(in Query, vw Viewer) (Page, int, error) {
 		*buf = es[:0]
 		entryBufs.Put(buf)
 	}()
+	// The path's incompleteness asks permissions, so only a health or path filter or the health sort reads it.
+	summarise := vw.Perms != nil && (len(q.Health) > 0 || q.Sort.Key == sortHealth)
+	signals := len(q.Config) > 0 || len(q.Path) > 0
+	sigVw := vw
+	if len(q.Path) == 0 {
+		sigVw.Perms = nil
+	}
 	for _, id := range cands {
 		r := &ix.Routes[id]
 		// Out of scope before any check: no root bucket outside the scope is asked.
@@ -362,18 +373,28 @@ func (ix *Index) queryRoutes(in Query, vw Viewer) (Page, int, error) {
 			// Status flags only under a state filter: they ask each parent, one SAR at a time.
 			st, f, _ = ix.routeState(id, vw, q.States != 0)
 		}
+		if summarise && (visible == nil || visible(r.Ref)) {
+			st, _ = ix.summary(id, vw, st, nil)
+		}
 		if !q.common(r.Ref, st, func() string { return r.search }) ||
 			len(q.Kinds) > 0 && !slices.Contains(q.Kinds, gk) ||
 			backends != nil && !backends[id] ||
 			q.States != 0 && (shown && f&q.States == 0 || !shown && ix.viewerFlags(id, vw)&q.States == 0) ||
 			q.Listener == ListenerUnknown && !ix.unknownRef(id, *q.Parent, visible) ||
 			visible != nil && !visible(r.Ref) ||
-			q.Parent != nil && (q.Attachment != "" || visible != nil) && !ix.Under(id, *q.Parent, q.Attachment, visible) {
+			q.Parent != nil && (q.Attachment != "" || visible != nil) && !ix.Under(id, *q.Parent, q.Attachment, visible) ||
+			signals && !q.signalsMatch(ix, id, sigVw) {
 			continue
 		}
 		es = append(es, entry{id: id, ref: r.Ref, v: sortVal{group: r.Ref.Group, kind: r.Ref.Kind, n: healthRank(st)}})
 	}
 	return q.page(es), len(cands), nil
+}
+
+// signalsMatch reports whether route row id's signals for vw pass the config and path filters.
+func (q *query) signalsMatch(ix *Index, id RowID, vw Viewer) bool {
+	config, path, _ := ix.RouteSignals(id, vw)
+	return (len(q.Config) == 0 || slices.Contains(q.Config, config.State)) && (len(q.Path) == 0 || slices.Contains(q.Path, path.State))
 }
 
 // listenerRows are the distinct rows with a member on k whose dependencies

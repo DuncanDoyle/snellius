@@ -10,11 +10,14 @@ import (
 // the caller sees; nil means the precomputed states, flags and reasons, and
 // then Unknown is ignored. Unknown is the caller's install-wide unknown.
 // NoDelegation withholds delegation analysis, the dropped flag included (D-114).
+// Perms decides whether a route's traffic path is incomplete (design §8.1);
+// nil leaves every path complete.
 type Viewer struct {
 	Visible      func(objects.Ref) bool
 	Shown        func(*health.Finding) bool
 	Unknown      bool
 	NoDelegation bool
+	Perms        Permissions
 }
 
 // WorstOf is ref's Worst over the findings vw shows.
@@ -52,13 +55,19 @@ func (ix *Index) ListenerSetStateOf(id RowID, vw Viewer) health.State {
 
 // shownProblem reports whether vw shows an error or warning finding with code on ref.
 func (ix *Index) shownProblem(ref objects.Ref, code string, vw Viewer) bool {
+	return ix.shownFinding(ref, code, vw) != nil
+}
+
+// shownFinding is the first error or warning finding with code on ref that
+// vw shows, or nil; a nil Shown shows every finding.
+func (ix *Index) shownFinding(ref objects.Ref, code string, vw Viewer) *health.Finding {
 	for _, k := range ix.findingsOf[ref] {
 		f := &ix.findings[k]
-		if f.Code == code && (f.Severity == health.SeverityError || f.Severity == health.SeverityWarning) && vw.Shown(f) {
-			return true
+		if f.Code == code && (f.Severity == health.SeverityError || f.Severity == health.SeverityWarning) && (vw.Shown == nil || vw.Shown(f)) {
+			return f
 		}
 	}
-	return false
+	return nil
 }
 
 // FindingShown reports whether shown admits any finding on ref.
@@ -102,9 +111,12 @@ const linkFlags = FlagAccepted | FlagNotAccepted | FlagRefsUnresolved | FlagNotP
 // shown finding on the row; gateway-rejecting only from a shown KGWUI-001 on a
 // parent Gateway; backend-problem only from a shown finding on a non-mirror
 // backend; disagrees only from a shown KGWUI-012; status flags only from
-// links to parents vw.Visible admits. Flags pass RowFlags first.
+// links to parents vw.Visible admits. Flags pass RowFlags first. A healthy
+// row whose path vw.Perms leave incomplete is unknown (design §8.3).
 func (ix *Index) RouteStateOf(id RowID, vw Viewer) (health.State, Flag, *health.RowReason) {
-	return ix.routeState(id, vw, true)
+	st, f, r := ix.routeState(id, vw, true)
+	st, r = ix.summary(id, vw, st, r)
+	return st, f, r
 }
 
 // routeState is RouteStateOf; without links its flags leave out the status

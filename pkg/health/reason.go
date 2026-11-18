@@ -10,6 +10,8 @@ const (
 	ReasonGatewayRejecting = "gateway-rejecting"
 	// ReasonBackendProblem: the route is warning only because a backend it sends to has a problem (D-082).
 	ReasonBackendProblem = "backend-problem"
+	// ReasonPathIncomplete: the viewer may not read everything the route's traffic path needs (design §8.1).
+	ReasonPathIncomplete = "path-incomplete"
 )
 
 // RowReason says why a list or overview row is not healthy; healthy rows have
