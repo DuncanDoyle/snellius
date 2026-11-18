@@ -5,6 +5,9 @@
     "items": [
       {
         "children": 1,
+        "config": {
+          "state": "healthy"
+        },
         "flags": [
           "accepted"
         ],
@@ -81,6 +84,10 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "state": "healthy"
+        },
         "ref": {
           "group": "gateway.networking.k8s.io",
           "kind": "HTTPRoute",
@@ -91,6 +98,9 @@
       },
       {
         "children": 0,
+        "config": {
+          "state": "healthy"
+        },
         "flags": [
           "accepted"
         ],
@@ -167,6 +177,10 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "state": "healthy"
+        },
         "ref": {
           "group": "gateway.networking.k8s.io",
           "kind": "HTTPRoute",
@@ -177,6 +191,9 @@
       },
       {
         "children": 0,
+        "config": {
+          "state": "healthy"
+        },
         "flags": [
           "accepted"
         ],
@@ -253,6 +270,10 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "state": "healthy"
+        },
         "ref": {
           "group": "gateway.networking.k8s.io",
           "kind": "HTTPRoute",
@@ -263,6 +284,9 @@
       },
       {
         "children": 0,
+        "config": {
+          "state": "healthy"
+        },
         "flags": [
           "accepted"
         ],
@@ -339,6 +363,10 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "state": "healthy"
+        },
         "ref": {
           "group": "gateway.networking.k8s.io",
           "kind": "HTTPRoute",
@@ -349,6 +377,14 @@
       },
       {
         "children": 0,
+        "config": {
+          "reason": {
+            "code": "KGWUI-003",
+            "kind": "finding",
+            "message": "Not yet processed by the controller"
+          },
+          "state": "warning"
+        },
         "flags": [
           "pending"
         ],
@@ -421,6 +457,10 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "state": "healthy"
+        },
         "reason": {
           "code": "KGWUI-003",
           "kind": "finding",
@@ -436,6 +476,14 @@
       },
       {
         "children": 0,
+        "config": {
+          "reason": {
+            "code": "KGWUI-002",
+            "kind": "finding",
+            "message": "Unsupported value in the route"
+          },
+          "state": "error"
+        },
         "flags": [
           "not-accepted"
         ],
@@ -515,6 +563,10 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "state": "healthy"
+        },
         "reason": {
           "code": "KGWUI-002",
           "kind": "finding",

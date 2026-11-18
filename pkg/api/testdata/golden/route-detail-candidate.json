@@ -15,6 +15,9 @@
     },
     "childCount": 0,
     "collectedAt": "2026-10-17T12:00:00Z",
+    "config": {
+      "state": "healthy"
+    },
     "declaredCount": 0,
     "generation": 1,
     "health": "healthy",
@@ -129,6 +132,10 @@
         }
       }
     ],
+    "path": {
+      "incomplete": false,
+      "state": "healthy"
+    },
     "ref": {
       "group": "gateway.networking.k8s.io",
       "kind": "HTTPRoute",

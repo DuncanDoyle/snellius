@@ -175,6 +175,7 @@ func (ls *list) routeRow(id explore.RowID) RouteRow {
 	out := RouteRow{Ref: ls.l.linked(r.Ref), Hostnames: r.Hostnames, Parents: make([]ParentSummary, 0, len(r.Parents)),
 		ParentRoutes: make([]LinkedRef, 0, len(r.ParentRoutes)), Children: r.Children, Flags: flags.Names(), Health: st,
 		Reason: routeReason(ls.ix, ls.v, ls.vw, ls.l, id)}
+	out.Config, out.Path = routeSignals(ls.ix, ls.v, ls.vw, ls.l, id)
 	if out.Hostnames == nil {
 		out.Hostnames = []string{}
 	}
@@ -215,6 +216,24 @@ func routeReason(ix *explore.Index, v *view, vw explore.Viewer, l linker, id exp
 		}
 	}
 	return out
+}
+
+// routeSignals are route row id's two signals for vw on the wire. A
+// backend-problem path reason names its backend as routeReason does.
+func routeSignals(ix *explore.Index, v *view, vw explore.Viewer, l linker, id explore.RowID) (RouteSignal, PathSignal) {
+	config, path, b := ix.RouteSignals(id, vw)
+	out := PathSignal{State: path.State, Incomplete: path.Incomplete}
+	if path.Reason != nil {
+		out.Reason = &RouteReason{RowReason: *path.Reason}
+		switch {
+		case b != nil && v.can(*b):
+			lr := l.linked(*b)
+			out.Reason.Backend = &lr
+		case b != nil:
+			out.Reason.Message = ""
+		}
+	}
+	return RouteSignal{State: config.State, Reason: config.Reason}, out
 }
 
 // parentSummary is one parent link on the wire. Via comes from the

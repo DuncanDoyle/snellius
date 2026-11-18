@@ -533,15 +533,34 @@ func (h *handler) routeDetail(w http.ResponseWriter, r *http.Request) {
 			st = d.routeState(id)
 		}
 	}
+	var config RouteSignal
+	var path PathSignal
+	if row {
+		config, path = routeSignals(d.ix, d.v, d.vw, d.l, id)
+	} else {
+		c, p := d.ix.ObjectSignals(u, d.vw)
+		config, path = RouteSignal{State: c.State, Reason: c.Reason}, PathSignal{State: p.State, Incomplete: p.Incomplete}
+		if p.Reason != nil {
+			path.Reason = &RouteReason{RowReason: *p.Reason}
+		}
+		// The summary is never healthy over a path the caller cannot assess (design §8.3).
+		if st == health.StateHealthy && p.Incomplete {
+			st = health.StateUnknown
+		}
+	}
 	out := RouteDetail{Install: d.i.Resolved.ID(), Ref: LinkedRef{Ref: ref, Link: LinkDetail}, Generation: u.GetGeneration(), Health: st,
 		Candidate: cand, RuleSet: d.ix.RuleSet, RuleSetLabel: d.ix.RuleLabel, Hostnames: append([]string{}, v.Hostnames...), ParentRefs: d.specParents(v.ParentRefs),
 		Parents: d.parents(u, v.Parents), Rules: make([]RuleDTO, 0, len(v.Rules)),
-		ChildCount: d.count(d.ix.ByParentRoute[ref]), DeclaredCount: d.count(d.ix.Declared[ref]), CollectedAt: wireTime(d.p.ConfirmedAt)}
+		ChildCount: d.count(d.ix.ByParentRoute[ref]), DeclaredCount: d.count(d.ix.Declared[ref]), CollectedAt: wireTime(d.p.ConfirmedAt),
+		Config: config, Path: path}
 	out.Reason = d.reason(ref, st)
-	if row {
-		if rr := routeReason(d.ix, d.v, d.vw, d.l, id); rr != nil && rr.Kind == health.ReasonBackendProblem {
+	switch {
+	case row:
+		if rr := routeReason(d.ix, d.v, d.vw, d.l, id); rr != nil && (rr.Kind == health.ReasonBackendProblem || rr.Kind == health.ReasonPathIncomplete) {
 			out.Reason = &DetailReason{RowReason: rr.RowReason, Backend: rr.Backend}
 		}
+	case st == health.StateUnknown && path.Incomplete && config.State == health.StateHealthy:
+		out.Reason = &DetailReason{RowReason: health.RowReason{Kind: health.ReasonPathIncomplete}}
 	}
 	if _, ok := u.GetAnnotations()[objects.InheritParentMatcherAnnotation]; ok && ref.Kind == "HTTPRoute" {
 		b := v.InheritParentMatcher

@@ -181,10 +181,28 @@ type RouteRow struct {
 	ParentRoutes []LinkedRef     `json:"parentRoutes"`
 	Children     int             `json:"children"`
 	Flags        []string        `json:"flags"`
-	Health       health.State    `json:"health"`
+	// Health is the summary of Config and Path (design §8.3).
+	Health health.State `json:"health"`
 	// Reason says why Health is not healthy (D-063).
 	Reason *RouteReason `json:"reason,omitempty"`
 	Mirror bool         `json:"mirror,omitempty"`
+	// Config and Path are the route's two signals (design §8.1).
+	Config RouteSignal `json:"config"`
+	Path   PathSignal  `json:"path"`
+}
+
+// RouteSignal is a route's configuration signal: its own findings.
+type RouteSignal struct {
+	State  health.State      `json:"state"`
+	Reason *health.RowReason `json:"reason,omitempty"`
+}
+
+// PathSignal is a route's traffic path signal. Reason is as on RouteRow;
+// Incomplete says the caller may not read everything the path needs (design §8.1).
+type PathSignal struct {
+	State      health.State `json:"state"`
+	Reason     *RouteReason `json:"reason,omitempty"`
+	Incomplete bool         `json:"incomplete"`
 }
 
 // RouteReason is a route row's reason plus, on kind backend-problem, the
@@ -422,6 +440,9 @@ type RouteDetail struct {
 	// DelegationNotChecked says the caller gets no delegation analysis (D-114).
 	DelegationNotChecked bool      `json:"delegationNotChecked,omitempty"`
 	CollectedAt          time.Time `json:"collectedAt"`
+	// Config and Path are as on RouteRow; Health is their summary.
+	Config RouteSignal `json:"config"`
+	Path   PathSignal  `json:"path"`
 }
 
 // PathMatchDTO is a path match after defaults.

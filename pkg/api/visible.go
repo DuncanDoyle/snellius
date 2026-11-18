@@ -466,15 +466,16 @@ func (v *view) viewer(i *engine.InstallModel) explore.Viewer {
 }
 
 // viewerIn is viewer for a list under scope. A scoped list projects the
-// checks alone, so no finding outside the scope is asked about.
+// checks alone, so no finding outside the scope is asked about. Route paths
+// are decided incomplete from v's permissions where states are (design §8.1).
 func (v *view) viewerIn(i *engine.InstallModel, scope []string) explore.Viewer {
 	vw := explore.Viewer{Visible: v.visible(), NoDelegation: v.noDelegation()}
 	switch {
 	case !v.secure || v.off&stepRowState != 0 || v.readsAll():
 	case scope == nil:
-		vw.Shown, vw.Unknown = v.shown, requiredNotOK(v.report(i).Checks)
+		vw.Shown, vw.Unknown, vw.Perms = v.shown, requiredNotOK(v.report(i).Checks), incompletePermissions{v}
 	default:
-		vw.Shown, vw.Unknown = v.shown, requiredNotOK(health.Project(health.Report{Checks: i.Health.Checks}, v).Checks)
+		vw.Shown, vw.Unknown, vw.Perms = v.shown, requiredNotOK(health.Project(health.Report{Checks: i.Health.Checks}, v).Checks), incompletePermissions{v}
 	}
 	return vw
 }

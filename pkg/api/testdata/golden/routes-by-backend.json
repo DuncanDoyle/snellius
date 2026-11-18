@@ -5,6 +5,9 @@
     "items": [
       {
         "children": 0,
+        "config": {
+          "state": "healthy"
+        },
         "flags": [
           "accepted"
         ],
@@ -59,6 +62,10 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "state": "healthy"
+        },
         "ref": {
           "group": "gateway.networking.k8s.io",
           "kind": "HTTPRoute",
@@ -69,6 +76,9 @@
       },
       {
         "children": 0,
+        "config": {
+          "state": "healthy"
+        },
         "flags": [
           "accepted"
         ],
@@ -124,6 +134,10 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "state": "healthy"
+        },
         "ref": {
           "group": "gateway.networking.k8s.io",
           "kind": "HTTPRoute",

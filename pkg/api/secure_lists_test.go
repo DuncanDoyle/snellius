@@ -227,7 +227,8 @@ func mustJSON(t *testing.T, v any) string {
 }
 
 // The health and state filters use the viewer's states: a route lifted by a
-// hidden Gateway's KGWUI-001 is warning for the full viewer only.
+// hidden Gateway's KGWUI-001 is warning for the full viewer only, and unknown
+// for the restricted one, whose path names that Gateway (design §8.3).
 func TestHealthFilterUsesViewerState(t *testing.T) {
 	srv := ruleServe(t, worldPlus(t, nil, change("rejecting")))
 	names := func(user, q string) []string {
@@ -245,12 +246,12 @@ func TestHealthFilterUsesViewerState(t *testing.T) {
 			t.Errorf("restricted %s lists %s", q, namesHidden)
 		}
 	}
-	if !slices.Contains(names(restrictedUser, "&health=healthy"), namesHidden) {
-		t.Errorf("restricted healthy: %v lacks %s", names(restrictedUser, "&health=healthy"), namesHidden)
+	if !slices.Contains(names(restrictedUser, "&health=unknown"), namesHidden) || slices.Contains(names(restrictedUser, "&health=healthy"), namesHidden) {
+		t.Errorf("restricted unknown: %v lacks %s", names(restrictedUser, "&health=unknown"), namesHidden)
 	}
-	// The health sort puts it among the healthy rows for the restricted viewer.
+	// The health sort puts it among the unknown rows for the restricted viewer: after errors, before healthy rows.
 	sorted := names(restrictedUser, "&sort=health.desc")
-	if i := slices.Index(sorted, namesHidden); i < 0 || i < slices.Index(sorted, "absent-consumer") {
+	if i := slices.Index(sorted, namesHidden); i < 0 || i < slices.Index(sorted, "absent-consumer") || i > slices.Index(sorted, "svc-consumer") {
 		t.Errorf("restricted health sort %v", sorted)
 	}
 }

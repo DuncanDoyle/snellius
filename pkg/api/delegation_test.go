@@ -454,7 +454,7 @@ func restrictedComputed(string) Computed {
 }
 
 // withoutHealth is GET path's canonical JSON without any "health" field, its
-// "reason" or "disagrees" flag, which cover every finding (design §7.4 rule 9), and
+// "reason", route signals or "disagrees" flag, which cover every finding (design §7.4 rule 9), and
 // without deniedInInstall, the one hidden count a list sends (rule 2).
 func withoutHealth(t *testing.T, srv *httptest.Server, path string) []byte {
 	t.Helper()
@@ -465,6 +465,10 @@ func withoutHealth(t *testing.T, srv *httptest.Server, path string) []byte {
 			delete(x, "health")
 			delete(x, "reason")
 			delete(x, "deniedInInstall")
+			delete(x, "config")
+			if p, ok := x["path"].(map[string]any); ok && p["incomplete"] != nil {
+				delete(x, "path")
+			}
 			if fs, ok := x["flags"].([]any); ok {
 				x["flags"] = slices.DeleteFunc(fs, func(f any) bool { return f == "disagrees" })
 			}

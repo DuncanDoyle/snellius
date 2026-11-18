@@ -879,8 +879,9 @@ func TestRouteKindsLinkToDetail(t *testing.T) {
 	}
 }
 
-// HTTPRoute detail keeps every field as it was: rules and backendRefs gain
-// only the trace keys, and no body sets effectiveFilters or grpcMethod.
+// HTTPRoute detail keeps every field as it was: the route gains only its two
+// signals, rules and backendRefs only the trace keys, and no body sets
+// effectiveFilters or grpcMethod.
 func TestRouteDetailTraceKeysOnly(t *testing.T) {
 	_, srv, _ := startWith(t, setup{}, delegationWorld()...)
 	var body map[string]any
@@ -888,7 +889,8 @@ func TestRouteDetailTraceKeysOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	top := []string{"install", "ref", "generation", "health", "reason", "ruleSet", "ruleSetLabel", "hostnames", "annotations", "parentRefs", "parents",
-		"attachments", "serves", "rules", "effective", "effectiveTruncated", "ancestors", "ancestorsTruncated", "childCount", "declaredCount", "collectedAt"}
+		"attachments", "serves", "rules", "effective", "effectiveTruncated", "ancestors", "ancestorsTruncated", "childCount", "declaredCount", "collectedAt",
+		"config", "path"}
 	ref := []string{"ref", "port", "weight", "weightDefaulted", "filters", "delegation", "backend", "share", "shareState", "problem", "endpoints"}
 	only := func(what string, m map[string]any, keys []string) {
 		for k := range m {

@@ -34,7 +34,7 @@ const coreGroup = "core"
 var (
 	commonParams = []string{"namespace", scopeParam, "health", "q", "sort", "limit", "cursor"}
 	listParams   = map[listKind][]string{
-		listRoutes:       {"kind", "parent", "attachment", "listener", "state", "backend"},
+		listRoutes:       {"kind", "parent", "attachment", "listener", "state", "backend", "config", "path"},
 		listGateways:     nil,
 		listListenerSets: {"parent"},
 	}
@@ -102,6 +102,12 @@ func parseQuery(r *http.Request, list listKind) (explore.Query, error) {
 	}
 	for _, v := range vals["health"] {
 		q.Health = append(q.Health, health.State(v))
+	}
+	for _, v := range vals["config"] {
+		q.Config = append(q.Config, health.State(v))
+	}
+	for _, v := range vals["path"] {
+		q.Path = append(q.Path, health.State(v))
 	}
 	q.Q, q.Cursor = vals.Get("q"), vals.Get("cursor")
 	q.Attachment = explore.Attachment(vals.Get("attachment"))
