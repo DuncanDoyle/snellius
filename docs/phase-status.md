@@ -37,7 +37,7 @@ Brief: docs/phases/phase-7/phase-7.6-brief.md
 - [ ] Audit levels: reads, summaries, disclosure, requests, denial collapsing, metrics (plan 7.6 item 1) ← CURRENT
 - [ ] Docs: README trust model and secure-mode setup, chart README, upgrade notes, documentation notes (item 2)
 - [ ] Phase review (Codex) and stabilization (item 3)
-- [ ] v0.8.0 release, with the user's approval (item 4)
+- [ ] v0.8.0 release, with the user's approval (item 4). Consumer notice approved by the user (2026-11-18): file a `cross-repo` issue in kgwctl at the tag naming E2 and `v0.8.0` (`path: unknown, no-path` for callers without computed views); the kgwctl session need not be running
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md
