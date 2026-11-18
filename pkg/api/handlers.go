@@ -95,7 +95,8 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 		})
 	}
 	if cfg.secure {
-		admit, _ := authz.(Admitter)
+		base, _ := unnarrow(authz)
+		admit, _ := base.(Admitter)
 		return commit(next, admit, cfg.commitCheck, cfg.authzAudit, cfg.capHit, cfg.checkTrace, cfg.commitClock)
 	}
 	return next

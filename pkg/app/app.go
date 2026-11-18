@@ -350,10 +350,11 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 	}
 	metrics.Gauge("snellius_auth_mode", "Authentication mode of this process; 1 for the active mode.", "mode").Set(1, mode)
 	auditLog := audit.New(auditOut, levels, metrics)
-	// Extensions get the same authoriser as the core handler.
+	// Extensions get the same authoriser as the core handler. In secure mode
+	// SAR always decides, and a registry authoriser can only narrow it.
 	authz := reg.Authorizer
 	var sarAuthz *sar.Authorizer
-	if o.AuthMode == ModeSecure && noAuthorizer(authz) {
+	if o.AuthMode == ModeSecure {
 		var clk clock.WithTicker = clock.RealClock{}
 		if o.Clock != nil {
 			clk = o.Clock
@@ -365,7 +366,11 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		sarAuthz = sar.New(sar.Options{Checker: sar.NewKubeChecker(sarKube), Kinds: newSARKinds(cfg.Served, mon.Catalog),
 			AllowTTL: o.AuthzCacheTTL, Clock: clk, Metrics: metrics, NamedGetScan: o.AuthzNamedGetScan,
 			MaxInFlight: o.AuthzMaxInFlight, Rate: o.AuthzRate, Burst: o.AuthzBurst})
-		authz = sarAuthz
+		if noAuthorizer(authz) {
+			authz = sarAuthz
+		} else {
+			authz = api.Narrowed{Base: sarAuthz, Policy: authz}
+		}
 	}
 	deps := extension.Deps{Current: eng.Current, Authorizer: authz, Capabilities: reg.CapabilityStates, Logger: slog.Default(),
 		View: func(r *http.Request) api.Viewer { return api.ViewerOf(r, authz) }}

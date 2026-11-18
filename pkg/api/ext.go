@@ -160,14 +160,19 @@ func WriteError(w http.ResponseWriter, code int, msg string) { writeErr(w, code,
 
 // Visible returns the items whose ref the caller of r may view, in order,
 // and the number hidden, asking a about each ref once (D-013). Under
-// AllowAll, a full read or a nil a, it makes no calls and returns items, clipped so an append cannot alias it.
+// AllowAll or a full read, it makes no calls and returns items, clipped so an append cannot alias it.
+// A nil a is AllowAll, or DenyAll in secure mode.
 // An ErrAuthorizer's error is recorded for the request and hides the ref; the API then answers 503.
 // In secure mode hidden is always 0 (D-085); Deps.View with VisibleTo is the secure-mode form.
 func Visible[T any](r *http.Request, a Authorizer, items []T, ref func(T) objects.Ref) (visible []T, hidden int) {
-	if a == nil || allowsAll(a) || fullRead(r, a) {
+	base, policy := unnarrow(orDefault(r, a))
+	if policy == nil && allowsAll(base) {
 		return slices.Clip(items), 0
 	}
-	v := &view{a: a, r: r, seen: map[objects.Ref]bool{}}
+	v := &view{a: base, policy: policy, r: r, lazy: true, seen: map[objects.Ref]bool{}}
+	if v.readsAll() {
+		return slices.Clip(items), 0
+	}
 	visible = make([]T, 0, len(items))
 	for _, it := range items {
 		if v.can(ref(it)) {

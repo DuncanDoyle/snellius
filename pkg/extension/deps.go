@@ -20,7 +20,7 @@ type Deps struct {
 	// Current returns the published model, nil before the first publication.
 	// A handler calls it once per request and serves from that value.
 	Current func() *engine.Published
-	// Authorizer is the registry's; handlers filter objects through View, not with it directly.
+	// Authorizer is the core handler's; handlers filter objects through View, not with it directly.
 	Authorizer api.Authorizer
 	// View is the caller's api.Viewer, through the core handler's authoriser.
 	// A handler that serves cluster objects must use it (api.VisibleTo, Can, CanNamed,

@@ -35,12 +35,20 @@ type Viewer interface {
 }
 
 // ViewerOf is the Viewer of r's caller through a, the handler's Authorizer
-// (nil means AllowAll). It is secure when r carries the commit wrapper's state.
+// (nil means AllowAll, or DenyAll in secure mode). It is secure when r carries the commit wrapper's state.
 func ViewerOf(r *http.Request, a Authorizer) Viewer {
-	if a == nil {
-		a = AllowAll{}
+	return viewer{newView(r, orDefault(r, a), secureRequest(r))}
+}
+
+// orDefault is a, or for nil DenyAll in secure mode and AllowAll otherwise, as NewHandler does.
+func orDefault(r *http.Request, a Authorizer) Authorizer {
+	switch {
+	case a != nil:
+		return a
+	case secureRequest(r):
+		return DenyAll{}
 	}
-	return viewer{newView(r, a, secureRequest(r))}
+	return AllowAll{}
 }
 
 // VisibleTo returns the items whose ref v may see as population members, in

@@ -22,8 +22,9 @@ import (
 // Population answers (can) and named answers (canNamed) never share storage
 // (D-100): a named allow must never answer a population question.
 type view struct {
-	a Authorizer
-	r *http.Request
+	// a answers every question; policy, when set, is ANDed into each answer (Narrowed).
+	a, policy Authorizer
+	r         *http.Request
 	// all is AllowAll or, once asked, the full read; read it through readsAll.
 	all bool
 	// lazy is set until readsAll asks the full read (D-100): canNamed never does.
@@ -84,7 +85,8 @@ func (h *handler) view(r *http.Request) *view {
 
 // newView is the view of r's caller through a; secure turns the projection on.
 func newView(r *http.Request, a Authorizer, secure bool) *view {
-	v := &view{a: a, r: r, all: allowsAll(a), secure: secure}
+	a, policy := unnarrow(a)
+	v := &view{a: a, policy: policy, r: r, all: policy == nil && allowsAll(a), secure: secure}
 	if !v.all {
 		v.lazy = true
 		v.seen, v.seenNamed = map[objects.Ref]bool{}, map[objects.Ref]bool{}
@@ -211,9 +213,20 @@ func (v *view) member(ref objects.Ref) bool {
 func (v *view) readsAll() bool {
 	if v.lazy {
 		v.lazy = false
-		v.all = fullRead(v.r, v.a)
+		v.all = fullRead(v.r, v.a) && (v.policy == nil || policyFullRead(v.r, v.policy))
 	}
 	return v.all
+}
+
+// policyAllows reports whether v's policy, if any, lets the caller see ref.
+func (v *view) policyAllows(ref objects.Ref, named bool) bool {
+	switch {
+	case v.policy == nil:
+		return true
+	case named:
+		return decideNamed(v.r, v.policy, ref)
+	}
+	return decide(v.r, v.policy, ref)
 }
 
 // seenPool recycles the memos of route list requests, which ask about
@@ -260,7 +273,7 @@ func (v *view) can(ref objects.Ref) bool {
 	}
 	ok, asked := v.seen[ref]
 	if !asked {
-		ok = v.member(ref)
+		ok = v.member(ref) && v.policyAllows(ref, false)
 		v.seen[ref] = ok
 	}
 	return ok
@@ -279,7 +292,7 @@ func (v *view) canNamed(ref objects.Ref) bool {
 	}
 	ok, asked := v.seenNamed[ref]
 	if !asked {
-		ok = decideNamed(v.r, v.a, ref)
+		ok = decideNamed(v.r, v.a, ref) && v.policyAllows(ref, true)
 		v.seenNamed[ref] = ok
 	}
 	return ok
@@ -293,13 +306,14 @@ func (v *view) canList(gk objects.GroupKind, namespace string) bool {
 		return true
 	}
 	q := ListQuery{Kind: gk, Namespace: namespace}
-	if allowed, ok := v.lists[q]; ok && namespace != "" {
-		return allowed
-	}
 	if allowed, ok := v.listed[q]; ok {
 		return allowed
 	}
-	allowed := decideList(v.r, v.a, gk, namespace)
+	allowed, ok := v.lists[q]
+	if !ok || namespace == "" {
+		allowed = decideList(v.r, v.a, gk, namespace)
+	}
+	allowed = allowed && (v.policy == nil || decideList(v.r, v.policy, gk, namespace))
 	if v.listed == nil {
 		v.listed = map[ListQuery]bool{}
 	}

@@ -334,6 +334,44 @@ type DenyAll struct{}
 // Authorize implements Authorizer.
 func (DenyAll) Authorize(*http.Request, objects.Ref) bool { return false }
 
+// Narrowed allows only what both Base and Policy allow: secure mode puts a
+// build's own authoriser behind SAR this way. The API uses Base's list, batch,
+// full-read and admission answers and ANDs Policy into each decision.
+type Narrowed struct {
+	Base, Policy Authorizer
+}
+
+// Authorize implements Authorizer.
+func (n Narrowed) Authorize(r *http.Request, ref objects.Ref) bool {
+	return n.Base.Authorize(r, ref) && n.Policy.Authorize(r, ref)
+}
+
+// unnarrow returns a's base and policy; policy is nil unless a is Narrowed.
+func unnarrow(a Authorizer) (base, policy Authorizer) {
+	switch n := a.(type) {
+	case Narrowed:
+		return n.Base, n.Policy
+	case *Narrowed:
+		return n.Base, n.Policy
+	}
+	return a, nil
+}
+
+// policyFullRead reports whether policy reads everything, as fullRead does
+// but asked each time; a policy without FullReader does not.
+func policyFullRead(r *http.Request, policy Authorizer) bool {
+	fr, ok := policy.(FullReader)
+	if !ok || authzFailed(r) {
+		return false
+	}
+	all, err := fr.FullRead(r)
+	if err != nil {
+		ReportAuthzError(r, err)
+		return false
+	}
+	return all
+}
+
 // AuthorizerFunc adapts a function to Authorizer.
 type AuthorizerFunc func(r *http.Request, ref objects.Ref) bool
 

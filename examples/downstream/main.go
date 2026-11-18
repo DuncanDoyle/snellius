@@ -53,7 +53,7 @@ func extensions(clk clock.WithTicker) []extension.Option {
 	return []extension.Option{
 		// Watch, count and serve an extra policy kind
 		extension.WithKinds(acmePolicy),
-		// Decide per request what the caller may see
+		// Hide more per request; in secure mode it only narrows the viewer's RBAC
 		extension.WithAuthorizer(api.AuthorizerFunc(func(r *http.Request, ref objects.Ref) bool {
 			return ref.Namespace != "acme-system"
 		})),

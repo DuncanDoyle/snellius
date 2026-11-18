@@ -176,7 +176,8 @@ func (r *Registry) CheckCapabilities(platformNames []string) error {
 }
 
 // WithAuthorizer replaces the default api.AllowAll. Every API response with
-// resources, findings or counts goes through it (D-013).
+// resources, findings or counts goes through it (D-013). In secure mode it
+// only narrows the SAR authoriser: both must allow.
 func WithAuthorizer(a api.Authorizer) Option { return func(r *Registry) { r.Authorizer = a } }
 
 // WithProxyModeResolver replaces the upstream GatewayParameters resolution.

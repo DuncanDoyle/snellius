@@ -1929,29 +1929,34 @@ func TestSecureModeWiresSAR(t *testing.T) {
 	}
 }
 
-// A registry authoriser is kept in secure mode; either form of AllowAll is replaced by SAR.
-func TestRegistryAuthorizerKept(t *testing.T) {
+// In secure mode SAR always decides: either form of AllowAll is replaced by
+// it, and any other registry authoriser, allow-all included, only narrows it.
+func TestRegistryAuthorizerNarrowsSAR(t *testing.T) {
 	dyn, kube := testutil.Clients(t)
 	custom := api.AuthorizerFunc(func(*http.Request, objects.Ref) bool { return true })
 	for name, c := range map[string]struct {
-		authz api.Authorizer
-		want  string
+		authz  api.Authorizer
+		policy bool
 	}{
-		"value":   {api.AllowAll{}, "*sar.Authorizer"},
-		"pointer": {&api.AllowAll{}, "*sar.Authorizer"},
-		"custom":  {custom, "api.AuthorizerFunc"},
-		"deny":    {api.DenyAll{}, "api.DenyAll"},
+		"value":   {api.AllowAll{}, false},
+		"pointer": {&api.AllowAll{}, false},
+		"custom":  {custom, true},
+		"deny":    {api.DenyAll{}, true},
 	} {
 		a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}}, secureOpts(),
 			extension.New(extension.WithAuthorizer(c.authz)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := fmt.Sprintf("%T", a.authz); got != c.want {
-			t.Errorf("%s: secure-mode authoriser is %s, want %s", name, got, c.want)
+		if a.sar == nil {
+			t.Fatalf("%s: no SAR authoriser", name)
 		}
-		if (a.sar != nil) != (c.want == "*sar.Authorizer") {
-			t.Errorf("%s: sweeper authoriser %v", name, a.sar)
+		n, narrowed := a.authz.(api.Narrowed)
+		switch {
+		case !c.policy && a.authz != api.Authorizer(a.sar):
+			t.Errorf("%s: secure-mode authoriser is %T, want the app's *sar.Authorizer", name, a.authz)
+		case c.policy && (!narrowed || n.Base != api.Authorizer(a.sar) || fmt.Sprintf("%T", n.Policy) != fmt.Sprintf("%T", c.authz)):
+			t.Errorf("%s: secure-mode authoriser is %#v, want SAR narrowed by %T", name, a.authz, c.authz)
 		}
 	}
 }
@@ -1979,7 +1984,10 @@ func TestDepsViewSharesAuthorizer(t *testing.T) {
 		return ref.Name == "allowed"
 	})
 	var got extension.Deps
-	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}}, secureOpts(),
+	// Local mode, where the registry's authoriser decides alone.
+	local := secureOpts()
+	local.AuthMode = ModeLocal
+	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Scraper: &stubScraper{}}, local,
 		extension.New(extension.WithAuthorizer(custom), extension.WithHandlers("probe", func(_ extension.Router, d extension.Deps) { got = d })))
 	if err != nil {
 		t.Fatal(err)
