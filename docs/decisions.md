@@ -1688,3 +1688,15 @@ Measured on the reference machine, 5 runs per world:
 5. Unchanged: both TTLs, the 1,000-check cap per request across rebuilds, 32 in flight, the rate and burst.
 
 **Consequences:** Under a cold storm, page loads finish one after another instead of all failing: the last of 50 cold viewers waits about their total checks ÷ the rate. A poll that needs a refresh (its allows are older than 60 s) queues behind cold loads and is slower meanwhile, but answers. Sustained demand above the rate still sheds load with `503 authz-unavailable`. Items 2–4 were made precise after the implementation review (`phases/phase-7/reviews/7.5-d116-codex.md`).
+
+## D-117 — The permission cache holds 50 restricted viewers within 8 MiB (2026-11-18, Phase 7)
+**Status:** accepted by the user (2026-11-18): "Shrink entries first (Recommended)". Codex advised profiling entry cost before any budget change (`phases/phase-7/reviews/7.5-d116-codex.md`, gate decision 1).
+
+**Context:** With D-116, every one of 50 cold viewers gets a first page, but on `/paths` and `/backends` their later polls stay slow. The cache's 8 MiB budget (D-100 item 5) holds about 17,900 answers at 468 B each; 50 viewers need about 19,750 (`/paths`) and 24,850 (`/backends`). Viewers poll in a cycle, so least-recently-used eviction drops each answer just before it is needed: about 48,000 evictions per page and no hits after the first page. `/routes` (17,500 answers) fits.
+
+**Decision:**
+1. Keep the 8 MiB budget. Profile an entry's cost and make entries smaller.
+2. If that is not enough, change eviction so a cache that is slightly too small keeps most of its hits instead of almost none.
+3. Raise the budget only if both fall short, and only with the user's approval and a fresh memory measurement against D-100's 64 MiB.
+
+**Consequences:** The load bench's per-viewer assertions (`pkg/api/sar_bench_test.go`) are the acceptance test.
