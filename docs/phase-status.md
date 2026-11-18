@@ -14,8 +14,8 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 - [x] 7.2 Identity and sessions — closed 2026-11-15, phases/phase-7/phase-7.2-complete.md (kind-secure green on PR #50 after D-097)
 - [x] 7.3 Authoriser — closed 2026-11-16, phases/phase-7/phase-7.3-complete.md (D-099, D-100, D-101)
 - [x] 7.4 Visibility everywhere — closed 2026-11-17, phases/phase-7/phase-7.4-complete.md (D-102 to D-115; #52, #53)
-- [ ] 7.5 Two signals (gate opens) ← CURRENT; brief phases/phase-7/phase-7.5-brief.md
-- [ ] 7.6 Audit, docs, release
+- [x] 7.5 Two signals (gate opens) — closed 2026-11-18, phases/phase-7/phase-7.5-complete.md (D-116 to D-119; #55 for two older test races)
+- [ ] 7.6 Audit, docs, release ← NEXT
 - [-] 7.7 Claim-mapping fallback — dropped (D-098); see #51
 
 ### Exit gates
@@ -28,24 +28,7 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 - [ ] phase-7-complete.md written, roadmap updated, tracked items closed
 
 ## Sub-phase
-Sub-phase: 7.5 — Two signals (the gate opens)
-Kind: planned
-Base: 40932fdc626d9a2f5876bfecb9cf59a4fbb9a493
-Brief: docs/phases/phase-7/phase-7.5-brief.md
-
-### Allowed work
-Features within the approved design (§8, §2 gate); the load fix and D-115 follow-up carried from 7.4.
-
-### Not allowed
-Design changes without a decisions.md entry and user approval; 7.6 work (audit levels, release docs).
-
-### Queue
-- [x] Load: every cold viewer gets answers on /routes, /paths, /backends under the load bench (P2, 7.4 Deferred) — D-116 admission, D-117 cache entries 468 → 210 B, D-118 capacity accepted; Codex review, re-review and fix check with triage in `reviews/7.5-d116-codex.md`; load bench green on 0ad27f0. Separate PR later: `pkg/engine` `TestStaleMetricsAreNeverConfirmed` flaked once (60 reruns pass)
-- [x] `pkg/explore`: `config`, `path`, `path.incomplete`, legacy `health`, `path-incomplete` (plan 7.5 item 1) — Codex review and three fix rounds, `reviews/7.5-signals-codex.md`. Open for the close (P3): a route readable by name only shows an empty trace
-- [x] API: route list and detail, Gateway and ListenerSet route tables, `config=` and `path=` filters (item 2)
-- [ ] Web: columns, header badges, problem strip, map nodes, wording (item 3) ← CURRENT. Built in 2ab12ef (wording chosen by the user 2026-11-18: no-path "Accepted, but no path to a backend", not-attached "Not attached to a Gateway", path-problem "Traffic path has errors", strip = signal badge then reason). Next: triage the Codex web review (scratchpad codex-web-out.md; rerun if lost), then open the gate (item 4)
-- [x] D-115 follow-up: shared route walk in `own` (P3) — all four benchmarks within +15 % of `39c47c9` (D-115, Follow-up); Codex review with triage in `reviews/7.5-d115-codex.md`
-- [ ] Open the gate, rule tests on the new fields (item 4)
+Sub-phase: none (7.5 closed 2026-11-18; 7.6 not started)
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md
