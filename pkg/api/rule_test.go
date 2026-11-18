@@ -987,6 +987,11 @@ var ruleSurfaces = []ruleSurface{
 	{name: "/gateways", path: fixed("/gateways?limit=200"), changes: []string{"listenerCount", "created"}},
 	{name: "/listenersets", path: fixed("/listenersets?limit=200"), changes: []string{"listenerSetRoute"}},
 	{name: "/processes", path: fixed("/processes?limit=200"), changes: []string{"proxyReadyDeployment", "threshold"}},
+	// The Gateway and ListenerSet route tables, and the two signal filters (design §8.2).
+	{name: "/routes?parent=Gateway", path: fixed("/routes?limit=200&parent=" + gw0Param), changes: []string{"listenerCount", "rejecting"}},
+	{name: "/routes?parent=ListenerSet", path: fixed("/routes?limit=200&parent=" + lsAllParam), changes: []string{"listenerSetRoute"}},
+	{name: "/routes?path", path: fixed("/routes?limit=200&path=unknown&path=healthy"), changes: []string{"rejecting", "created"}},
+	{name: "/routes?config", path: fixed("/routes?limit=200&config=warning"), changes: []string{"computedTrigger"}},
 	{name: "route detail (hidden parent)", path: routePath(ns0, "child", ""), changes: []string{"computedTrigger"}},
 	{name: "route detail (hidden Gateway)", path: routePath(ns0, namesHidden, ""), changes: []string{"rejecting"}},
 	{name: "delegation", path: routePath(ns0, delegToHidden, "/delegation"), changes: []string{"hiddenChild"}},
@@ -1074,6 +1079,7 @@ var ruleMasks = map[[2]string][]string{
 	// Deleting hidden-gw takes hidden-parent's child out of the install (D-107); nothing else moves.
 	{"/routes", "deleted"}:                      {"items.@child", "total"},
 	{"/routes?namespaces=visible", "deleted"}:   {"items.@child", "total"},
+	{"/routes?path", "deleted"}:                 {"items.@child", "total"},
 	{"/routes page 2", "deleted"}:               {"total"},
 	{"route detail (hidden parent)", "deleted"}: {""},
 	// The same move takes child out of the overview's HTTPRoute count and be-0000's routes.
