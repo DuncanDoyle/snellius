@@ -98,6 +98,8 @@ type Record struct {
 	// Mode and Listen describe the process; the startup record uses them.
 	Mode   string
 	Listen string
+	// key is the record's collapse key while a window holds it.
+	key string
 }
 
 const maxUserAgent = 256

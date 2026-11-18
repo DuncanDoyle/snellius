@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/utils/clock"
+
 	"github.com/DuncanDoyle/snellius/pkg/obs"
 )
 
@@ -21,6 +23,7 @@ const defaultBuffer = 1024
 
 // Logger writes enabled records as JSON lines. Emit never blocks: a full
 // queue, or a writer that has stopped, drops the record and counts it.
+// Summarize and Collapse hold records in windows that Run flushes.
 type Logger struct {
 	levels  Levels
 	queue   chan Record
@@ -29,6 +32,11 @@ type Logger struct {
 	log     *slog.Logger
 	written *obs.CounterVec
 	dropped *obs.CounterVec
+	clock   clock.WithTicker
+	server  string
+	maxOpen int
+	// summaries and denials collapse records per key until Run flushes them.
+	summaries, denials *window
 }
 
 // Option configures a Logger.
@@ -37,6 +45,21 @@ type Option func(*Logger)
 // WithBuffer sets the queue size.
 func WithBuffer(n int) Option {
 	return func(l *Logger) { l.queue = make(chan Record, n) }
+}
+
+// WithClock sets the clock that times records and flushes; without it, the real clock.
+func WithClock(c clock.WithTicker) Option {
+	return func(l *Logger) { l.clock = c }
+}
+
+// WithServer sets the server instance name written in every record.
+func WithServer(name string) Option {
+	return func(l *Logger) { l.server = name }
+}
+
+// WithMaxOpenKeys sets the open-key cap of each window; without it, MaxOpenKeys.
+func WithMaxOpenKeys(n int) Option {
+	return func(l *Logger) { l.maxOpen = n }
 }
 
 // New returns a Logger that writes to w. Start it with Run. reg may be nil.
@@ -64,6 +87,13 @@ func New(w io.Writer, levels Levels, reg *obs.Registry, opts ...Option) *Logger 
 	if l.queue == nil {
 		l.queue = make(chan Record, defaultBuffer)
 	}
+	if l.clock == nil {
+		l.clock = clock.RealClock{}
+	}
+	if l.maxOpen <= 0 {
+		l.maxOpen = MaxOpenKeys
+	}
+	l.summaries, l.denials = newWindow(l.maxOpen), newWindow(l.maxOpen)
 	return l
 }
 
@@ -75,15 +105,63 @@ func (l *Logger) Emit(ctx context.Context, rec Record) {
 	if !l.Enabled(rec.Level) {
 		return
 	}
-	if rec.Time.IsZero() {
-		rec.Time = time.Now()
-	}
-	if rec.ID == "" {
-		rec.ID = newID()
-	}
 	if rec.Request.ID == "" {
 		rec.Request.ID = RequestIDFrom(ctx)
 	}
+	l.enqueue(l.stamp(rec))
+}
+
+// Summarize counts rec under key in the summary window, flushed every
+// SummaryWindow and when Run stops. A summary stands for many requests, so it
+// carries no request ID; its time is the first request's.
+func (l *Logger) Summarize(key string, rec Record) {
+	rec.Request.ID = ""
+	l.collect(l.summaries, key, rec)
+}
+
+// Collapse counts rec under key in the denial window, flushed every
+// DenialWindow and when Run stops: repeats of one denial become one record
+// with a count. Its time and request ID are the first denial's.
+func (l *Logger) Collapse(ctx context.Context, key string, rec Record) {
+	if rec.Request.ID == "" {
+		rec.Request.ID = RequestIDFrom(ctx)
+	}
+	l.collect(l.denials, key, rec)
+}
+
+func (l *Logger) collect(w *window, key string, rec Record) {
+	if !l.Enabled(rec.Level) {
+		return
+	}
+	rec = l.stamp(rec)
+	var evicted *Record
+	l.mu.RLock()
+	stopped := l.stopped
+	if !stopped {
+		evicted = w.add(key, rec)
+	}
+	l.mu.RUnlock()
+	if stopped {
+		l.dropped.Inc(rec.Level)
+	}
+	if evicted != nil {
+		l.enqueue(*evicted)
+	}
+}
+
+// stamp fills rec's time and server.
+func (l *Logger) stamp(rec Record) Record {
+	if rec.Time.IsZero() {
+		rec.Time = l.clock.Now()
+	}
+	if rec.Server == "" {
+		rec.Server = l.server
+	}
+	return rec
+}
+
+// enqueue queues rec without blocking, or drops and counts it.
+func (l *Logger) enqueue(rec Record) {
 	queued := false
 	l.mu.RLock()
 	if !l.stopped {
@@ -99,17 +177,27 @@ func (l *Logger) Emit(ctx context.Context, rec Record) {
 	}
 }
 
-// Run writes queued records until ctx is done, then writes what is left.
-// Records emitted after that are dropped.
+// Run writes queued records and flushes the windows on their periods until
+// ctx is done, then writes what is left, the open windows included. Records
+// emitted after that are dropped.
 func (l *Logger) Run(ctx context.Context) {
+	sums, dens := l.clock.NewTicker(SummaryWindow), l.clock.NewTicker(DenialWindow)
+	defer sums.Stop()
+	defer dens.Stop()
 	for {
 		select {
 		case rec := <-l.queue:
 			l.write(rec)
+		case <-sums.C():
+			l.flush(l.summaries)
+		case <-dens.C():
+			l.flush(l.denials)
 		case <-ctx.Done():
 			l.mu.Lock()
 			l.stopped = true
 			l.mu.Unlock()
+			l.flush(l.denials)
+			l.flush(l.summaries)
 			for {
 				select {
 				case rec := <-l.queue:
@@ -122,7 +210,17 @@ func (l *Logger) Run(ctx context.Context) {
 	}
 }
 
+// flush writes w's open records.
+func (l *Logger) flush(w *window) {
+	for _, rec := range w.take() {
+		l.write(rec)
+	}
+}
+
 func (l *Logger) write(rec Record) {
+	if rec.ID == "" {
+		rec.ID = newID()
+	}
 	l.log.LogAttrs(context.Background(), slog.LevelInfo, "", attrs(rec)...)
 	l.written.Inc(rec.Level)
 }
