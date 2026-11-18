@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/DuncanDoyle/snellius/pkg/api"
+	"github.com/DuncanDoyle/snellius/pkg/audit"
 )
 
 // issuerHost is the test issuer's name; setup.sh maps it for the node and the pod, and this client dials loopback.
@@ -231,12 +232,12 @@ func TestSignIn(t *testing.T) {
 	}
 }
 
-// summaryWait covers the summary window (design §9.4) plus the log's delay.
-const summaryWait = 6 * time.Minute
+// summaryWait covers one summary window (design §9.4) after the list, plus the log's delay.
+const summaryWait = audit.SummaryWindow + 30*time.Second
 
-// TestAuditRecords reads a route and lists routes as alice, then finds the
-// read record at once and the list's summary after its window, in the
-// server's stdout. It takes up to one summary window.
+// TestAuditRecords reads a route and lists routes as alice, then finds this
+// read's record and this session's list summary in the server's stdout. It
+// takes up to one summary window.
 func TestAuditRecords(t *testing.T) {
 	if os.Getenv("SECURE") != "1" {
 		t.Skip("needs SECURE=1 and a secure-mode install (test/e2e/setup.sh)")
@@ -248,46 +249,63 @@ func TestAuditRecords(t *testing.T) {
 		t.Fatalf("/api/v1/installs = %d %s", code, body)
 	}
 	const route = "gateway.networking.k8s.io/HTTPRoute/shop/good"
-	read := false
+	readID := ""
 	for _, in := range insts {
 		if code, body = call(t, alice, http.MethodGet, "/api/v1/installs/"+in.ID+"/routes?namespace=shop", nil); code != http.StatusOK {
 			t.Fatalf("routes of %s = %d %s", in.ID, code, body)
 		}
-		if code, _ = call(t, alice, http.MethodGet, "/api/v1/installs/"+in.ID+"/routes/"+route, nil); code == http.StatusOK {
-			read = true
+		resp, err := alice.Get(base + "/api/v1/installs/" + in.ID + "/routes/" + route)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusOK && readID == "" {
+			readID = resp.Header.Get("X-Request-Id")
 		}
 	}
-	if !read {
+	if readID == "" {
 		t.Fatalf("no install opened %s for alice", route)
 	}
-	find := func(want func(rec auditLine) bool) func() error {
-		return func() error {
-			out, err := kubectlRun(t, "-n", "snellius", "logs", "deploy/ui-snellius", "--since=15m")
-			if err != nil {
-				return fmt.Errorf("server logs: %v", err)
-			}
-			for _, l := range strings.Split(string(out), "\n") {
-				var rec auditLine
-				if json.Unmarshal([]byte(l), &rec) == nil && rec.Log == "snellius.audit" && rec.Kube.Username == "oidc:alice" && want(rec) {
-					return nil
-				}
-			}
-			return fmt.Errorf("no matching audit record yet")
-		}
-	}
-	eventually(t, find(func(rec auditLine) bool {
-		return rec.Level == "reads" && rec.Action == "read" && slices.Contains(rec.Refs, route) && rec.Session != ""
-	}))
 	deadline := time.Now().Add(summaryWait)
-	summary := find(func(rec auditLine) bool {
-		return rec.Level == "summaries" && rec.Request.Route == "GET /api/v1/installs/{id}/routes" && rec.Request.Filters["namespace"] == "shop" && rec.Count >= 1
-	})
-	for err := summary(); err != nil; err = summary() {
-		if time.Now().After(deadline) {
-			t.Fatalf("list summary: %v", err)
+	// find returns alice's first record that want accepts; each kubectl call ends by the deadline.
+	find := func(want func(rec auditLine) bool) (auditLine, error) {
+		end := time.Now().Add(30 * time.Second)
+		if end.After(deadline) {
+			end = deadline
 		}
-		time.Sleep(10 * time.Second)
+		ctx, cancel := context.WithDeadline(context.Background(), end)
+		defer cancel()
+		out, err := kubectlRunContext(ctx, t, "-n", "snellius", "logs", "deploy/ui-snellius", "--since=15m")
+		if err != nil {
+			return auditLine{}, fmt.Errorf("server logs: %v", err)
+		}
+		for _, l := range strings.Split(string(out), "\n") {
+			var rec auditLine
+			if json.Unmarshal([]byte(l), &rec) == nil && rec.Log == "snellius.audit" && rec.Kube.Username == "oidc:alice" && want(rec) {
+				return rec, nil
+			}
+		}
+		return auditLine{}, fmt.Errorf("no matching audit record yet")
 	}
+	poll := func(what string, want func(rec auditLine) bool) auditLine {
+		for {
+			rec, err := find(want)
+			if err == nil {
+				return rec
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: %v", what, err)
+			}
+			time.Sleep(10 * time.Second)
+		}
+	}
+	read := poll("read record", func(rec auditLine) bool {
+		return rec.Level == "reads" && rec.Action == "read" && rec.Request.ID == readID && slices.Contains(rec.Refs, route) && rec.Session != ""
+	})
+	poll("list summary", func(rec auditLine) bool {
+		return rec.Level == "summaries" && rec.Session == read.Session && rec.Request.Route == "GET /api/v1/installs/{id}/routes" &&
+			rec.Request.Filters["namespace"] == "shop" && rec.Count >= 1
+	})
 }
 
 // auditLine is the part of an audit record TestAuditRecords checks.
@@ -297,7 +315,7 @@ type auditLine struct {
 	Count                       int
 	Kube                        struct{ Username string }
 	Request                     struct {
-		Route   string
-		Filters map[string]string
+		ID, Route string
+		Filters   map[string]string
 	}
 }

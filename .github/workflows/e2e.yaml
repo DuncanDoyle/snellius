@@ -78,7 +78,7 @@ jobs:
           for ns in kgw-a kgw-b; do kubectl logs -n "$ns" deploy/kgateway --tail=200 || true; done
           kubectl get gateways,httproutes -A -o wide || true
   # Secure mode against test/oidc-issuer: two users sign in, the API server reviews their tokens.
-  # Only the sign-in tests run; the data API stays closed until secure mode is complete.
+  # The sign-in tests and the audit records test run; the audit test waits up to one 5-minute summary window.
   kind-secure:
     runs-on: ubuntu-latest
     env:
@@ -99,7 +99,7 @@ jobs:
       - name: setup
         run: bash test/e2e/setup.sh
       - name: api
-        run: go test -tags e2e ./test/e2e/... -run TestSignIn -v -count=1
+        run: go test -tags e2e ./test/e2e/... -run 'TestSignIn|TestAuditRecords' -v -count=1 -timeout 20m
       - name: playwright
         working-directory: web
         env: { SIGNED_IN_USER: "oidc:alice", ISSUER_USER: alice }
