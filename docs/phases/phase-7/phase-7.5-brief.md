@@ -45,7 +45,7 @@ Load: the global limiter (100 checks/s, D-100 item 6) is shared evenly by every 
 
 ## Acceptance tests
 - The load bench runs on `/routes`, `/paths` and `/backends` and asserts the first row of the table per viewer, under a hard deadline; it fails on the base commit for `/paths` and `/backends`. It also asserts the 32-in-flight and rate envelope, bounded latency for warm polls during the cold load, and traces which misses spend the check cap (`reviews/7.5-load-codex.md`, C2, C4).
-- Admission (D-116): cached polls never wait; a cancelled waiter leaves the queue; the queue bounds answer `503 overloaded`; an expired or revoked allow still fails closed at commit.
+- Admission (D-116): cached polls never wait; a cancelled waiter leaves the queue; the queue bounds answer `503 authz-unavailable`; an expired or revoked allow still fails closed at commit.
 - Explore and API tests for each row of the incompleteness matrix: absent, unreadable, unattached and zero-row routes (design §8.1), for a full-read and a restricted viewer.
 - The rule harness: `config` and `path` on every route surface, with hidden-object changes; a rule case per new field (7.4 Notes for later phases).
 - golden-v1 byte-equal for a full-read viewer on existing fields.
