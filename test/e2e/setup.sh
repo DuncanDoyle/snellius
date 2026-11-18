@@ -234,6 +234,9 @@ if [[ "${SECURE:-}" == 1 ]]; then
     --set auth.oidc.clientSecret.existingSecret=snellius-oidc --set auth.oidc.ca.existingConfigMap=snellius-oidc-ca
     --set auth.session.cookieSecure=false
     --set-json "hostAliases=[{\"ip\":\"$ISSUER_IP\",\"hostnames\":[\"$ISSUER_HOST\"]}]")
+  # Alice may read HTTPRoutes in shop; Bob gets no RBAC.
+  kubectl -n shop create role route-reader --verb=get,list --resource=httproutes.gateway.networking.k8s.io
+  kubectl -n shop create rolebinding alice-route-reader --role=route-reader --user=oidc:alice
 fi
 # ${a[@]+...} keeps an empty array safe under set -u on bash 3.
 helm install ui deploy/helm/snellius -n snellius --create-namespace \

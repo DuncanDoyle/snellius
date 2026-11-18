@@ -120,10 +120,10 @@ func whoami(t *testing.T, c *http.Client) (int, me) {
 	return code, m
 }
 
-// checkData reads the data API as a signed-in user. setup.sh grants the test
-// users no RBAC, so every install is listed with its details hidden and its
-// routes page is empty.
-func checkData(t *testing.T, user string, c *http.Client) {
+// checkData reads the data API as a signed-in user. setup.sh grants alice
+// get and list on HTTPRoutes in shop and bob nothing, so every install is
+// listed with its details hidden, and only alice's routes pages hold rows: shop's.
+func checkData(t *testing.T, user string, c *http.Client, wantGood bool) {
 	t.Helper()
 	code, body := call(t, c, http.MethodGet, "/api/v1/meta", nil)
 	if code != http.StatusOK {
@@ -139,10 +139,25 @@ func checkData(t *testing.T, user string, c *http.Client) {
 			t.Errorf("%s: install %s shows its details without any RBAC", user, in.ID)
 		}
 	}
-	code, body = call(t, c, http.MethodGet, "/api/v1/installs/"+insts[0].ID+"/routes", nil)
-	var routes api.Page[json.RawMessage]
-	if err := json.Unmarshal(body, &routes); code != http.StatusOK || err != nil || len(routes.Items) != 0 || routes.Total != 0 {
-		t.Errorf("%s: routes of %s = %d %s, want 200 and an empty page", user, insts[0].ID, code, body)
+	good := false
+	for _, in := range insts {
+		code, body = call(t, c, http.MethodGet, "/api/v1/installs/"+in.ID+"/routes?limit=200", nil)
+		var routes api.Page[api.RouteRow]
+		if err := json.Unmarshal(body, &routes); code != http.StatusOK || err != nil {
+			t.Fatalf("%s: routes of %s = %d %s", user, in.ID, code, body)
+		}
+		for _, r := range routes.Items {
+			if r.Ref.Kind != "HTTPRoute" || r.Ref.Namespace != "shop" {
+				t.Errorf("%s: routes of %s show %s %s, beyond the HTTPRoutes in shop", user, in.ID, r.Ref.Kind, r.Ref)
+			}
+			good = good || r.Ref.Name == "good"
+		}
+		if !wantGood && (len(routes.Items) != 0 || routes.Total != 0) {
+			t.Errorf("%s: routes of %s = %s, want an empty page", user, in.ID, body)
+		}
+	}
+	if good != wantGood {
+		t.Errorf("%s: shop/good listed %v, want %v", user, good, wantGood)
 	}
 }
 
@@ -156,13 +171,14 @@ func TestSignIn(t *testing.T) {
 
 	// TokenReview's answer, with the API server's oidc: prefixes, not the ID token's raw claims.
 	for _, tc := range []struct {
-		c      *http.Client
-		user   string
-		has    []string
-		hasNot []string
+		c        *http.Client
+		user     string
+		has      []string
+		hasNot   []string
+		wantGood bool
 	}{
-		{alice, "oidc:alice", []string{"oidc:team-a", "oidc:team-b", "system:authenticated"}, nil},
-		{bob, "oidc:bob", []string{"oidc:team-b", "system:authenticated"}, []string{"oidc:team-a"}},
+		{alice, "oidc:alice", []string{"oidc:team-a", "oidc:team-b", "system:authenticated"}, nil, true},
+		{bob, "oidc:bob", []string{"oidc:team-b", "system:authenticated"}, []string{"oidc:team-a"}, false},
 	} {
 		code, m := whoami(t, tc.c)
 		if code != http.StatusOK || m.Username != tc.user {
@@ -178,7 +194,7 @@ func TestSignIn(t *testing.T) {
 				t.Errorf("%s: groups %v hold %s", tc.user, m.Groups, g)
 			}
 		}
-		checkData(t, tc.user, tc.c)
+		checkData(t, tc.user, tc.c, tc.wantGood)
 	}
 	// Without a session the data API answers 401.
 	if code, _ := call(t, browser(t), http.MethodGet, "/api/v1/installs", nil); code != http.StatusUnauthorized {
