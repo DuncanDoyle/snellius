@@ -483,6 +483,41 @@ func TestNamedOnlyRouteDetailPath(t *testing.T) {
 	if d.Path.State != full.Path.State || d.Path.Incomplete || d.Health != full.Health {
 		t.Errorf("named-only: path %+v health %s; full: path %+v health %s", d.Path, d.Health, full.Path, full.Health)
 	}
+	// The trace still admits its rows by list, so it stays empty for this reader (ruling 6 of round 2).
+	if len(d.Serves) != 0 || len(full.Serves) == 0 {
+		t.Errorf("serves: named-only %d, full %d; want none and some", len(d.Serves), len(full.Serves))
+	}
+}
+
+// mirrorAttr is accepted on gw0 with ResolvedRefs=False, sending to the
+// present Service shared and mirroring to mirror-tgt.
+const mirrorAttr = "mirror-attr"
+
+// mirrorAttrWorld adds mirrorAttr and, with present, mirror-tgt.
+func mirrorAttrWorld(present bool) func(ruleSnap) {
+	return func(s ruleSnap) {
+		u := failRefs(serviceRoute(ns0, mirrorAttr, gw0(), ns0, "shared"))
+		u.Object["spec"].(map[string]any)["rules"].([]any)[0].(map[string]any)["filters"] = []any{map[string]any{"type": "RequestMirror",
+			"requestMirror": map[string]any{"backendRef": map[string]any{"name": "mirror-tgt", "port": int64(80)}}}}
+		s.add(u)
+		if present {
+			s.Services = append(s.Services, service(ns0, "mirror-tgt"))
+			s.EndpointSlices = append(s.EndpointSlices, slice(ns0, "mirror-tgt", 2))
+		}
+	}
+}
+
+// Whether a mirror target exists never moves the primary path (D-111):
+// KGWUI-013 may name the mirror alone, yet the primary row stays its candidate.
+func TestMirrorNeverDecidesPrimaryPath(t *testing.T) {
+	path := func(present bool) string {
+		srv := ruleServe(t, worldPlus(t, mirrorAttrWorld(present), ruleChange{name: "base"}))
+		r := rowOf(t, decode[api.Page[api.RouteRow]](t, srv, fullUser, ruleBase+"/routes?limit=200&namespace="+ns0).Items, routeRowRef, ns0, mirrorAttr)
+		return string(r.Path.State)
+	}
+	if missing, present := path(false), path(true); missing != present {
+		t.Errorf("primary path %s with the mirror target missing, %s with it present", missing, present)
+	}
 }
 
 // The findings projection decides the path's finding signals on an admitted

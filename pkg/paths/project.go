@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -179,6 +180,8 @@ type refFinding struct {
 	code       string
 	paths      []string
 	attributed bool
+	// mirrorOnly marks a finding whose candidates are all mirror targets.
+	mirrorOnly bool
 }
 
 type portKey struct {
@@ -412,8 +415,10 @@ func (p *projector) row(sigs []Signal, r Row, out *Projection, i int) []Signal {
 	}
 	var attributed, candidate bool
 	for _, f := range rfs {
-		if path != "" && slices.Contains(f.paths, path) {
-			candidate, attributed = true, attributed || f.attributed
+		// A finding naming only mirrors still holds every primary row a candidate:
+		// mirrors never decide a primary path, attributed or not (D-111).
+		if direct := slices.Contains(f.paths, path); path != "" && (direct || f.mirrorOnly && r.mirror < 0) {
+			candidate, attributed = true, attributed || direct && f.attributed
 			sigs = append(sigs, Signal{Kind: SignalFinding, Code: f.code, Ref: last, State: health.StateError})
 		}
 	}
@@ -467,9 +472,10 @@ func (p *projector) refFindings(route objects.Ref) []refFinding {
 		if !ok || f.Code != health.CodeRefUnresolved && f.Code != health.CodeRefNotPermitted {
 			continue
 		}
-		rf := refFinding{code: f.Code, attributed: ev.Attributed}
+		rf := refFinding{code: f.Code, attributed: ev.Attributed, mirrorOnly: len(ev.Candidates) > 0}
 		for _, c := range ev.Candidates {
 			rf.paths = append(rf.paths, c.Path)
+			rf.mirrorOnly = rf.mirrorOnly && strings.Contains(c.Path, ".requestMirror.")
 		}
 		rfs = append(rfs, rf)
 	}
