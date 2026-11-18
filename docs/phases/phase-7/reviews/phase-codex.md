@@ -1,0 +1,39 @@
+Cross-model: YES (author: Claude Opus 5.5 and Sonnet 5.5 implementers, reviewer: Codex via run-reviewer.sh)
+cli: codex · status: ok
+Scope: phase 7 (Identity & Access), whole-phase review
+Diff: 81a2c0b..83a7d75
+Timing: before the phase close; sub-phase reviews in reviews/7.*
+
+## Review
+
+I found two P1 visibility bugs in Phase 7. Both can change a secure-mode response when an object the viewer cannot read changes.
+
+### P1 — Correctness and security
+
+- **Backend YAML reveals hidden consumers.** `assignBackends` adds a Backend to an install when any owned route references it. The admission index marks that Backend `Owned`, and the YAML endpoint accepts that flag without checking whether a referrer is readable. A viewer who can read the Backend sees its YAML endpoint change from 404 to 200 when its first, unreadable consumer appears. D-107 explicitly excludes Backend membership from the install-context exception to D-085. Apply the visible-consumer rule to YAML admission as well as the overview and extension views. [pkg/install/delegation.go:247](../../../../pkg/install/delegation.go:247) · [pkg/explore/admit.go:76](../../../../pkg/explore/admit.go:76) · [pkg/api/link.go:103](../../../../pkg/api/link.go:103) · [pkg/api/handlers.go:519](../../../../pkg/api/handlers.go:519)
+- **The full-read fast path bypasses Events and CRD permissions.** Production excludes both kinds from the full-read proof. `probes()` and `readsGatewayCRD()` then grant access on that proof alone. A viewer who can list every kind in the proof can see probe failure counts and timestamps from unreadable Events, contrary to D-110, and Gateway CRD bundle and channel metadata without CRD access. The earlier ListenerSet fix covers the projected branch. The fast path still bypasses it. Require these permissions even when the viewer qualifies for the fast path, or include them in the proof. [pkg/app/kinds_sar.go:24](../../../../pkg/app/kinds_sar.go:24) · [pkg/api/processes.go:165](../../../../pkg/api/processes.go:165) · [pkg/api/details.go:423](../../../../pkg/api/details.go:423)
+
+### P2 — Design or plan mismatch
+
+- **`requests` omits API calls rejected by session middleware.** The audit wrapper sits inside the API handler. Session middleware can return a 401 before that handler runs, so those calls leave no `requests` record even when the level is enabled. Design §9.2 and the 7.6 brief promise every API request. Capture these responses with the request ID and status while retaining session attribution for authenticated requests. [pkg/app/mode.go:56](../../../../pkg/app/mode.go:56) · [pkg/auth/session/middleware.go:46](../../../../pkg/auth/session/middleware.go:46) · [pkg/api/handlers.go:112](../../../../pkg/api/handlers.go:112)
+- **Correct the design and Task 26.** Keep the five-minute audit window fixed, document extra audiences under API-server setup, and use D-100’s burst default of **500**. Task 5 already leaves `replicas` and `hostNetwork` off the chart’s values interface. Document that the chart renders one replica in both modes and that the binary rejects local host networking when the downward-API pod and host IPs match. Keep the chart’s actual render refusals for local HTTPRoute and missing secure OIDC settings. [design.md:328](../../../../docs/phases/phase-7/design.md:328) · [implementation-plan.md:102](../../../../docs/phases/phase-7/implementation-plan.md:102) · [implementation-plan.md:416](../../../../docs/phases/phase-7/implementation-plan.md:416) · [deployment.yaml:7](../../../../deploy/helm/snellius/templates/deployment.yaml:7) · [pkg/app/mode.go:47](../../../../pkg/app/mode.go:47)
+
+### P3 — Test gap
+
+- **Browser e2e never compares the two RBAC views.** Go e2e checks Alice’s and Bob’s data access. Playwright signs in only Alice and checks account and logout behavior. Design §13 calls for both users’ browser views, leaving the rendered restricted state uncovered in secure kind. [test/e2e/signin_test.go:181](../../../../test/e2e/signin_test.go:181) · [.github/workflows/e2e.yaml:103](../../../../.github/workflows/e2e.yaml:103)
+
+### P4 — Later-phase fragility
+
+- **Extensions receive the raw publication alongside per-object visibility helpers.** `VisibleTo` requires inputs whose membership already satisfies D-085. That precondition matters for Phase 8’s inherited policies and Phase 9’s winning-route predictions, where a hidden input can change a readable result. Reuse viewer-scoped computations at those entry points and in MCP. [pkg/extension/deps.go:18](../../../../pkg/extension/deps.go:18) · [pkg/api/viewer.go:54](../../../../pkg/api/viewer.go:54) · [docs/roadmap.md:140](../../../../docs/roadmap.md:140)
+
+I reviewed the requested design, plan, decisions, sub-phase records and earlier dispositions against the base-to-HEAD diff, prioritizing auth, API, app, audit, explore signals, Helm and README. The local loopback and Host/Origin guards, OIDC transaction and TokenReview flow, SAR expiry and buffered commit, D-119 narrowing, and permission-based path incompleteness looked sound in the paths inspected. I also verified that `kind-secure` selects `TestAuditRecords`. No files were edited or tests run. The test results are author-reported, and the new audit e2e remains unverified in CI.
+## Triage
+
+| # | Finding | Verdict | Resolution |
+|---|---|---|---|
+| PH1 | P1 Backend YAML admission skips the visible-consumer rule (D-107) | accept | Stabilization round |
+| PH2 | P1 the full-read fast path grants Events and Gateway CRD data without their permissions | accept | Stabilization round |
+| PH3 | P2 the requests level misses 401s from the session middleware | accept | Stabilization round |
+| PH4 | P2 design §12 and the plan disagree with the chart and code | accept | design.md and implementation-plan.md corrected: fixed 5-minute window, extra audiences as API-server setup, burst 500, one replica in both modes, only the binary refuses host networking |
+| PH5 | P3 the browser e2e signs in only alice | accept | Stabilization round: alice and bob in Playwright on secure kind |
+| PH6 | P4 extensions get the raw publication beside per-object helpers | defer | Carry-over for Phase 8 (inherited policies) and Phase 9 (winning-route predictions) |

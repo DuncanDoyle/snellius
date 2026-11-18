@@ -71,10 +71,10 @@ The people:
 - The API and UI listener binds to `127.0.0.1:8080`. The binary enforces it: in local mode any `--listen` whose host is not a loopback address is a startup error, whatever `extraArgs` says.
 - Loopback is not a browser boundary: a hostile site can rebind a hostname to 127.0.0.1 and read a port-forwarded API (Codex #4). Local mode serves only requests whose `Host` is `localhost`, `127.0.0.1` or `[::1]` (any port), plus names in `--allowed-hosts`; others get `421`. Cross-origin requests are not served: no CORS headers, and a request with an `Origin` that is not the request's own host is refused.
 - The ClusterIP Service keeps its port, because `kubectl port-forward svc/…` resolves through it (Codex #9). Service traffic still reaches nothing: the pod IP has only the probe listener (§3.3).
-- It refuses `hostNetwork`, where loopback is the node's: the chart refuses `hostNetwork: true` in local mode, and the binary refuses to start when `POD_IP` equals `HOST_IP`, both from the downward API (our call).
+- It refuses `hostNetwork`, where loopback is the node's: the chart has no `hostNetwork` value, and the binary refuses to start when `POD_IP` equals `HOST_IP`, read from the downward API (our call).
 - The chart adds `sidecar.istio.io/inject: "false"` and the ambient opt-out label in local mode, and documents that a mesh sidecar shares the pod's loopback (our call).
 - Visibility is D-013's: everything Snellius reads. A banner on every page: "Local mode: anyone who can port-forward to Snellius sees everything it reads." The Helm NOTES and a startup warning log say the same, with the bind address.
-- The chart refuses `httpRoute.enabled`, an ingress, a LoadBalancer or NodePort Service type, or `hostNetwork` in local mode (`fail` in the template).
+- The chart refuses `httpRoute.enabled` in local mode (`fail` in the template); it has no ingress, Service type or `hostNetwork` value to refuse (plan Task 5).
 
 ### 3.2 Secure mode
 
@@ -128,7 +128,7 @@ Groups change. Session validity policy (Codex #6):
 ## 5. Sessions
 
 - A random 256-bit session ID in a cookie `snellius_session`: `HttpOnly`, `Secure` (configurable off only for plain-HTTP port-forward testing), `SameSite=Lax`, `Path=/`.
-- The server holds the session: identity, tokens, expiry, audit session ID. In memory, so the chart pins `replicas: 1` in secure mode, and a restart signs everyone out; documented (our call). A shared store is future work if HA is needed.
+- The server holds the session: identity, tokens, expiry, audit session ID. In memory, so the chart renders one replica in both modes (it has no `replicas` value), and a restart signs everyone out; documented (our call). A shared store is future work if HA is needed.
 - Idle expiry 30 minutes, absolute 8 hours; both configurable. A UI poll counts as activity only when the tab is visible (§11).
 - Logout (`POST /auth/logout`) deletes the server session; RP-initiated logout at the IdP when its discovery document offers `end_session_endpoint`.
 - CSRF: the API is read-only `GET`. The only state-changing routes are login, callback and logout; logout requires `POST` with an `Origin` check (our call).
@@ -328,14 +328,14 @@ kgwctl reads with the user's kubeconfig. Phase 7 changes nothing in kgwctl; the 
 ## 12. Chart and RBAC
 
 - `auth.mode: local|secure` (default `local`).
-- `auth.oidc.issuerURL`, `clientID`, `clientSecret.existingSecret`/`key` (mounted as a file), `redirectURL`, `scopes`, `extraAudiences` (documentation only).
+- `auth.oidc.issuerURL`, `clientID`, `clientSecret.existingSecret`/`key` (mounted as a file), `redirectURL`, `scopes`. Extra audiences are API-server setup, documented in the README, not a chart value.
 - `auth.session.idle`, `absolute`, `cookieSecure`.
 - `auth.trustedProxyCIDRs` for `X-Forwarded-For` in audit only.
-- `auth.authz.cacheTTL` (allowed answers, default 60 s, 30 s to 15 min), `auth.authz.namedGetScan` (default off), and the global SAR limits `auth.authz.maxInFlight`, `rate`, `burst` (defaults 32, 100/s, 32) (D-100). The denied TTL (4 to 5 min) and the cache's byte budget are not settings.
-- `audit.levels`, `audit.summaryWindow`.
+- `auth.authz.cacheTTL` (allowed answers, default 60 s, 30 s to 15 min), `auth.authz.namedGetScan` (default off), and the global SAR limits `auth.authz.maxInFlight`, `rate`, `burst` (defaults 32, 100/s, 500) (D-100). The denied TTL (4 to 5 min) and the cache's byte budget are not settings.
+- `audit.levels`. The summary window is fixed at 5 minutes.
 - In secure mode the ClusterRole gains `create` on `tokenreviews` and `subjectaccessreviews`. Local mode does not get them.
 - `templates/NOTES.txt` and `values.yaml` describe both modes; the D-013 text moves to local mode.
-- The chart fails rendering for: local mode with `httpRoute.enabled`, ingress or `hostNetwork`; secure mode without `issuerURL`, `clientID` or `redirectURL`; secure mode with `replicas` above 1.
+- The chart fails rendering for: local mode with `httpRoute.enabled`; secure mode without `issuerURL`, `clientID` or `redirectURL`. The chart renders one replica in both modes.
 
 ## 13. Testing
 
