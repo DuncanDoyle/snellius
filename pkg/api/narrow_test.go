@@ -1,6 +1,7 @@
 package api
 
 import (
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -107,6 +108,25 @@ func TestFullReadIsPerAuthorizer(t *testing.T) {
 	ViewerOf(r, other).ReadsAll()
 	if other.readCount() != 1 {
 		t.Errorf("the separate FullReader was asked %d times, want 1", other.readCount())
+	}
+}
+
+// signedZero reads everything unless its zero is negative: +0 and −0 values
+// are equal map keys, yet answer differently.
+type signedZero struct{ z float64 }
+
+func (signedZero) Authorize(*http.Request, objects.Ref) bool { return false }
+
+func (s signedZero) FullRead(*http.Request) (bool, error) { return !math.Signbit(s.z), nil }
+
+// Equal authoriser values never share a full-read answer: only a pointer's identity keys the memo.
+func TestFullReadNotSharedByEqualValues(t *testing.T) {
+	r, _ := withAuthzState(httptest.NewRequest(http.MethodGet, "/api/ext/x/y", nil))
+	if !ViewerOf(r, signedZero{0}).ReadsAll() {
+		t.Fatal("+0 reader: no full read")
+	}
+	if ViewerOf(r, signedZero{math.Copysign(0, -1)}).ReadsAll() {
+		t.Error("−0 reader got the +0 reader's full read")
 	}
 }
 

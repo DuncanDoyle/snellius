@@ -197,8 +197,9 @@ func fullRead(r *http.Request, a Authorizer) bool {
 		}
 		return all
 	}
-	// The memo is keyed by a itself; an authoriser that cannot be a map key is asked every time.
-	if !reflect.ValueOf(a).Comparable() {
+	// The memo is keyed by a pointer's identity; any other authoriser is asked
+	// every time, as equal values (such as +0 and −0 fields) may answer differently.
+	if reflect.ValueOf(a).Kind() != reflect.Pointer {
 		return ask()
 	}
 	s.mu.Lock()
