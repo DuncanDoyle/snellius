@@ -131,7 +131,7 @@ func (c *cache) check(ctx context.Context, spend func(reason string) error, id o
 			return d, nil
 		}
 		if !requeued {
-			if err := spend(reason); err != nil {
+			if err := c.spendLocked(spend, reason); err != nil {
 				c.mu.Unlock()
 				return decision{}, err
 			}
@@ -173,6 +173,19 @@ func (c *cache) check(ctx context.Context, spend func(reason string) error, id o
 		c.m.cache.Inc("miss")
 		return c.fly(ctx, f, k, id, a)
 	}
+}
+
+// spendLocked calls spend with c.mu held; a panic in spend, such as its trace's, unlocks c.mu first.
+func (c *cache) spendLocked(spend func(reason string) error, reason string) error {
+	ok := false
+	defer func() {
+		if !ok {
+			c.mu.Unlock()
+		}
+	}()
+	err := spend(reason)
+	ok = true
+	return err
 }
 
 // fly admits f's SAR through the limiter under ctx, then runs it, and

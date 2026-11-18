@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -224,6 +225,30 @@ func TestUnmappedKindDenied(t *testing.T) {
 	}
 	if n := f.checker.count(); n != 0 {
 		t.Fatalf("%d SARs sent, want none", n)
+	}
+}
+
+// A name or namespace longer than Kubernetes allows names no object: denied without a SAR.
+func TestOverlongNameDenied(t *testing.T) {
+	f := newFixture(func(oidc.Identity, Attributes) (bool, error) { return true, nil })
+	long := strings.Repeat("a", 254)
+	for _, ref := range []objects.Ref{route("shop", long), route(strings.Repeat("n", 64), "web"), {Kind: "Namespace", Name: long}} {
+		if ok, err := f.a.AuthorizeNamedErr(request(user("alice")), ref); ok || err != nil {
+			t.Errorf("AuthorizeNamedErr(%.20s…) = %v, %v; want false", ref.Namespace+"/"+ref.Name, ok, err)
+		}
+		if mustAuthorize(t, f.a, user("alice"), ref) {
+			t.Errorf("AuthorizeErr(%.20s…) allowed", ref.Namespace+"/"+ref.Name)
+		}
+	}
+	if ok, err := f.a.CanList(request(user("alice")), objects.GroupKind{Group: gwGroup, Kind: "HTTPRoute"}, strings.Repeat("n", 64)); ok || err != nil {
+		t.Errorf("CanList(overlong namespace) = %v, %v; want false", ok, err)
+	}
+	if n := f.checker.count(); n != 0 {
+		t.Fatalf("%d SARs sent, want none", n)
+	}
+	// The longest valid name and namespace are still checked.
+	if !mustAuthorizeNamed(t, f.a, user("alice"), route(strings.Repeat("n", 63), long[:253])) {
+		t.Error("a 253-character name in a 63-character namespace is denied")
 	}
 }
 

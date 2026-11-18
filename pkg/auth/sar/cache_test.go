@@ -549,6 +549,28 @@ func TestSpendOnMissOnly(t *testing.T) {
 	f.expectSARs(t, 4, "past the limit")
 }
 
+// A panicking spend, such as a check trace, leaves the cache unlocked and usable.
+func TestSpendPanicReleasesLock(t *testing.T) {
+	f := newFixture(grants(call{"alice", listAt("shop")}))
+	f.a.spend = func(*http.Request, string, any) error { panic("trace") }
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("the spend's panic did not reach the caller")
+			}
+		}()
+		mustAuthorize(t, f.a, user("alice"), route("shop", "web"))
+	}()
+	if !f.a.cache.mu.TryLock() {
+		t.Fatal("the cache mutex is still locked after the panic")
+	}
+	f.a.cache.mu.Unlock()
+	f.a.spend = func(*http.Request, string, any) error { return nil }
+	if !mustAuthorize(t, f.a, user("alice"), route("shop", "web")) {
+		t.Fatal("alice denied after the panic")
+	}
+}
+
 func TestMetrics(t *testing.T) {
 	var f *fixture
 	f = newFixture(func(id oidc.Identity, a Attributes) (bool, error) {
@@ -720,6 +742,61 @@ func TestAccountedBytesMatchHeap(t *testing.T) {
 		n, acc, heap, float64(heap)/n, float64(acc)/float64(heap))
 	if r := float64(acc) / float64(heap); r < 0.75 || r > 1.25 {
 		t.Fatalf("accounted %d B is %.2f× the heap delta %d B, want within 25%%", acc, r, heap)
+	}
+}
+
+// A long key is charged at least the heap it takes: its allocation's size class, not its length.
+func TestLongKeysAccountedAtSizeClass(t *testing.T) {
+	const n = 2_000
+	for _, keyLen := range []int{100, 300, 1_100, 4_097, 40_000} {
+		a, _ := newHeapAuthorizer(0)
+		alice := user("alice")
+		h := hashIdentity(alice)
+		at := func(i int) Attributes {
+			at := getAt("shop", fmt.Sprintf("%05d", i))
+			// A longer name can lengthen its length prefix, so pad until the key fits exactly.
+			for d := keyLen - len(appendAttrs(nil, at)); d != 0; d = keyLen - len(appendAttrs(nil, at)) {
+				if d > 0 {
+					at.Name += strings.Repeat("x", d)
+				} else {
+					at.Name = at.Name[:len(at.Name)+d]
+				}
+			}
+			return at
+		}
+		if got := len(appendAttrs(nil, at(0))); got != keyLen {
+			t.Fatalf("key length %d, want %d", got, keyLen)
+		}
+		// The keys alone, built as store builds them.
+		keys := make([]string, n)
+		before := heapNow()
+		var charged int64
+		for i := range keys {
+			keys[i] = string(appendAttrs(nil, at(i)))
+			charged += stringBytes(keys[i])
+		}
+		keyHeap := heapNow() - before
+		runtime.KeepAlive(keys)
+		// 1 KiB of slack absorbs the runtime's own allocations, a few hundred bytes at most.
+		if charged+1024 < keyHeap {
+			t.Errorf("%d-byte keys: charged %d B under their heap %d B", keyLen, charged, keyHeap)
+		}
+		// The cache holding them stays close to its accounting; a small map's slots cost a few percent more.
+		before = heapNow()
+		for i := range n {
+			if _, err := a.check(request(alice), alice, h, at(i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		heap := heapNow() - before
+		a.cache.mu.Lock()
+		acc := a.cache.accounted()
+		a.cache.mu.Unlock()
+		runtime.KeepAlive(a)
+		t.Logf("%d-byte keys: %d keys charged %d B, heap %d B; cache accounted %d B, heap delta %d B", keyLen, n, charged, keyHeap, acc, heap)
+		if float64(heap) > float64(acc)*1.1 {
+			t.Errorf("%d-byte keys: cache heap delta %d B over its accounted %d B + 10%%", keyLen, heap, acc)
+		}
 	}
 }
 

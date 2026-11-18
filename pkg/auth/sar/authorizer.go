@@ -191,7 +191,7 @@ func (a *Authorizer) authorize(r *http.Request, ref objects.Ref, named bool) (bo
 		return false, ErrNoIdentity
 	}
 	list, ok := a.listAttrs(ref.Group, ref.Kind, ref.Namespace)
-	if !ok {
+	if !ok || len(ref.Name) > maxNameLen {
 		return false, nil
 	}
 	h := hashIdentity(id)
@@ -205,9 +205,16 @@ func (a *Authorizer) authorize(r *http.Request, ref objects.Ref, named bool) (bo
 	return a.allow(r, d, err)
 }
 
+// Kubernetes' longest object name and namespace; a longer one names no object
+// and is denied without a SAR, so it never reaches the cache.
+const (
+	maxNameLen      = 253
+	maxNamespaceLen = 63
+)
+
 // listAttrs is the population list check of a group, kind and namespace:
 // cluster-wide for a cluster-scoped kind. False for an unmapped kind or a
-// namespaced kind without a namespace, which are denied without a SAR.
+// namespaced kind without a valid-length namespace, which are denied without a SAR.
 func (a *Authorizer) listAttrs(group, kind, namespace string) (Attributes, bool) {
 	k, ok := a.kinds.Lookup(group, kind)
 	if !ok {
@@ -215,7 +222,7 @@ func (a *Authorizer) listAttrs(group, kind, namespace string) (Attributes, bool)
 	}
 	ns := ""
 	if k.Namespaced {
-		if namespace == "" {
+		if namespace == "" || len(namespace) > maxNamespaceLen {
 			return Attributes{}, false
 		}
 		ns = namespace
@@ -235,14 +242,14 @@ func (a *Authorizer) Authorize(r *http.Request, ref objects.Ref) bool {
 }
 
 // CanList implements api.ListAuthorizer. It asks only list, never a named
-// get; an unmapped kind is false.
+// get; an unmapped kind or an overlong namespace is false.
 func (a *Authorizer) CanList(r *http.Request, gk objects.GroupKind, namespace string) (bool, error) {
 	id, ok := a.identityFrom(r.Context())
 	if !ok {
 		return false, ErrNoIdentity
 	}
 	k, ok := a.kinds.Lookup(gk.Group, gk.Kind)
-	if !ok {
+	if !ok || k.Namespaced && len(namespace) > maxNamespaceLen {
 		return false, nil
 	}
 	if !k.Namespaced {
