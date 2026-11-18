@@ -334,6 +334,13 @@ it("when Configuration decides, the strip still says the viewer cannot check the
     "You don't have permission to check the whole path.",
   );
   expect(strip).not.toHaveTextContent("Assessment incomplete with your current permissions.");
+  // A signal link is named by its own text, so the name contains what it shows (axe label-content-name-mismatch).
+  const links = within(screen.getByTestId("detail-header")).getAllByTestId("state-link");
+  expect(links.length).toBeGreaterThan(0);
+  for (const link of links) {
+    expect(link).not.toHaveAttribute("aria-label");
+    expect(link).toHaveTextContent(/go to the problem$/);
+  }
 });
 
 it("each backendRef links to its backend detail, and the route links to Traffic with route=", async () => {

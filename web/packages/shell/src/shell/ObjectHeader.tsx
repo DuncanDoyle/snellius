@@ -155,8 +155,9 @@ function SignalBadge({ signal, href }: { signal: HeaderSignal; href?: string }) 
     </span>
   );
   return href ? (
-    <a href={href} aria-label={problemCopy.signalLink(signal.label, stateLabel(signal.state))} data-testid="state-link">
+    <a href={href} data-testid="state-link">
       {badge}
+      <VisuallyHidden>{problemCopy.signalLinkHint}</VisuallyHidden>
     </a>
   ) : (
     badge

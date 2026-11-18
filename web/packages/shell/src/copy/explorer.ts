@@ -158,7 +158,8 @@ export const problemCopy = {
   badgeLink: (state: string) => `${state}, go to the problem`, // S827
   backend: "Backend", // S838
   viewGateway: "View Gateway", // S851
-  signalLink: (signal: string, state: string) => `${signal}: ${state}, go to the problem`, // S852
+  // Hidden text after a signal link's visible label and state, so its name still starts with them (WCAG 2.5.3).
+  signalLinkHint: ", go to the problem", // S852
 };
 
 // region Gateway page
