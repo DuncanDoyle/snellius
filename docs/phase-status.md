@@ -15,7 +15,7 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 - [x] 7.3 Authoriser — closed 2026-11-16, phases/phase-7/phase-7.3-complete.md (D-099, D-100, D-101)
 - [x] 7.4 Visibility everywhere — closed 2026-11-17, phases/phase-7/phase-7.4-complete.md (D-102 to D-115; #52, #53)
 - [x] 7.5 Two signals (gate opens) — closed 2026-11-18, phases/phase-7/phase-7.5-complete.md (D-116 to D-119; #55 for two older test races)
-- [ ] 7.6 Audit, docs, release ← NEXT
+- [ ] 7.6 Audit, docs, release ← CURRENT; brief phases/phase-7/phase-7.6-brief.md
 - [-] 7.7 Claim-mapping fallback — dropped (D-098); see #51
 
 ### Exit gates
@@ -28,7 +28,16 @@ Status: implementing (design and plan approved under the user's AFK instruction,
 - [ ] phase-7-complete.md written, roadmap updated, tracked items closed
 
 ## Sub-phase
-Sub-phase: none (7.5 closed 2026-11-18; 7.6 not started)
+Sub-phase: 7.6 — Audit, docs, release
+Kind: planned
+Base: 1e9f443616d93f699eb55162a4fbfa210c9c2a30
+Brief: docs/phases/phase-7/phase-7.6-brief.md
+
+### Queue
+- [ ] Audit levels: reads, summaries, disclosure, requests, denial collapsing, metrics (plan 7.6 item 1) ← CURRENT
+- [ ] Docs: README trust model and secure-mode setup, chart README, upgrade notes, documentation notes (item 2)
+- [ ] Phase review (Codex) and stabilization (item 3)
+- [ ] v0.8.0 release, with the user's approval (item 4)
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md
