@@ -939,8 +939,14 @@ func TestStaleMetricsAreNeverConfirmed(t *testing.T) {
 	if e.Kind != EvConfirmRefused {
 		t.Fatalf("the tick at +31 s: event %d, want a refused confirmation", e.Kind)
 	}
-	if cur := h.e.Current(); cur.Model != last.Model || !cur.ConfirmedAt.Equal(last.ConfirmedAt) || !e.At.After(cur.ConfirmedAt) {
-		t.Fatalf("read after the stale tick: model %p confirmed %v; want %p as confirmed at %v", cur.Model, cur.ConfirmedAt, last.Model, last.ConfirmedAt)
+	// The recompute the refused tick starts may publish before this read; either
+	// way no model with the stale scrape is confirmed after +30 s.
+	if cur := h.e.Current(); cur.Model == last.Model {
+		if !cur.ConfirmedAt.Equal(last.ConfirmedAt) || !e.At.After(cur.ConfirmedAt) {
+			t.Fatalf("read after the stale tick: model %p confirmed %v; want it as confirmed at %v", cur.Model, cur.ConfirmedAt, last.ConfirmedAt)
+		}
+	} else if !stale(cur) {
+		t.Fatalf("read after the stale tick: model %p confirmed %v does not show metrics stale", cur.Model, cur.ConfirmedAt)
 	}
 	if after := h.await(EvPublished); !stale(after.Published) {
 		t.Fatal("the recompute after the refused tick must show metrics stale")
