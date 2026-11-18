@@ -306,6 +306,9 @@ func (h *handler) findingDetail(w http.ResponseWriter, r *http.Request) {
 	l := h.linker(v, p, i, nil, nil)
 	f := &fs[k]
 	row := findingRow(v, l, f, true)
+	if row.Resource != nil {
+		noteSubject(r, row.Resource.Ref)
+	}
 	var refs []objects.Ref
 	if !row.Restricted {
 		refs = affectedOf(v, d, f.Group)

@@ -20,6 +20,7 @@ import (
 
 // auditedApp is a secure-mode app over two Gateways, infra/edge and
 // vault/secret, whose SAR answers refuse everything in vault and cluster-wide.
+// infra/edge carries annotations shaped like an object reference.
 type auditedApp struct {
 	a       *App
 	out     *lockedBuf
@@ -29,9 +30,20 @@ type auditedApp struct {
 
 func newAuditedApp(t *testing.T, levels string) *auditedApp {
 	t.Helper()
-	dyn, kube := testutil.Clients(t, testutil.ControllerDeployment("kgw", "kgateway", "cr.kgateway.dev/kgateway-dev/kgateway:v2.4.0", 1, 1),
-		testutil.GatewayClass("kgateway", testutil.Controller, true), testutil.Gateway("infra", "edge", "kgateway", nil),
-		testutil.Gateway("vault", "secret", "kgateway", nil))
+	return newAuditedAppWith(t, levels, true)
+}
+
+// newAuditedAppWith is newAuditedApp, without vault/secret unless withSecret.
+func newAuditedAppWith(t *testing.T, levels string, withSecret bool) *auditedApp {
+	t.Helper()
+	edge := testutil.Gateway("infra", "edge", "kgateway", nil)
+	edge.SetAnnotations(map[string]string{"group": "", "kind": "Secret", "name": "annot-tok-secret"})
+	objs := []runtime.Object{testutil.ControllerDeployment("kgw", "kgateway", "cr.kgateway.dev/kgateway-dev/kgateway:v2.4.0", 1, 1),
+		testutil.GatewayClass("kgateway", testutil.Controller, true), edge}
+	if withSecret {
+		objs = append(objs, testutil.Gateway("vault", "secret", "kgateway", nil))
+	}
+	dyn, kube := testutil.Clients(t, objs...)
 	kube.PrependReactor("create", "subjectaccessreviews", func(act clienttesting.Action) (bool, runtime.Object, error) {
 		sar := act.(clienttesting.CreateAction).GetObject().(*authzv1.SubjectAccessReview)
 		ra := sar.Spec.ResourceAttributes
@@ -169,6 +181,37 @@ func TestAuditDenialCollapses(t *testing.T) {
 	}
 }
 
+// An existing and an absent object under the same forbidden name get the
+// same answer and the same denial record.
+func TestAuditDenialSameForExistingAndAbsent(t *testing.T) {
+	type seen struct {
+		code   int
+		body   string
+		record string
+	}
+	look := func(withSecret bool) seen {
+		x := newAuditedAppWith(t, "", withSecret)
+		code, body := x.get(t, "/api/v1/installs/"+x.install+"/gateways/vault/secret", nil)
+		recs := x.records(t, "denial")
+		if len(recs) != 1 {
+			t.Fatalf("with the object %v: %d denial records, want 1: %s", withSecret, len(recs), x.out.String())
+		}
+		// Per-request and per-process fields differ by design; the rest must not.
+		r := recs[0]
+		delete(r, "id")
+		delete(r, "time")
+		delete(r, "session")
+		delete(r, "server")
+		delete(r["request"].(map[string]any), "id")
+		line, _ := json.Marshal(r)
+		return seen{code, body, string(line)}
+	}
+	existing, absent := look(true), look(false)
+	if existing != absent || existing.code != http.StatusNotFound {
+		t.Fatalf("existing %+v\nabsent   %+v", existing, absent)
+	}
+}
+
 // With disclosure and requests on, a list writes the refs it returned and every API request a record.
 func TestAuditDisclosureAndRequests(t *testing.T) {
 	x := newAuditedApp(t, "security,disclosure,requests")
@@ -204,22 +247,32 @@ func TestAuditDisclosureAndRequests(t *testing.T) {
 func TestAuditNeverLogged(t *testing.T) {
 	x := newAuditedApp(t, "security,reads,summaries,disclosure,requests")
 	base := "/api/v1/installs/" + x.install
-	hdr := map[string]string{"Authorization": "Bearer tok-secret", "X-Api-Token": "hdr-secret"}
+	hdr := map[string]string{"Authorization": "Bearer tok-secret", "X-Api-Token": "hdr-secret", "User-Agent": "probe\r\n\x00ctl"}
 	var bodies []string
-	for _, p := range []string{base + "/gateways?namespace=infra&q=query-secret", base + "/gateways/infra/edge",
-		base + "/resources/gateway.networking.k8s.io/Gateway/infra/edge"} {
-		code, body := x.get(t, p, hdr)
-		if code != http.StatusOK {
-			t.Fatalf("GET %s = %d %s", p, code, body)
+	for _, c := range []struct {
+		path string
+		code int
+	}{
+		{base + "/gateways?namespace=infra&q=query-secret", http.StatusOK}, {base + "/gateways/infra/edge", http.StatusOK},
+		{base + "/resources/gateway.networking.k8s.io/Gateway/infra/edge", http.StatusOK},
+		{"/api/v1/installs?path=path-tok-secret", http.StatusOK}, {"/api/v1/unmatched-tok-secret", http.StatusNotFound},
+	} {
+		code, body := x.get(t, c.path, hdr)
+		if code != c.code {
+			t.Fatalf("GET %s = %d %s", c.path, code, body)
 		}
 		bodies = append(bodies, body)
 	}
 	x.records(t, "")
 	out := x.out.String()
-	for _, s := range []string{"tok-secret", "hdr-secret", "Bearer", "id-tok-secret", "acc-tok-secret", "ref-tok-secret", "query-secret", "q=", x.session.Value, x.session.Name} {
+	for _, s := range []string{"tok-secret", "hdr-secret", "Bearer", "id-tok-secret", "acc-tok-secret", "ref-tok-secret", "query-secret", "q=",
+		x.session.Value, x.session.Name, `\r`, `\n`, `\u0000`} {
 		if strings.Contains(out, s) {
 			t.Errorf("audit output carries %q:\n%s", s, out)
 		}
+	}
+	if !strings.Contains(out, `"route":"unmatched"`) || !strings.Contains(out, `"userAgent":"probectl"`) {
+		t.Errorf("unmatched route or cleaned user agent missing:\n%s", out)
 	}
 	// No response body appears whole, nor a field only bodies hold.
 	for _, b := range bodies {

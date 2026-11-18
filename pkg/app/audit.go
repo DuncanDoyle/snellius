@@ -59,9 +59,7 @@ func requestAuditor(l *audit.Logger) func(api.AuditEvent) {
 // install, and the session's person, Kubernetes identity and audit ID.
 func eventRecord(ev api.AuditEvent, level, action string) audit.Record {
 	rec := audit.FromRequest(ev.Request)
-	if rec.Request.Route == "" {
-		rec.Request.Route = ev.Request.URL.Path
-	}
+	rec.Request.Route = ev.Route
 	rec.Level, rec.Action, rec.Install = level, action, ev.Install
 	if info, ok := session.FromContext(ev.Request.Context()); ok {
 		rec.User = audit.Identity{Issuer: info.Issuer, Subject: info.Subject}

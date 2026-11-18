@@ -102,10 +102,15 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 	if cfg.secure {
 		base, _ := unnarrow(authz)
 		admit, _ := base.(Admitter)
-		next = commit(next, admit, cfg.commitCheck, cfg.authzAudit, cfg.capHit, cfg.checkTrace, cfg.commitClock)
+		authzAudit := cfg.authzAudit
+		if authzAudit != nil {
+			// A request refused before any build has no route template yet; the hook never sees its path.
+			authzAudit = func(r *http.Request, reason string) { cfg.authzAudit(withRoute(mux, r), reason) }
+		}
+		next = commit(next, admit, cfg.commitCheck, authzAudit, cfg.capHit, cfg.checkTrace, cfg.commitClock)
 	}
 	if cfg.audit != nil {
-		next = auditing(next, cfg.audit, cfg.disclosure)
+		next = auditing(next, mux, cfg.audit, cfg.disclosure)
 	}
 	return next
 }
@@ -155,6 +160,7 @@ func (h *handler) commandsOf(i install.Install) diagnose.Commands {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	noteReturned(w, v)
 	_ = json.NewEncoder(w).Encode(v)
 }
 

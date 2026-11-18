@@ -454,9 +454,6 @@ func (a *App) Start(ctx context.Context) {
 func authzAuditor(l *audit.Logger) func(r *http.Request, reason string) {
 	return func(r *http.Request, reason string) {
 		rec := audit.FromRequest(r)
-		if rec.Request.Route == "" {
-			rec.Request.Route = r.URL.Path
-		}
 		rec.Level, rec.Action, rec.Outcome, rec.Reason = audit.LevelSecurity, "authz-unavailable", "failure", reason
 		if info, ok := session.FromContext(r.Context()); ok {
 			rec.User = audit.Identity{Issuer: info.Issuer, Subject: info.Subject}
