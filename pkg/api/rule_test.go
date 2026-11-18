@@ -996,6 +996,7 @@ var ruleSurfaces = []ruleSurface{
 	// The summary's filter, and its sort through the restricted viewer's page 2 cursor.
 	{name: "/routes?health=healthy", path: fixed("/routes?limit=200&health=healthy"), changes: []string{"rejecting", "created"}},
 	{name: "/routes?sort=health page 2", path: sortedPage2, changes: []string{"created"}},
+	{name: "/routes?health=healthy page 2", path: healthyPage2, changes: []string{"created"}},
 	{name: "route detail (hidden parent)", path: routePath(ns0, "child", ""), changes: []string{"computedTrigger"}},
 	{name: "route detail (hidden Gateway)", path: routePath(ns0, namesHidden, ""), changes: []string{"rejecting"}},
 	{name: "delegation", path: routePath(ns0, delegToHidden, "/delegation"), changes: []string{"hiddenChild"}},
@@ -1057,6 +1058,12 @@ var ruleSurfaces = []ruleSurface{
 func sortedPage2(t *testing.T, before, _ *httptest.Server) string {
 	t.Helper()
 	return pageAfter(t, before, ruleBase+"/routes?limit=50&sort=health.desc")
+}
+
+// healthyPage2 is routesPage2 under the health filter.
+func healthyPage2(t *testing.T, before, _ *httptest.Server) string {
+	t.Helper()
+	return pageAfter(t, before, ruleBase+"/routes?limit=50&health=healthy")
 }
 
 // routesPage2 is the routes list after the next cursor of the restricted
