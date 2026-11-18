@@ -194,8 +194,9 @@ func TestLimiterQueueBound(t *testing.T) {
 	l := newLimiter(clocktesting.NewFakeClock(t0), 1, unlimited, unlimited)
 	l.waiting = func() { waiting <- struct{}{} }
 	held, done := fillQueue(t, l, waiting)
-	if _, err := l.acquire(context.Background()); !errors.Is(err, ErrOverloaded) || !errors.Is(err, ErrCheck) {
-		t.Fatalf("waiter %d: error %v, want ErrOverloaded", maxQueued+1, err)
+	// The check backstop is a check failure, not the busy answer of a full admission queue.
+	if _, err := l.acquire(context.Background()); !errors.Is(err, ErrOverloaded) || !errors.Is(err, ErrCheck) || errors.Is(err, api.ErrBusy) {
+		t.Fatalf("waiter %d: error %v, want ErrOverloaded and not api.ErrBusy", maxQueued+1, err)
 	}
 	held()
 	done.Wait()
@@ -708,14 +709,14 @@ func TestAdmissionBounds(t *testing.T) {
 	for range maxAdmitPerID {
 		queue("alice")
 	}
-	if _, err := q.admit(context.Background(), hashIdentity(user("alice"))); !errors.Is(err, ErrOverloaded) || !errors.Is(err, ErrCheck) {
-		t.Fatalf("alice's request %d: %v, want ErrOverloaded", maxAdmitPerID+1, err)
+	if _, err := q.admit(context.Background(), hashIdentity(user("alice"))); !errors.Is(err, ErrOverloaded) || !errors.Is(err, ErrCheck) || !errors.Is(err, api.ErrBusy) {
+		t.Fatalf("alice's request %d: %v, want ErrOverloaded and api.ErrBusy", maxAdmitPerID+1, err)
 	}
 	for i := range maxAdmitWaiting - maxAdmitPerID {
 		queue(fmt.Sprintf("u%03d", i))
 	}
-	if _, err := q.admit(context.Background(), hashIdentity(user("bob"))); !errors.Is(err, ErrOverloaded) {
-		t.Fatalf("request %d: %v, want ErrOverloaded", maxAdmitWaiting+1, err)
+	if _, err := q.admit(context.Background(), hashIdentity(user("bob"))); !errors.Is(err, ErrOverloaded) || !errors.Is(err, api.ErrBusy) {
+		t.Fatalf("request %d: %v, want ErrOverloaded and api.ErrBusy", maxAdmitWaiting+1, err)
 	}
 	held()
 	wg.Wait()
@@ -900,12 +901,12 @@ func TestAdmissionReleased(t *testing.T) {
 	mu.Lock()
 	reasons = nil
 	mu.Unlock()
-	if w := admitGet(context.Background(), h, user("carol"), "more"); w.Code != http.StatusServiceUnavailable {
-		t.Errorf("full queue: %d", w.Code)
+	if w := admitGet(context.Background(), h, user("carol"), "more"); w.Code != http.StatusServiceUnavailable || w.Body.String() != `{"error":"authz-busy"}`+"\n" {
+		t.Errorf("full queue: %d %s, want 503 authz-busy", w.Code, w.Body.String())
 	}
 	mu.Lock()
-	if len(reasons) != 1 || reasons[0] != api.AuditCheckFailed {
-		t.Errorf("full queue audited %v, want check-failed", reasons)
+	if len(reasons) != 1 || reasons[0] != api.AuditQueueFull {
+		t.Errorf("full queue audited %v, want queue-full", reasons)
 	}
 	mu.Unlock()
 	cancel()

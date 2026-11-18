@@ -450,7 +450,7 @@ func (a *App) Start(ctx context.Context) {
 }
 
 // authzAuditor writes a security record for each request answered 503
-// authz-unavailable, with the request's session and Kubernetes identity.
+// authz-unavailable or authz-busy, with the request's session and Kubernetes identity.
 func authzAuditor(l *audit.Logger) func(r *http.Request, reason string) {
 	return func(r *http.Request, reason string) {
 		rec := audit.FromRequest(r)

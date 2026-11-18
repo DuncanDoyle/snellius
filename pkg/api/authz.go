@@ -80,6 +80,10 @@ type Admitter interface {
 	Admit(r *http.Request) (release func(), err error)
 }
 
+// ErrBusy is an Admit error for a request refused because too many are
+// waiting; the commit wrapper answers 503 authz-busy (D-116).
+var ErrBusy = errors.New("authorisation: too many requests waiting for admission")
+
 // ErrCheckLimit is the error of a request that needs more uncached checks than CheckLimit.
 var ErrCheckLimit = errors.New("authorisation check limit reached")
 

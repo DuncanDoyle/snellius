@@ -25,7 +25,10 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
 
-const authzUnavailableBody = `{"error":"authz-unavailable"}` + "\n"
+const (
+	authzUnavailableBody = `{"error":"authz-unavailable"}` + "\n"
+	authzBusyBody        = `{"error":"authz-busy"}` + "\n"
+)
 
 var errOutage = errors.New("SAR unavailable")
 
@@ -613,7 +616,8 @@ func (a *admitAuthz) AuthorizeErr(r *http.Request, ref objects.Ref) (bool, error
 
 // A build that needs no uncached check is written without admission. One
 // that does is discarded; the request is admitted and built afresh, its place
-// given back once it is answered. A failed admission answers 503, and so does
+// given back once it is answered. A failed admission answers 503, authz-busy
+// when the queue is full, and so does
 // ErrNotAdmitted in an admitted build; an ended session answers 401 without
 // waiting (D-116).
 func TestCommitAdmission(t *testing.T) {
@@ -635,6 +639,7 @@ func TestCommitAdmission(t *testing.T) {
 		{"cached", false, nil, nil, nil, http.StatusOK, `{"build":1,"visible":3}` + "\n", 1, 3, 0, 0, nil},
 		{"uncached", true, nil, nil, nil, http.StatusOK, `{"build":2,"visible":3}` + "\n", 2, 4, 1, 1, nil},
 		{"overloaded", true, errOutage, nil, nil, http.StatusServiceUnavailable, authzUnavailableBody, 1, 1, 1, 0, []string{AuditCheckFailed}},
+		{"queue full", true, fmt.Errorf("check: %w", ErrBusy), nil, nil, http.StatusServiceUnavailable, authzBusyBody, 1, 1, 1, 0, []string{AuditQueueFull}},
 		{"not admitted after admission", true, nil, ErrNotAdmitted, nil, http.StatusServiceUnavailable, authzUnavailableBody, 2, 1, 1, 1, []string{AuditCheckFailed}},
 		{"ended", true, nil, nil, []HandlerOption{ended}, http.StatusUnauthorized, "", 1, 1, 0, 0, nil},
 	}

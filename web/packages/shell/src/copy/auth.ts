@@ -4,6 +4,9 @@ export const authCopy = {
   authzUnavailableTitle: "Can't check your access",
   authzUnavailableBody:
     "The Kubernetes API server isn't answering permission checks. Snellius tries again every few seconds.",
+  authzBusyTitle: "Snellius is busy right now",
+  authzBusyBody:
+    "Lots of people are opening pages at once, so checking your access is taking a little longer. This page will retry automatically in a few seconds.",
   notConfiguredTitle: "Sign-in isn't set up yet",
   notConfiguredBody: "The sign-in provider settings are missing. Your platform team sets them in the Helm values.",
   notConfiguredLink: "Set up sign-in",

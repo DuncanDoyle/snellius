@@ -17,6 +17,8 @@ const (
 	AuditFullReadFailed = "full-read-failed"
 	AuditExpired        = "expired"
 	AuditIdentity       = "identity-stale"
+	// AuditQueueFull is a request refused because too many were waiting for admission (D-116).
+	AuditQueueFull = "queue-full"
 )
 
 // commitAttempts is how many times commit builds a response whose allows expired (D-100).
@@ -29,8 +31,12 @@ const MaxRequestBody = 1 << 20
 // bodyReadTimeout bounds reading that body, so a stalled upload holds no buffer for long.
 var bodyReadTimeout = 10 * time.Second
 
-// authzUnavailable is the error body of a request whose authorisation failed (design §6.3).
-const authzUnavailable = "authz-unavailable"
+// Error bodies of a request whose authorisation failed (design §6.3), or
+// waited behind too many others for admission (D-116).
+const (
+	authzUnavailable = "authz-unavailable"
+	authzBusy        = "authz-busy"
+)
 
 // WithCommitCheck runs check on every secure /api/ request r after its handler
 // and before its response is written. Answering r commits; nil means check wrote
@@ -42,7 +48,7 @@ func WithCommitCheck(check func(w http.ResponseWriter, r *http.Request) (*http.R
 
 // WithAuthzAudit calls audit once for each secure /api/ request answered 503
 // authz-unavailable, with AuditCheckFailed, AuditCheckLimit, AuditFullReadFailed,
-// AuditExpired or AuditIdentity.
+// AuditExpired or AuditIdentity, or 503 authz-busy, with AuditQueueFull.
 func WithAuthzAudit(audit func(r *http.Request, reason string)) HandlerOption {
 	return func(c *handlerConfig) { c.authzAudit = audit }
 }
@@ -102,7 +108,11 @@ func commit(next http.Handler, admit Admitter, check func(http.ResponseWriter, *
 				audit(r, reason)
 			}
 			w.Header().Set("Cache-Control", "no-store")
-			writeErr(w, http.StatusServiceUnavailable, authzUnavailable)
+			code := authzUnavailable
+			if reason == AuditQueueFull {
+				code = authzBusy
+			}
+			writeErr(w, http.StatusServiceUnavailable, code)
 		}
 		body, buffered := []byte(nil), false
 		if base.Method != http.MethodGet && base.Method != http.MethodHead && base.Body != nil {
@@ -217,13 +227,15 @@ func (w releasingWriter) Write(p []byte) (int, error) {
 	return w.ResponseWriter.Write(p)
 }
 
-// auditReason names why a request answered authz-unavailable.
+// auditReason names why a request answered authz-unavailable or, for a full admission queue, authz-busy.
 func auditReason(err error, fullFailed bool) string {
 	switch {
 	case fullFailed:
 		return AuditFullReadFailed
 	case errors.Is(err, ErrCheckLimit):
 		return AuditCheckLimit
+	case errors.Is(err, ErrBusy):
+		return AuditQueueFull
 	}
 	return AuditCheckFailed
 }

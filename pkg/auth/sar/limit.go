@@ -3,10 +3,13 @@ package sar
 import (
 	"container/list"
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	"k8s.io/utils/clock"
+
+	"github.com/DuncanDoyle/snellius/pkg/api"
 )
 
 // Default global SAR limits (D-100 item 6).
@@ -149,7 +152,7 @@ func (l *limiter) releaseLocked() {
 	l.inFlight--
 }
 
-// Bounds on requests waiting for admission (D-116); one more is ErrOverloaded.
+// Bounds on requests waiting for admission (D-116); one more is errQueueFull.
 const (
 	// maxAdmitWaiting is the most requests waiting in all: the load bench's 50 cold viewers twice over,
 	// and about ten minutes of 500-SAR pages at the default rate.
@@ -157,6 +160,9 @@ const (
 	// maxAdmitPerID is the most requests of one identity waiting: a page's parallel calls in a few tabs.
 	maxAdmitPerID = 8
 )
+
+// errQueueFull refuses a request past an admission bound: overloaded, and busy to the API.
+var errQueueFull = fmt.Errorf("%w: %w", ErrOverloaded, api.ErrBusy)
 
 // admission admits requests that need uncached SARs: at most max at once,
 // oldest first, with the waiting requests bounded in all and per identity (D-116).
@@ -200,7 +206,7 @@ func (q *admission) admit(ctx context.Context, h idHash) (release func(), err er
 	}
 	if q.waiters.Len() >= maxAdmitWaiting || q.perID[h] >= maxAdmitPerID {
 		q.mu.Unlock()
-		return nil, ErrOverloaded
+		return nil, errQueueFull
 	}
 	w := &admitWaiter{ch: make(chan struct{}), id: h}
 	el := q.waiters.PushBack(w)

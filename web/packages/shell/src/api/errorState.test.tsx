@@ -67,6 +67,7 @@ afterEach(() => {
 
 it.each([
   [new ApiError(503, "authz-unavailable", undefined, "authz-unavailable"), "authz-unavailable"],
+  [new ApiError(503, "authz-busy", undefined, "authz-busy"), "authz-busy"],
   [new ApiError(503, "cache not synced", undefined, "cache not synced"), "connecting"],
   [new ApiError(503, "secure-mode-incomplete", undefined, "secure-mode-incomplete"), "connecting"],
   [new ApiError(503, "Service Unavailable"), "connecting"],
@@ -123,6 +124,33 @@ describe.each(pages)("$name", (p) => {
     await nextPoll();
     await waitFor(() => expect(screen.queryByTestId("page-notice")).toBeNull());
     expect(await shown(p)).toBeInTheDocument();
+  });
+
+  it("shows the busy state for a full admission queue, then retries by itself", async () => {
+    let answer: Reply = [503, { error: "authz-busy" }];
+    serve(p.path, () => answer);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mount(p.url);
+    expect(await screen.findByText(authCopy.authzBusyTitle)).toBeInTheDocument();
+    expect(screen.getByText(authCopy.authzBusyBody)).toBeInTheDocument();
+    expect(screen.queryByText(authCopy.authzUnavailableTitle)).toBeNull();
+    answer = p.body();
+    await nextPoll();
+    expect(await shown(p)).toBeInTheDocument();
+    expect(screen.queryByText(authCopy.authzBusyTitle)).toBeNull();
+  });
+
+  it("shows the busy notice over loaded data", async () => {
+    let answer: () => Reply = p.body;
+    serve(p.path, () => answer());
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mount(p.url);
+    await shown(p);
+    answer = () => [503, { error: "authz-busy" }];
+    await nextPoll();
+    expect(await screen.findByTestId("page-notice")).toHaveTextContent(
+      `${authCopy.authzBusyTitle}. ${authCopy.authzBusyBody}`,
+    );
   });
 
   it("a plain 503 still shows the connecting state", async () => {
