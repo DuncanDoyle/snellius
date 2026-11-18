@@ -13,7 +13,7 @@ import { CopyCommandButton } from "../../explore/CopyCommandButton";
 import { DetailTabs } from "../../explore/DetailTabs";
 import { type ObjectColumn, ObjectTable } from "../../explore/ObjectTable";
 import { PROBLEM_ID, ProblemStrip, type ProblemStripProps } from "../../explore/ProblemStrip";
-import { decidingSignal, signalLabel } from "../../explore/RouteSignals";
+import { decidingSignal, pathNote, signalLabel } from "../../explore/RouteSignals";
 import { StaleView } from "../../health/staleView";
 import { CopyNameButton } from "../../resource/CopyNameButton";
 import { ResourceName } from "../../resource/ResourceName";
@@ -219,6 +219,7 @@ export function DetailFrame({
                 reason={stripReason}
                 signal={deciding ? signalLabel[deciding.id] : undefined}
                 incomplete={data.path?.incomplete}
+                pathReason={data.path?.reason}
                 {...problem}
               />
             ) : null}
@@ -277,8 +278,19 @@ export function DetailFrame({
             signals={
               data?.config && data.path
                 ? [
-                    { id: "config", label: signalLabel.config, state: data.config.state },
-                    { id: "path", label: signalLabel.path, state: data.path.state },
+                    {
+                      id: "config",
+                      label: signalLabel.config,
+                      state: data.config.state,
+                      reason: data.config.reason,
+                    },
+                    {
+                      id: "path",
+                      label: signalLabel.path,
+                      state: data.path.state,
+                      reason: data.path.reason,
+                      note: pathNote(data.path),
+                    },
                   ]
                 : undefined
             }

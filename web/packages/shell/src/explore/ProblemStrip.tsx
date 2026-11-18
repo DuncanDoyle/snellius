@@ -108,6 +108,8 @@ export interface ProblemStripProps {
   gateway?: LinkedRef;
   /** Set when a fault shows although the viewer cannot read the whole path. */
   incomplete?: boolean;
+  /** The traffic path's own reason, when another signal decides the strip. */
+  pathReason?: DetailReason;
   stylesOverride?: SerializedStyles;
 }
 
@@ -122,6 +124,7 @@ export function ProblemStrip({
   signal,
   gateway,
   incomplete,
+  pathReason,
   stylesOverride,
 }: ProblemStripProps) {
   const finding =
@@ -168,7 +171,8 @@ export function ProblemStrip({
       ) : null}
       {incomplete && reason?.kind !== "path-incomplete" ? (
         <span className="line label" data-testid="problem-incomplete">
-          {rowReasonCopy.incompleteNote}
+          {/* An unreadable path says so in full; the short note is only for a readable fault. */}
+          {pathReason?.kind === "path-incomplete" ? rowReasonCopy["path-incomplete"] : rowReasonCopy.incompleteNote}
         </span>
       ) : null}
       {condition ? (

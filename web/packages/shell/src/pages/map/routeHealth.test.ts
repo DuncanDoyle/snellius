@@ -1,6 +1,7 @@
 import type { LinkedRef, PathRow } from "../../api/types";
 import type { HealthState } from "../../theme/tokens";
 import { refParam } from "../explore/detailParts";
+import { delegatingRoutes } from "./childRouteHealth";
 import { buildGraph } from "./graph";
 
 const ref = (kind: string, name: string): LinkedRef => ({
@@ -43,4 +44,28 @@ it("a route node takes the route's summary health over the path rows' state", ()
 
 it("a route without a known summary keeps the state its rows give", () => {
   expect(route(buildGraph(rows(), new Set(), { routeHealth: new Map() }))?.state).toBe("warning");
+});
+
+/** A path through parent route api, which delegates to route cart; the delegated route's backend is warning. */
+const chain = (): PathRow[] => {
+  const row = rows()[0] as PathRow;
+  return [{ ...row, routes: [ref("HTTPRoute", "api"), ref("HTTPRoute", "cart")], delegated: true }];
+};
+
+it("a collapsed route keeps its summary rather than its hidden routes' faults", () => {
+  const health = new Map<string, HealthState>([[refParam(ref("HTTPRoute", "api")), "healthy"]]);
+  const g = buildGraph(chain(), new Set(), {
+    collapsed: new Set([`r:${refParam(ref("HTTPRoute", "api"))}`]),
+    routeHealth: health,
+  });
+  const parent = g.nodes.find((n) => n.kind === "route");
+  expect(parent?.collapsed).toBe(true);
+  expect(parent?.hiddenProblems?.length).toBeGreaterThan(0);
+  expect(parent?.state).toBe("healthy");
+});
+
+it("delegatingRoutes lists each route that another follows, once", () => {
+  expect(delegatingRoutes([...chain(), ...chain(), ...rows()]).map(refParam)).toEqual([
+    refParam(ref("HTTPRoute", "api")),
+  ]);
 });

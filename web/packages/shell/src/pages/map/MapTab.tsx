@@ -16,6 +16,7 @@ import { PROBLEM_STATES } from "../backends/BackendsPage";
 import { refParam } from "../explore/detailParts";
 import { PathTable } from "../traffic/PathTable";
 import { StaleGate } from "../traffic/StaleGate";
+import { delegatingRoutes, useChildRouteHealth } from "./childRouteHealth";
 import { focusSubgraph } from "./focus";
 import type { MapExporter } from "./GatewayMap";
 import { gatewayGraph, kindLabel, type MapNode } from "./graph";
@@ -151,7 +152,13 @@ export function MapTab({ installId, gateway, stylesOverride }: MapTabProps) {
   // The Gateway's routes' summary health, so a route node reads as its page does; a route beyond the page keeps the rows' state.
   const routeQuery = useMemo(() => new URLSearchParams({ parent: refParam(gateway), limit: "200" }), [gateway]);
   const routes = useRoutes(installId, routeQuery).data;
-  const routeHealth = useMemo(() => new Map(routes?.items.map((r) => [refParam(r.ref), r.health])), [routes]);
+  // Routes linked only through delegation are listed under their parent route, so each delegating route is asked too.
+  const delegating = useMemo(() => delegatingRoutes(paths.rows), [paths.rows]);
+  const childHealth = useChildRouteHealth(installId, delegating);
+  const routeHealth = useMemo(
+    () => new Map([...childHealth, ...(routes?.items.map((r) => [refParam(r.ref), r.health] as const) ?? [])]),
+    [routes, childHealth],
+  );
   const full = useMemo(
     () => gatewayGraph(gateway, paths.rows, expanded, { stateFiltered, collapsed, routeHealth }),
     [gateway, paths.rows, expanded, stateFiltered, collapsed, routeHealth],

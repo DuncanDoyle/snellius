@@ -283,10 +283,9 @@ export function buildGraph(
     if (h) n.hiddenRoutes = h.size;
     const p = hiddenProblems.get(n.id);
     if (p) n.hiddenProblems = [...p.values()];
-    // A route node shows the route's summary, so the map and the route page agree; a collapsed node keeps its hidden routes' worst.
+    // A route node shows the route's summary, so the map and the route page agree; hidden routes' faults stay listed on the node.
     const summary = n.kind === "route" && n.ref ? opts.routeHealth?.get(refParam(n.ref)) : undefined;
-    if (summary)
-      n.state = (n.hiddenProblems ?? []).reduce((s, h) => h.signals.reduce((t, x) => worse(t, x.state), s), summary);
+    if (summary) n.state = summary;
   }
   const stateFiltered = !!opts.stateFiltered;
   return {

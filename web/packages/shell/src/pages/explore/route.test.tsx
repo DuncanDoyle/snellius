@@ -321,6 +321,21 @@ it("stale route data turns every state on the page unknown", async () => {
   expect(backend("child")).not.toHaveTextContent("Reported by the controller");
 });
 
+it("when Configuration decides, the strip still says the viewer cannot check the whole path", async () => {
+  const mid = detail(routeGolden);
+  mid.health = "warning";
+  mid.config = { state: "warning", reason: { kind: "unknown" } };
+  mid.path = { state: "unknown", incomplete: true, reason: { kind: "path-incomplete" } };
+  serve(api({ mid }));
+  mount(MID);
+  await loaded();
+  const strip = await screen.findByTestId("problem-strip");
+  expect(within(strip).getByTestId("problem-incomplete")).toHaveTextContent(
+    "You don't have permission to check the whole path.",
+  );
+  expect(strip).not.toHaveTextContent("Assessment incomplete with your current permissions.");
+});
+
 it("each backendRef links to its backend detail, and the route links to Traffic with route=", async () => {
   serve(api());
   mount(MID_OPEN);

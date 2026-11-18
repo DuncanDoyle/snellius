@@ -88,3 +88,19 @@ it("a readable fault on an incomplete path adds that the assessment is incomplet
     "Assessment incomplete with your current permissions.",
   );
 });
+
+it("when Configuration decides, an unreadable path still says the viewer cannot check it", () => {
+  renderWithTheme(
+    <ProblemStrip
+      installId={ID}
+      state="warning"
+      signal="Configuration"
+      reason={{ kind: "unknown" }}
+      incomplete
+      pathReason={{ kind: "path-incomplete" }}
+    />,
+  );
+  expect(screen.getByTestId("problem-incomplete")).toHaveTextContent(
+    "You don't have permission to check the whole path.",
+  );
+});
