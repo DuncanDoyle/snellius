@@ -12,9 +12,9 @@ export const CHILD_QUERIES = 20;
 
 /** The server admits few uncached permission checks at once, so child queries run this many at a time. */
 const IN_FLIGHT = 2;
-/** A 503 is retried this many times, waiting RETRY_MS times the attempt number. */
+/** A 503 is retried this many times, waiting backoff.ms times the attempt number (tests set it to 0). */
 const RETRIES = 2;
-const RETRY_MS = 300;
+export const backoff = { ms: 300 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -25,7 +25,7 @@ async function fetchRetrying<T>(path: string): Promise<T> {
       return await apiFetch<T>(path);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 503) || attempt > RETRIES) throw e;
-      await sleep(RETRY_MS * attempt);
+      await sleep(backoff.ms * attempt);
     }
   }
 }

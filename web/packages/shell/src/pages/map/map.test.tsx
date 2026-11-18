@@ -9,7 +9,7 @@ import type { GatewayDetail, LinkedRef, PathRow, PathSummary, PathsResponse } fr
 import { renderWithTheme, testSWR } from "../../test/render";
 import { defaultThemes } from "../../theme/themes";
 import { GatewayPage } from "../explore/GatewayPage";
-import { useChildRouteHealth } from "./childRouteHealth";
+import { backoff, useChildRouteHealth } from "./childRouteHealth";
 import { dedupeRows, useMapPaths } from "./mapData";
 
 // No timed polls: a slow draw would let one walk the pages again mid-test. Tests poll with mutate.
@@ -85,7 +85,9 @@ beforeEach(() => {
   );
 });
 
+const backoffMs = backoff.ms;
 afterEach(() => {
+  backoff.ms = backoffMs;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -1006,6 +1008,8 @@ it("a delegating route shows its delegated route at rest and can be collapsed; E
 
 /** Wraps serve's fetch: GET routes?parent=shop/api answers by childAnswer; any other routes query is empty. */
 function serveChildQuery(childAnswer: (call: number) => Response) {
+  // Retries wait no time here; afterEach restores the delay.
+  backoff.ms = 0;
   serve(() => edgePaths());
   const base = vi.mocked(fetch);
   let calls = 0;
@@ -1043,7 +1047,7 @@ it("a 503 child query is retried, then the node reads the summary", async () => 
   const calls = serveChildQuery((n) => (n === 1 ? unavailable() : childPage("warning")));
   mount("?tab=map");
   const map = await screen.findByTestId("gateway-map");
-  await waitFor(() => expect(flowNode(map, "shop/child")).toHaveTextContent(/Warning/), { timeout: 3000 });
+  await waitFor(() => expect(flowNode(map, "shop/child")).toHaveTextContent(/Warning/));
   expect(calls()).toBe(2);
 });
 
@@ -1051,7 +1055,7 @@ it("a child query that keeps answering 503 is retried a bounded number of times,
   const calls = serveChildQuery(unavailable);
   mount("?tab=map");
   const map = await screen.findByTestId("gateway-map");
-  await waitFor(() => expect(calls()).toBe(3), { timeout: 3000 });
+  await waitFor(() => expect(calls()).toBe(3));
   expect(flowNode(map, "shop/child")).toHaveTextContent(/Healthy/);
   expect(calls()).toBe(3);
 });
