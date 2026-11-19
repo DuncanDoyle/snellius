@@ -228,7 +228,7 @@ The probe listener serves `/healthz`, `/readyz` and `/metrics` on container port
 
 ```sh
 # Install the chart from ghcr
-helm install ui oci://ghcr.io/duncandoyle/charts/snellius --version 0.8.0 \
+helm install ui oci://ghcr.io/duncandoyle/charts/snellius --version 0.8.1 \
   -n snellius --create-namespace
 
 # Open the UI on http://localhost:8080
@@ -474,6 +474,10 @@ Snellius is the new name of kgateway-ui. Releases from v0.5.0 use only the new n
 Saved theme choices carry over. Finding codes keep the `KGWUI-` prefix, so API v1 and the finding anchors do not change.
 
 ## Upgrade notes
+
+### v0.8.1
+
+- **Sign-in intro.** In secure mode, a fresh sign-in plays a short animation of the Snellius prism while the overview loads. A click or key press skips it, and it never plays with reduced motion, on a reload, or on later navigation. The sign-in redirect now ends in `#signed-in`, which the UI reads once and removes. No values, flags or API fields change.
 
 ### v0.8.0: identity and access (Phase 7)
 
