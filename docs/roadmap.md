@@ -114,7 +114,7 @@ Why now: about 60% of the code is already generic, and the refactor is cheaper b
 - Must work with `Backend` status alone; Services and EndpointSlices are optional (D-016). Envoy cluster and endpoint health from the proxies moves to the proxy endpoint view after GA (D-069, #35); Phase 6 keeps the seams for it.
 
 ### Phase 7 — Identity & Access
-**Status:** Not started
+**Status:** Complete (2026-11-19, v0.8.0) — `docs/phases/phase-7/phase-7-complete.md`
 **Docs:** `docs/phases/phase-7/`
 
 Inserted 2026-11-14 (D-084): authentication and authorisation come before any new feature. Ships as `v0.8.0`. Visibility follows Kubernetes RBAC exactly (principle 9, D-085).

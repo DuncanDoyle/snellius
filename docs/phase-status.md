@@ -1,45 +1,13 @@
 # Phase status
 
 ## Phase
-Phase: 7 — Identity & Access (inserted 2026-11-14, D-084)
-Base: 81a2c0b844677e9fa1f79b32b364066d4d17176b (main after #44)
-Docs: docs/phases/phase-7/
-Status: implementing (design and plan approved under the user's AFK instruction, 2026-11-14: "if both you and codex agree, you can continue with the implementation if there are no major design topics")
-
-### Queue
-- [x] Design (`phases/phase-7/design.md`), revised after `reviews/design-codex.md`
-- [x] Implementation plan, revised after `reviews/plan-codex.md`
-- [x] Codex review of design + plan, triage; approval delegated (see Status). Claim-mapping fallback: not in v0.8.0 (D-098, user 2026-11-15); managed clusters through #51
-- [x] 7.1 Modes and groundwork — closed 2026-11-14, phases/phase-7/phase-7.1-complete.md (local branch, not pushed)
-- [x] 7.2 Identity and sessions — closed 2026-11-15, phases/phase-7/phase-7.2-complete.md (kind-secure green on PR #50 after D-097)
-- [x] 7.3 Authoriser — closed 2026-11-16, phases/phase-7/phase-7.3-complete.md (D-099, D-100, D-101)
-- [x] 7.4 Visibility everywhere — closed 2026-11-17, phases/phase-7/phase-7.4-complete.md (D-102 to D-115; #52, #53)
-- [x] 7.5 Two signals (gate opens) — closed 2026-11-18, phases/phase-7/phase-7.5-complete.md (D-116 to D-119; #55 for two older test races)
-- [ ] 7.6 Audit, docs, release ← CURRENT; brief phases/phase-7/phase-7.6-brief.md
-- [-] 7.7 Claim-mapping fallback — dropped (D-098); see #51
-
-### Exit gates
-- [ ] tests/vet pass (observed)
-- [ ] all queue items done or deferred
-- [x] design+plan cross-model review + triage
-- [ ] phase cross-model review + triage
-- [ ] decisions.md / design / plan in sync with code
-- [ ] snellius.dev matches the user-visible changes (program P-006; `npm run sync:findings` for finding codes)
-- [ ] phase-7-complete.md written, roadmap updated, tracked items closed
+Phase: 8 — Policies & Filters
+Base: set when the phase starts
+Docs: docs/phases/phase-8/
+Status: not started. Phase 7 closed 2026-11-19 (phases/phase-7/phase-7-complete.md), merged in #50 and released as `v0.8.0`. At the start: read the program file, remind the user about the upstream scope-endpoint issue, check kgateway#14815.
 
 ## Sub-phase
-Sub-phase: 7.6 — Audit, docs, release
-Kind: planned
-Base: 1e9f443616d93f699eb55162a4fbfa210c9c2a30
-Brief: docs/phases/phase-7/phase-7.6-brief.md
-
-### Queue
-- [x] Audit levels: reads, summaries, disclosure, requests, denial collapsing, metrics (plan 7.6 item 1) — Codex review and fix round, `reviews/7.6-audit-codex.md`
-- [x] Busy message (user, 2026-11-18; `51e389b`, `503 authz-busy`): a 503 from a full admission queue (D-116) gets its own reason and copy, distinct from `authz-unavailable`, whose text blames the API server; the user picks the wording
-- [ ] Docs: README trust model and secure-mode setup, chart README, upgrade notes, documentation notes (item 2) ← CURRENT
-- [ ] Phase review (Codex) and stabilization (item 3)
-- [ ] v0.8.0 release, with the user's approval (item 4). Consumer notice approved by the user (2026-11-18): file a `cross-repo` issue in kgwctl at the tag naming E2 and `v0.8.0` (`path: unknown, no-path` for callers without computed views); the kgwctl session need not be running
-- [ ] snellius.dev for `v0.8.0` (user, 2026-11-18; program P-006): secure mode, sign-in setup, trust model, two signals, audit levels, capacity tuning and the changelog; `npm run sync:findings` for finding codes; at the release
+Sub-phase: none
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md
@@ -72,6 +40,7 @@ Provided to this repo: E4 and E5 from xdsview `v0.3.0` (renamed from krp; #15, #
 - Smaller Phase 2 and Phase 3 items (parked tasks, test gaps, layout at 720 px, P4 polish) — src: phases/phase-2/phase-2-complete.md and phases/phase-3/phase-3-complete.md, Deferred / open
 
 ## Notes
+- 2026-11-19: `v0.8.0` post-release, open until done: install `--version 0.8.0` in README and chart README; snellius.dev for `v0.8.0` (user, 2026-11-18; secure mode, sign-in setup, trust model, two signals, audit, capacity, changelog, `npm run sync:findings`); kgwctl `cross-repo` issue naming E2 and `v0.8.0` (`path: unknown, no-path` for callers without computed views; user approved); program file update in kgateway-tooling.
 - 2026-11-14: `v0.7.1` released (walkthrough fixes, #42 and #43, D-079 … D-083; phases/phase-6/phase-6-complete.md, Patch release v0.7.1). API v1 changes are additive. The snellius.dev sync now covers `v0.7.0` and `v0.7.1`.
 - 2026-11-12: Phase 6 closed (phases/phase-6/phase-6-complete.md), merged in #36 and released as `v0.7.0`. Its snellius.dev gate is still open: sync the site for `v0.7.0`. Open items from the record's Deferred / open: the KGWUI-023 title, the map's reserved rule column, export scope, the D-078 review. The user decides when Phase 7 starts; read the program file and set Base then.
 - 2026-11-13: axe scans of the main pages, light and dark, run in every e2e row (#37, `@axe-core/playwright`). Only serious and critical violations fail.
