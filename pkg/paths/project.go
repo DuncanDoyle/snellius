@@ -208,7 +208,9 @@ type projector struct {
 	ports    map[portKey]*portHealth
 	facts    facts
 	backends map[objects.Ref]*unstructured.Unstructured
-	shares   map[*objects.Rule][]Share
+	// backendSigs are each kgateway Backend's own signals, judged once per projection.
+	backendSigs map[objects.Ref][]Signal
+	shares      map[*objects.Rule][]Share
 	// sets interns the rows' signal sets by content; key is its scratch key.
 	sets map[string][]Signal
 	key  []byte
@@ -231,7 +233,7 @@ func Project(t *Topology, in ProjectInput) *Projection { return project(t, in, n
 func project(t *Topology, in ProjectInput, f *ProjectionFilter) *Projection {
 	p := &projector{t: t, in: in, atts: make([]attSignals, len(t.atts)),
 		ctxs: map[int32][]Signal{}, edges: map[[2]objects.Ref]*Signal{}, refs: map[objects.Ref][]refFinding{}, ports: map[portKey]*portHealth{},
-		backends: map[objects.Ref]*unstructured.Unstructured{}, shares: map[*objects.Rule][]Share{}, sets: map[string][]Signal{}, na: map[int32]*Endpoints{},
+		backends: map[objects.Ref]*unstructured.Unstructured{}, backendSigs: map[objects.Ref][]Signal{}, shares: map[*objects.Rule][]Share{}, sets: map[string][]Signal{}, na: map[int32]*Endpoints{},
 		setDigests: map[*Signal]uint64{}, filter: f}
 	p.facts.snap = in.Snapshot
 	p.findings = indexFindings(in.Model.Health.Findings, f, nil)
@@ -784,7 +786,12 @@ func (p *projector) backend(sigs []Signal, ref objects.Ref, port int32, traffic 
 			p.na[port] = &Endpoints{Complete: EndpointsNotApplicable, Port: port}
 		}
 		out.Endpoints[i] = p.na[port]
-		sigs = backendSignals(sigs, p.in.Model, ref, p.backends[ref], p.findings.of(ref))
+		own, ok := p.backendSigs[ref]
+		if !ok {
+			own = backendSignals(nil, p.in.Model, ref, p.backends[ref], p.findings.of(ref))
+			p.backendSigs[ref] = own
+		}
+		sigs = append(sigs, own...)
 	}
 	return sigs
 }
