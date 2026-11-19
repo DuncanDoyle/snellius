@@ -22,7 +22,7 @@ Snellius runs in one of two modes, set with `auth.mode` (default `local`).
 
 ```sh
 # Install a released chart; --version picks the chart and the matching image
-helm install ui oci://ghcr.io/duncandoyle/charts/snellius --version 0.8.1 \
+helm install ui oci://ghcr.io/duncandoyle/charts/snellius --version 0.8.2 \
   -n snellius --create-namespace
 kubectl -n snellius port-forward svc/ui-snellius 8080:80
 ```

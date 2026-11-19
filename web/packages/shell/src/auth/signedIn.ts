@@ -14,7 +14,28 @@ export function takeSignedInMarker(): boolean {
   return taken;
 }
 
-/** Forgets this page load's answer, so a test can stand in for the next load. */
+/** The sessionStorage key that marks this tab as having seen the local-mode intro. */
+export const ARRIVED_KEY = "snellius.arrived";
+
+let arrived: boolean | undefined;
+
+/**
+ * True once per tab, on its first page load: the arrival a local-mode user has instead of a sign-in.
+ * Storage that cannot be read or written counts as already arrived, so the intro never repeats.
+ */
+export function takeFirstArrival(): boolean {
+  if (arrived !== undefined) return arrived;
+  try {
+    arrived = window.sessionStorage.getItem(ARRIVED_KEY) === null;
+    window.sessionStorage.setItem(ARRIVED_KEY, "1");
+  } catch {
+    arrived = false;
+  }
+  return arrived;
+}
+
+/** Forgets this page load's answers, so a test can stand in for the next load. */
 export function resetSignedInMarkerForTests(): void {
   taken = undefined;
+  arrived = undefined;
 }

@@ -13,9 +13,10 @@ const pages: CorePages = {
   ResourcePage: () => <p>resource page</p>,
 };
 
-// A fresh page load at url, with the overview's data answering at once.
-function load(url: string) {
+// A fresh page load at url in mode, with the overview's data answering at once.
+function load(url: string, mode: "secure" | "local" = "secure") {
   resetSignedInMarkerForTests();
+  document.documentElement.dataset.authMode = mode;
   window.history.pushState({}, "", url);
   stubApi({ "/api/v1/installs": [], "/api/v1/meta": { version: "dev", synced: true, kinds: [] } });
   return render(
@@ -36,7 +37,38 @@ const reducedMotion = (on: boolean) =>
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   window.history.pushState({}, "", "/");
+  window.sessionStorage.clear();
+  delete document.documentElement.dataset.authMode;
+});
+
+it("plays on a tab's first page load in local mode, and not on its reload", () => {
+  window.sessionStorage.clear(); // a new tab
+  const first = load("/about", "local");
+  expect(screen.getByTestId("signin-intro")).toBeInTheDocument();
+  first.unmount();
+  load("/about", "local");
+  expect(screen.queryByTestId("signin-intro")).toBeNull();
+});
+
+it("does not play in secure mode without a fresh sign-in, even on a tab's first load", () => {
+  load("/about");
+  expect(screen.queryByTestId("signin-intro")).toBeNull();
+});
+
+it("does not play in local mode when the tab's storage is blocked, or under reduced motion", () => {
+  vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+    throw new Error("blocked");
+  });
+  const blocked = load("/about", "local");
+  expect(screen.queryByTestId("signin-intro")).toBeNull();
+  blocked.unmount();
+  vi.restoreAllMocks();
+  window.sessionStorage.clear();
+  reducedMotion(true);
+  load("/about", "local");
+  expect(screen.queryByTestId("signin-intro")).toBeNull();
 });
 
 it("plays after a fresh sign-in, removes the marker, and loads the page underneath", async () => {
@@ -70,8 +102,8 @@ it("skips the animation under reduced motion, still removing the marker", () => 
 });
 
 it("ends by itself after the intro and leaves focus on the page", () => {
-  // The intro stays short: a longer one would add time to every sign-in.
-  expect(INTRO_MS).toBeLessThanOrEqual(1500);
+  // The intro stays short, the finished logo held briefly: a longer one would add time to every sign-in.
+  expect(INTRO_MS).toBeLessThanOrEqual(2250);
   vi.useFakeTimers();
   renderWithTheme(<SignInIntro />);
   expect(screen.getByTestId("signin-intro")).toBeInTheDocument();

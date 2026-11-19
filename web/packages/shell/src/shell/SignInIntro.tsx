@@ -1,18 +1,24 @@
 import { keyframes } from "@emotion/react";
 import styled from "@emotion/styled";
 import { type CSSProperties, useEffect, useState } from "react";
-import { takeSignedInMarker } from "../auth/signedIn";
+import { isSecureMode } from "../auth/mode";
+import { takeFirstArrival, takeSignedInMarker } from "../auth/signedIn";
 import { useShellExtension } from "./extension";
 
 // region Styles
-/** Full length of the intro; the overlay fades out over its last FADE_MS. */
-export const INTRO_MS = 1500;
+/**
+ * Full length of the intro; the overlay fades out over its last FADE_MS. The drawing ends at about
+ * 1.27 s, so the finished logo holds for about 0.7 s before the fade.
+ */
+export const INTRO_MS = 2250;
 const FADE_MS = 300;
 const SKIP_FADE_MS = 150;
 /** Keys a skip uses up, because they would otherwise scroll the page or activate a control. */
 const CONSUMED_KEYS = new Set([" ", "Enter"]);
 
 const draw = keyframes`from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; }`;
+// Once drawn, the outline is one solid stroke, so the dash's ends leave no notch at the apex.
+const solid = keyframes`to { stroke-dasharray: none; }`;
 // A line stays hidden until it draws, or its round cap shows as a dot.
 const trace = keyframes`from { stroke-dashoffset: 1; visibility: visible; } to { stroke-dashoffset: 0; visibility: visible; }`;
 const appear = keyframes`from { opacity: 0; } to { opacity: 1; }`;
@@ -56,7 +62,7 @@ const Optics = styled.svg`
   .ray, .ray-halo { animation-duration: 0.36s; animation-timing-function: ${easeOut}; animation-delay: calc(0.64s + var(--i) * 0.09s); }
   .ray-halo { stroke: var(--band); stroke-width: 30; opacity: 0.32; }
   .ray { stroke: ${(p) => (p.theme.mode === "dark" ? "var(--bright)" : "var(--band)")}; animation-delay: calc(0.66s + var(--i) * 0.09s); }
-  .prism-outline { stroke: ${(p) => ink[p.theme.mode].line}; stroke-dasharray: 1; animation: ${draw} 0.47s ${easeInOut} 0.02s both; }
+  .prism-outline { stroke: ${(p) => ink[p.theme.mode].line}; stroke-dasharray: 1; animation: ${draw} 0.47s ${easeInOut} 0.02s both, ${solid} 0s linear 0.49s forwards; }
   .prism-fill, .prism-eye { fill: ${(p) => ink[p.theme.mode].fill}; animation: ${appear} 0.26s ${easeOut} 0.25s both; }
   .prism-eye { stroke: ${(p) => ink[p.theme.mode].line}; }
   .prism-band { animation: ${appear} 0.17s ${easeOut} both; animation-delay: calc(0.58s + var(--i) * 0.047s); }
@@ -83,10 +89,14 @@ const RAYS: { d: string; band: string; bright: string }[] = [
 ];
 const vars = (v: Record<string, string | number>) => v as CSSProperties;
 
-/** Takes the signed-in marker (so the URL is clean either way) and plays the intro unless motion is reduced. */
+/**
+ * Takes the signed-in marker (so the URL is clean either way) and plays the intro unless motion is reduced:
+ * after a fresh sign-in in secure mode, and on a tab's first page load in local mode, which has no sign-in.
+ */
 export function shouldPlayIntro(): boolean {
   const fresh = takeSignedInMarker();
-  return fresh && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const arrival = isSecureMode() ? fresh : takeFirstArrival();
+  return arrival && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 }
 
 // region Component
