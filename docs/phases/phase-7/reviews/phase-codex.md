@@ -62,3 +62,24 @@ Finding detail, groups, counts, search, overview tints, diagnostic rollups, and 
 | Q3 | P2 recompute timestamps move with hidden Events or CRD activity | accept | Stabilization round 2: D-109's treatment |
 | Q4 | P3 browser assertions are loose | accept | Stabilization round 2 |
 | PH2′ | partly fixed | accept | Closed by Q1–Q3 |
+
+## Check of stabilization round 2 (93218be..3ffd82c)
+
+- **Q1 fixed.** Controller Deployment YAML and its links now require a visible finding when a finding is their only basis for admission. [pkg/api/link.go:103](../../../../pkg/api/link.go:103)
+- **Q2 fixed.** `/health` and `/diagnostics` drop the unknown or unmapped controller-version note when CRD listing is denied. [pkg/health/skew.go:127](../../../../pkg/health/skew.go:127) · [pkg/health/rollup.go:134](../../../../pkg/health/rollup.go:134)
+- **Q3 fixed.** Install `computedAt`, check timestamps, and cached endpoint read times use the publication’s confirmation time when either input is withheld. [pkg/api/handlers.go:348](../../../../pkg/api/handlers.go:348) · [pkg/api/diagnostics.go:461](../../../../pkg/api/diagnostics.go:461) · [pkg/api/visible.go:550](../../../../pkg/api/visible.go:550)
+- **Q4 fixed.** Playwright checks every route-name namespace and both rendered signal values on `shop/good`. [web/e2e/restricted.spec.ts:25](../../../../web/e2e/restricted.spec.ts:25)
+
+**P2 docs.** D-120 matches the findings and timestamp logic. Its check-text promise should explicitly preserve the collection-status exception. CRD watch failure or recovery still changes the skew check’s text and availability, and `/meta` reports both watches’ status. The README’s Times paragraph also omits full readers missing either grant. [docs/decisions.md:1729](../../../../docs/decisions.md:1729) · [pkg/health/skew.go:94](../../../../pkg/health/skew.go:94) · [pkg/app/app.go:125](../../../../pkg/app/app.go:125) · [README.md:153](../../../../README.md:153)
+
+**P3 coverage.** The paired-world test denies both grants together and omits backend list/detail and route detail. It also lacks a pre-fix byte baseline for the fully granted reader. [pkg/api/rule_test.go:794](../../../../pkg/api/rule_test.go:794) · [pkg/api/secure_lists_test.go:489](../../../../pkg/api/secure_lists_test.go:489)
+
+No new P1. I traced findings, groups, rollups, process fields, and path consumers and found no further changes driven by Event records or CRD bundle metadata the caller cannot read. Served-kind discovery remains visible under D-108. Path filtering and restamping rebuild per request without writing into the shared memo. With both grants, the nil filter returns the original projection, timestamp and admission branches preserve their prior behavior, and the new skew fields are private. Source inspection found no payload regression. [docs/decisions.md:1601](../../../../docs/decisions.md:1601) · [pkg/paths/project.go:58](../../../../pkg/paths/project.go:58)
+
+Read-only review of `93218be..HEAD`. `git diff --check` passed. No files edited or tests rerun.
+### Triage
+
+| # | Finding | Verdict | Resolution |
+|---|---|---|---|
+| R1 | P2 D-120 and the README omit the collection-status exception and the timestamp rule for these readers | accept | D-120 and README corrected |
+| R2 | P3 the test denies both grants together and skips backend and route detail | defer | Carry-over for Phase 8 |

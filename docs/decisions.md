@@ -1726,6 +1726,6 @@ Measured on the reference machine, 5 runs per world:
 
 **Context:** The full-read proof (D-100 item 3) leaves out Events and CustomResourceDefinitions, so it stays cheap. But probe facts (KGWUI-020, the probe check) come from Events, and CRD bundle skew (KGWUI-022, the skew check) from CRDs. A full reader without access to them could see those facts, or see pages change when they changed, against D-085 and D-110.
 
-**Decision:** Under the full read, Snellius also asks cluster-wide `list` on Events and on CRDs (one cached check each). A reader without them gets what a restricted viewer gets for those inputs: no KGWUI-020 and no KGWUI-022 on a CRD, the probe check reads "Not checked", check text and admission do not depend on them, and timestamps follow D-109.
+**Decision:** Under the full read, Snellius also asks cluster-wide `list` on Events and on CRDs (one cached check each). A reader without them gets what a restricted viewer gets for those inputs: no KGWUI-020 and no KGWUI-022 on a CRD, the probe check reads "Not checked", check text and admission do not depend on them, and timestamps follow D-109. Collection status is the exception, as for every viewer: a failing or recovered Events or CRD watch still shows in the check's availability and in `/meta`.
 
 **Consequences:** Full-read `/routes` costs 24 cold checks instead of 22. A full reader needs cluster-wide `list` on CRDs to see CRD bundle skew; the README's RBAC section says so.
