@@ -46,7 +46,8 @@ func TestSecureModeNotReadyWithoutOIDC(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	a.Start(ctx)
-	eventually(t, "an install in the model", func() bool { return len(a.Engine.Installs()) > 0 })
+	// Readiness checks the model first, so wait until that check passes.
+	eventually(t, "the model synced", func() bool { _, why := a.readiness()(); return why != "model not synced" })
 	ready, reason := a.readiness()()
 	if ready || !strings.HasPrefix(reason, "sign-in not configured: ") {
 		t.Fatalf("readiness = %v, %q; want not ready with a sign-in reason", ready, reason)
