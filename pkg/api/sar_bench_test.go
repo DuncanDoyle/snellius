@@ -607,8 +607,9 @@ func loadTest(t *testing.T, secure func(api.Authorizer, func() time.Time, ...api
 		t.Errorf("load %s: one cold viewer asked %d SARs, target ≤ %d", p.name, cold.sars, p.limit)
 	}
 	bound := time.Duration(float64(viewers*cold.sars)/sar.DefaultRate*float64(time.Second)) + time.Minute
-	// Polls start until the last first 200 allowed plus a deny TTL and a minute; a poll gets one more minute to finish.
-	window, grace := bound+sar.DenyTTL+time.Minute, time.Minute
+	// Polls start until the last first 200 allowed plus two deny TTLs and a minute; a poll gets one more minute to finish.
+	// Two TTLs give each viewer about 70 scored polls at saturation, so 95 % no longer turns on one slow poll.
+	window, grace := bound+2*sar.DenyTTL+time.Minute, time.Minute
 
 	clk := fastClock{start: time.Now(), scale: scale}
 	load := map[string]*viewerLoad{}
