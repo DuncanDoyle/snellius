@@ -29,7 +29,8 @@ export const retryEveryPoll: NonNullable<SWRConfiguration["onErrorRetry"]> = (er
 
 /** Runs fn now if the tab is visible, else once it next becomes visible. */
 function whenVisible(fn: () => void) {
-  if (document.visibilityState !== "hidden") return fn();
+  // A retry can fire after a test's DOM is gone; SWR's revalidate is then a no-op.
+  if (typeof document === "undefined" || document.visibilityState !== "hidden") return fn();
   const on = () => {
     if (document.visibilityState === "hidden") return;
     document.removeEventListener("visibilitychange", on);
