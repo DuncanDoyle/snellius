@@ -228,7 +228,7 @@ The probe listener serves `/healthz`, `/readyz` and `/metrics` on container port
 
 ```sh
 # Install the chart from ghcr
-helm install ui oci://ghcr.io/duncandoyle/charts/snellius --version 0.7.1 \
+helm install ui oci://ghcr.io/duncandoyle/charts/snellius --version 0.8.0 \
   -n snellius --create-namespace
 
 # Open the UI on http://localhost:8080
