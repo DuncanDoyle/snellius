@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -151,7 +152,18 @@ func (s *Store) Complete(w http.ResponseWriter, r *http.Request, res oidc.Result
 	s.emit(r.Context(), auditRecord(r, sess, "login", "success", ""))
 	http.SetCookie(w, s.cookie(value, 0))
 	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, res.ReturnPath, http.StatusFound)
+	http.Redirect(w, r, signedInLocation(res.ReturnPath), http.StatusFound)
+}
+
+// signedInFragment marks the return from a fresh sign-in; the web UI reads it once and removes it.
+const signedInFragment = "signed-in"
+
+// signedInLocation is the validated return path with its fragment replaced by signedInFragment.
+func signedInLocation(p string) string {
+	if i := strings.IndexByte(p, '#'); i != -1 {
+		p = p[:i]
+	}
+	return p + "#" + signedInFragment
 }
 
 // Run sweeps expired sessions every minute until ctx is done.

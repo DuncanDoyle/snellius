@@ -118,7 +118,7 @@ func TestSecureSessionFlow(t *testing.T) {
 	idp.nonce = loc.Query().Get("nonce")
 	idp.mu.Unlock()
 	cb := call(a, "GET", "/auth/callback?code=x&state="+url.QueryEscape(loc.Query().Get("state")), login.Result().Cookies(), nil)
-	if cb.Code != http.StatusFound || cb.Header().Get("Location") != "/routes" {
+	if cb.Code != http.StatusFound || cb.Header().Get("Location") != "/routes#signed-in" {
 		t.Fatalf("callback = %d %q", cb.Code, cb.Header().Get("Location"))
 	}
 	var sess []*http.Cookie
@@ -151,6 +151,28 @@ func TestSecureSessionFlow(t *testing.T) {
 	}
 	if m := metricsText(a); !strings.Contains(m, "snellius_sessions_active 0") {
 		t.Fatalf("metrics:\n%s", m)
+	}
+}
+
+// The signed-in fragment goes on the validated return path, so a foreign return still stays on this origin.
+func TestSignedInFragmentKeepsReturnLocal(t *testing.T) {
+	idp, ca := newSignInIdP(t)
+	a := sessionApp(t, oidc.Config{IssuerURL: idp.srv.URL, ClientID: "c", RedirectURL: "https://s.example.com/auth/callback", CAFile: ca})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.oidc.Run(ctx)
+	eventually(t, "discovery", func() bool { ok, _ := a.oidc.Ready(); return ok })
+	for _, ret := range []string{"//evil.example", "https://evil.example/", "/%5Cevil.example", "/routes#//evil.example"} {
+		login := call(a, "GET", "/auth/login?return="+url.QueryEscape(ret), nil, nil)
+		loc, _ := url.Parse(login.Header().Get("Location"))
+		idp.mu.Lock()
+		idp.nonce = loc.Query().Get("nonce")
+		idp.mu.Unlock()
+		cb := call(a, "GET", "/auth/callback?code=x&state="+url.QueryEscape(loc.Query().Get("state")), login.Result().Cookies(), nil)
+		got, err := url.Parse(cb.Header().Get("Location"))
+		if cb.Code != http.StatusFound || err != nil || got.Host != "" || got.Scheme != "" || got.Fragment != "signed-in" {
+			t.Errorf("return %q: callback = %d %q", ret, cb.Code, cb.Header().Get("Location"))
+		}
 	}
 }
 

@@ -126,7 +126,7 @@ func (f *fixture) signIn(res oidc.Result) *http.Cookie {
 	f.t.Helper()
 	rec := httptest.NewRecorder()
 	f.store.Complete(rec, httptest.NewRequest("GET", "/auth/callback", nil), res)
-	if rec.Code != http.StatusFound || rec.Header().Get("Location") != res.ReturnPath {
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != res.ReturnPath+"#signed-in" {
 		f.t.Fatalf("complete = %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 	for _, c := range rec.Result().Cookies() {
@@ -191,6 +191,20 @@ func TestCookieAndLoginAudit(t *testing.T) {
 		if r.Session == "" || r.Session == c.Value || strings.Contains(c.Value, r.Session) || r.User.Subject != "alice-sub" ||
 			r.User.Issuer != testIssuer || r.Kube.Username != "oidc:alice" {
 			t.Fatalf("login record = %+v", r)
+		}
+	}
+}
+
+// The redirect after sign-in carries the signed-in fragment in place of any other, on the same path.
+func TestCompleteMarksFreshSignIn(t *testing.T) {
+	f := newFixture(t, nil)
+	for in, want := range map[string]string{"/": "/#signed-in", "/routes?q=a": "/routes?q=a#signed-in", "/i/x/#old": "/i/x/#signed-in"} {
+		res := f.result()
+		res.ReturnPath = in
+		rec := httptest.NewRecorder()
+		f.store.Complete(rec, httptest.NewRequest("GET", "/auth/callback", nil), res)
+		if got := rec.Header().Get("Location"); got != want {
+			t.Errorf("Complete(%q) Location = %q, want %q", in, got, want)
 		}
 	}
 }
