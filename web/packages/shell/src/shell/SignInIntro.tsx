@@ -1,7 +1,8 @@
 import { keyframes } from "@emotion/react";
 import styled from "@emotion/styled";
 import { type CSSProperties, useEffect, useState } from "react";
-import { takeSignedInMarker } from "../auth/signedIn";
+import { isSecureMode } from "../auth/mode";
+import { takeFirstArrival, takeSignedInMarker } from "../auth/signedIn";
 import { useShellExtension } from "./extension";
 
 // region Styles
@@ -88,10 +89,14 @@ const RAYS: { d: string; band: string; bright: string }[] = [
 ];
 const vars = (v: Record<string, string | number>) => v as CSSProperties;
 
-/** Takes the signed-in marker (so the URL is clean either way) and plays the intro unless motion is reduced. */
+/**
+ * Takes the signed-in marker (so the URL is clean either way) and plays the intro unless motion is reduced:
+ * after a fresh sign-in in secure mode, and on a tab's first page load in local mode, which has no sign-in.
+ */
 export function shouldPlayIntro(): boolean {
   const fresh = takeSignedInMarker();
-  return fresh && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const arrival = isSecureMode() ? fresh : takeFirstArrival();
+  return arrival && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 }
 
 // region Component
