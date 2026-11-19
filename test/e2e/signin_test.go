@@ -77,7 +77,8 @@ func signIn(t *testing.T, user string) *http.Client {
 			return err
 		}
 		_ = resp.Body.Close()
-		if got := resp.Request.URL; got.String() != base+"/" || resp.StatusCode != http.StatusOK {
+		// A fresh sign-in returns to the page it started from, marked for the web UI's intro.
+		if got := resp.Request.URL; got.String() != base+"/#signed-in" || resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("sign-in ended on %s with %d", got, resp.StatusCode)
 		}
 		return nil
