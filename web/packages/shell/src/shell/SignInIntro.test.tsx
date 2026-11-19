@@ -70,6 +70,8 @@ it("skips the animation under reduced motion, still removing the marker", () => 
 });
 
 it("ends by itself after the intro and leaves focus on the page", () => {
+  // The intro stays short: a longer one would add time to every sign-in.
+  expect(INTRO_MS).toBeLessThanOrEqual(1500);
   vi.useFakeTimers();
   renderWithTheme(<SignInIntro />);
   expect(screen.getByTestId("signin-intro")).toBeInTheDocument();
@@ -90,5 +92,21 @@ it.each([
     skip();
   });
   // A short fade, well before the intro would have ended.
+  await waitFor(() => expect(screen.queryByTestId("signin-intro")).toBeNull(), { timeout: INTRO_MS / 3 });
+});
+
+it("lets Tab skip the intro without cancelling Tab", async () => {
+  renderWithTheme(
+    <>
+      <button type="button">first</button>
+      <SignInIntro />
+    </>,
+  );
+  // Tab keeps its default, so keyboard and screen reader navigation work through the intro.
+  let tabbed = false;
+  act(() => {
+    tabbed = fireEvent.keyDown(document.body, { key: "Tab" });
+  });
+  expect(tabbed).toBe(true);
   await waitFor(() => expect(screen.queryByTestId("signin-intro")).toBeNull(), { timeout: INTRO_MS / 3 });
 });

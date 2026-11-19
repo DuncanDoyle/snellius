@@ -9,6 +9,8 @@ import { useShellExtension } from "./extension";
 export const INTRO_MS = 1500;
 const FADE_MS = 300;
 const SKIP_FADE_MS = 150;
+/** Keys a skip uses up, because they would otherwise scroll the page or activate a control. */
+const CONSUMED_KEYS = new Set([" ", "Enter"]);
 
 const draw = keyframes`from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; }`;
 // A line stays hidden until it draws, or its round cap shows as a dot.
@@ -99,9 +101,12 @@ export function SignInIntro() {
     if (phase === "done") return;
     const timer = setTimeout(() => setPhase("done"), phase === "playing" ? INTRO_MS : SKIP_FADE_MS);
     if (phase === "leaving") return () => clearTimeout(timer);
-    // The skipping key is used up, so Space does not also scroll the page; browser shortcuts still work.
+    // Space and Enter are used up so they don't also scroll or activate; every other key, Tab included, keeps its effect.
     const skip = (e: Event) => {
-      if (e instanceof KeyboardEvent && !(e.ctrlKey || e.metaKey || e.altKey)) e.preventDefault();
+      if (e instanceof KeyboardEvent && CONSUMED_KEYS.has(e.key) && !(e.ctrlKey || e.metaKey || e.altKey)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
       setPhase("leaving");
     };
     window.addEventListener("pointerdown", skip, true);
