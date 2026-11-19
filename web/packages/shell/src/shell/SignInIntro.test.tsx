@@ -70,8 +70,8 @@ it("skips the animation under reduced motion, still removing the marker", () => 
 });
 
 it("ends by itself after the intro and leaves focus on the page", () => {
-  // The intro stays short: a longer one would add time to every sign-in.
-  expect(INTRO_MS).toBeLessThanOrEqual(1500);
+  // The intro stays short, the finished logo held briefly: a longer one would add time to every sign-in.
+  expect(INTRO_MS).toBeLessThanOrEqual(2250);
   vi.useFakeTimers();
   renderWithTheme(<SignInIntro />);
   expect(screen.getByTestId("signin-intro")).toBeInTheDocument();

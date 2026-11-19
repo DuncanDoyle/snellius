@@ -5,8 +5,11 @@ import { takeSignedInMarker } from "../auth/signedIn";
 import { useShellExtension } from "./extension";
 
 // region Styles
-/** Full length of the intro; the overlay fades out over its last FADE_MS. */
-export const INTRO_MS = 1500;
+/**
+ * Full length of the intro; the overlay fades out over its last FADE_MS. The drawing ends at about
+ * 1.27 s, so the finished logo holds for about 0.7 s before the fade.
+ */
+export const INTRO_MS = 2250;
 const FADE_MS = 300;
 const SKIP_FADE_MS = 150;
 /** Keys a skip uses up, because they would otherwise scroll the page or activate a control. */
