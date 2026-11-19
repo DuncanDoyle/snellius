@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { columnCopy, listCopy } from "../packages/shell/src/copy/explorer";
+import { stateLabel } from "../packages/shell/src/health/state";
 
 // Runs against a secure-mode install (test/e2e/setup.sh): alice may read HTTPRoutes in shop, bob has no RBAC.
 test.skip(process.env.SECURE !== "1", "needs SECURE=1 and a secure-mode install");
@@ -22,9 +23,18 @@ test("alice's route list shows the routes she can read, with both signals", asyn
   await expect(table.getByRole("columnheader", { name: columnCopy.configuration })).toBeVisible();
   await expect(table.getByRole("columnheader", { name: columnCopy.trafficPath })).toBeVisible();
   const rows = table.locator("tbody > tr[data-row]");
-  await expect(rows.filter({ hasText: "shop/good" })).toHaveCount(1);
-  // Every row is a shop route: nothing from a namespace she cannot read.
-  await expect(rows.filter({ hasNotText: "shop/" })).toHaveCount(0);
+  const name = (part: string) => `td[data-col="name"] [data-part="${part}"]`;
+  // Every route-name cell is a shop route: nothing from a namespace she cannot read.
+  const count = await rows.count();
+  expect(count).toBeGreaterThan(0);
+  await expect(rows.locator(name("namespace"))).toHaveText(Array<string>(count).fill("shop/"));
+  const good = rows.filter({ has: page.locator(name("name"), { hasText: /^good$/ }) });
+  await expect(good).toHaveCount(1);
+  // Both signals render a state on her row, not only their headers.
+  const states = (["healthy", "warning", "error", "unknown"] as const).map(stateLabel);
+  const state = new RegExp(`^(${states.join("|")})$`);
+  await expect(good.locator('td[data-col="config"]')).toHaveText(state);
+  await expect(good.locator('td[data-col="path"]')).toHaveText(state);
 });
 
 test("bob's route list is empty and his install shows its details hidden", async ({ page, baseURL }) => {
