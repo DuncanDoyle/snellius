@@ -482,7 +482,10 @@ func TestMixedTrafficSharesLimit(t *testing.T) {
 		case <-done:
 			finished = true
 		default:
-			clk.Step(10 * time.Millisecond)
+			// Advance only while a SAR waits for a token, so cached results never age past their TTL.
+			if clk.HasWaiters() {
+				clk.Step(10 * time.Millisecond)
+			}
 			runtime.Gosched()
 		}
 	}
