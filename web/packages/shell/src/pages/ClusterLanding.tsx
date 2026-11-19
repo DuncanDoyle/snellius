@@ -2,6 +2,7 @@ import { css, type SerializedStyles, useTheme } from "@emotion/react";
 import styled from "@emotion/styled";
 import { Link } from "react-router-dom";
 import { useNow } from "../api/clock";
+import { ApiErrorState } from "../api/errorState";
 import { confirmedOrComputed } from "../api/freshness";
 import { isStale, useInstalls } from "../api/hooks";
 import type { InstallSummary } from "../api/types";
@@ -109,9 +110,7 @@ export function ClusterLanding({ stylesOverride }: ClusterLandingProps = {}) {
   const vocab = useVocabulary();
   // After a first load, a failed poll keeps the cards under a notice, with their health shown unknown.
   if (!data) {
-    if (error?.status === 503) return <PageState kind="connecting" title={vocab.connecting} message={error.message} />;
-    if (error)
-      return <PageState kind="error" title="Cannot load installs" message={error.message} copyText={error.message} />;
+    if (error) return <ApiErrorState error={error} title="Cannot load installs" />;
     return <PageState kind="loading" title="Loading installs…" />;
   }
   return (

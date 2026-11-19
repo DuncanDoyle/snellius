@@ -25,9 +25,9 @@ import (
 // grouped view (view=groups, design §17.1) takes only groupsParams.
 var (
 	findingsFilters = []string{"severity", "code", "kind", "namespace", "group", "q"}
-	findingsParams  = append(slices.Clone(findingsFilters), "sort", "limit", "cursor", "view")
-	findingsSingle  = []string{"group", "q", "sort", "limit", "cursor", "view"}
-	groupsParams    = []string{"severity", "code", "q", "limit", "cursor", "view"}
+	findingsParams  = append(slices.Clone(findingsFilters), scopeParam, "sort", "limit", "cursor", "view")
+	findingsSingle  = []string{scopeParam, "group", "q", "sort", "limit", "cursor", "view"}
+	groupsParams    = []string{"severity", "code", scopeParam, "q", "limit", "cursor", "view"}
 )
 
 // viewGroups is the view parameter of the grouped findings view.
@@ -47,11 +47,13 @@ type findingsQuery struct {
 	codes      []string
 	kinds      []objects.GroupKind
 	namespaces []string
-	group, q   string // q is lower-cased
-	groups     bool   // view=groups
-	sort       diagnose.Sort
-	limit      int
-	cursor     string
+	// scope is the namespace scope (D-100 item 8); nil is every namespace.
+	scope    []string
+	group, q string // q is lower-cased
+	groups   bool   // view=groups
+	sort     diagnose.Sort
+	limit    int
+	cursor   string
 }
 
 // parseFindingsQuery parses r's query; any bad parameter or value is
@@ -77,9 +79,12 @@ func parseFindingsQuery(r *http.Request) (findingsQuery, error) {
 		q.groups = true
 		for _, name := range slices.Sorted(maps.Keys(vals)) {
 			if !slices.Contains(groupsParams, name) {
-				return q, badParam("parameter %q: the groups view takes severity, code, q, limit and cursor", name)
+				return q, badParam("parameter %q: the groups view takes severity, code, namespaces, q, limit and cursor", name)
 			}
 		}
+	}
+	if q.scope, err = parseScope(vals); err != nil {
+		return q, err
 	}
 	for _, v := range vals["severity"] {
 		s := health.Severity(v)
@@ -136,6 +141,9 @@ func parseFindingsQuery(r *http.Request) (findingsQuery, error) {
 // match reports whether f passes q's filters for the caller of v; q sees only
 // what f's row shows (design §14 rule 17). t is f's lowered text, nil without q.
 func (q *findingsQuery) match(v *view, f *health.Finding, t *diagnose.Text) bool {
+	if !findingInScope(f, q.scope) {
+		return false
+	}
 	if len(q.severities) > 0 && !slices.Contains(q.severities, f.Severity) ||
 		len(q.codes) > 0 && !slices.Contains(q.codes, f.Code) ||
 		q.group != "" && f.Group != q.group {
@@ -167,13 +175,14 @@ func restrictedDetail(f *health.Finding) string {
 }
 
 // findingRow is f on the wire for the caller of v, restricted per D-013 and
-// design §14 rules 11 and 12. Times are UTC.
-func findingRow(v *view, l linker, f *health.Finding) FindingRow {
+// design §14 rules 11 and 12. Times are UTC. named checks the resource as a
+// detail page's subject, else as a list row (D-100); evidence stays a population check.
+func findingRow(v *view, l linker, f *health.Finding, named bool) FindingRow {
 	row := FindingRow{ID: f.ID, Code: f.Code, Slug: f.Slug, Severity: f.Severity, Group: f.Group}
 	if f.Resource != nil {
-		lr := l.linked(*f.Resource)
+		lr := LinkedRef{Ref: *f.Resource, Link: l.linkWith(*f.Resource, named)}
 		row.Resource = &lr
-		if !v.can(*f.Resource) {
+		if !l.check(named)(*f.Resource) {
 			row.Restricted = true
 			return row
 		}
@@ -207,7 +216,9 @@ func (h *handler) findings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	v, fs, ix := h.view(r), i.Health.Findings, diagnosis(i).Index
+	v := h.view(r)
+	fs, d := v.findingsIn(i, q.scope, q.groups)
+	ix := d.Index
 	match := func(k int) bool { return q.match(v, &fs[k], nil) }
 	if q.q != "" {
 		// q asks about every hidden-identity row, like a route list.
@@ -217,7 +228,7 @@ func (h *handler) findings(w http.ResponseWriter, r *http.Request) {
 		match = func(k int) bool { return q.match(v, &fs[k], &ts[k]) }
 	}
 	if q.groups {
-		h.findingGroups(w, p, i, v, &q, match)
+		h.findingGroups(w, p, i, v, d, fs, &q, match)
 		return
 	}
 	pg, err := ix.Page(fs, i.Resolved.ID(), q.sort, q.limit, q.cursor, match)
@@ -228,17 +239,17 @@ func (h *handler) findings(w http.ResponseWriter, r *http.Request) {
 	l := h.linker(v, p, i, nil, nil)
 	items := make([]FindingRow, 0, len(pg.Items))
 	for _, k := range pg.Items {
-		items = append(items, findingRow(v, l, &fs[k]))
+		items = append(items, findingRow(v, l, &fs[k], false))
 	}
 	writeJSON(w, Page[FindingRow]{Install: i.Resolved.ID(), Items: items, Total: pg.Total, Next: pg.Next, Prev: pg.Prev,
 		CollectedAt: wireTime(p.ConfirmedAt)})
 }
 
-// findingGroups writes the page of i's groups for q (design §5.2, §17.1): a group matches
+// findingGroups writes the page of i's groups in d over fs for q (design §5.2, §17.1): a group matches
 // when one member passes match (R98). A group whose cause the caller cannot view matches q
 // by its members' identity only (§14 rule 17).
-func (h *handler) findingGroups(w http.ResponseWriter, p *engine.Published, i *engine.InstallModel, v *view, q *findingsQuery, match func(k int) bool) {
-	d, fs := diagnosis(i), i.Health.Findings
+func (h *handler) findingGroups(w http.ResponseWriter, p *engine.Published, i *engine.InstallModel, v *view, d *diagnose.Diagnosis, fs []health.Finding,
+	q *findingsQuery, match func(k int) bool) {
 	// d.Rank lists each group's members in group order, so a group's first is its top member.
 	tops := make([]int, len(d.Groups))
 	for k, off := 0, 0; k < len(d.Groups); k++ {
@@ -285,16 +296,19 @@ func (h *handler) findingDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	d, fs := diagnosis(i), i.Health.Findings
-	k, ok := d.Index.Find(fs, r.PathValue("findingId"))
+	v := h.view(r)
+	d, fs, k, ok := v.findFinding(i, r.PathValue("findingId"))
 	if !ok {
+		// A finding the caller is not shown gets the answer of an absent one.
 		writeErr(w, http.StatusNotFound, "finding "+r.PathValue("findingId")+" not found")
 		return
 	}
-	v := h.view(r)
 	l := h.linker(v, p, i, nil, nil)
 	f := &fs[k]
-	row := findingRow(v, l, f)
+	row := findingRow(v, l, f, true)
+	if row.Resource != nil {
+		noteSubject(r, row.Resource.Ref)
+	}
 	var refs []objects.Ref
 	if !row.Restricted {
 		refs = affectedOf(v, d, f.Group)
@@ -319,6 +333,35 @@ func (h *handler) findingDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	out.Affected = Page[LinkedRef]{Install: i.Resolved.ID(), Items: items, Total: len(refs), Next: affected.next, Prev: affected.prev, CollectedAt: at}
 	writeJSON(w, out)
+}
+
+// findFinding returns the diagnosis and findings the caller of v sees finding
+// id in, and its index. When v projects, the finding must be shown with its
+// resource read by name and its basis as a population; one shown only that way
+// stands alone, ungrouped.
+func (v *view) findFinding(i *engine.InstallModel, id string) (*diagnose.Diagnosis, []health.Finding, int, bool) {
+	if !v.projects() {
+		d, fs := v.diagnosis(i), v.report(i).Findings
+		k, ok := d.Index.Find(fs, id)
+		return d, fs, k, ok
+	}
+	k, ok := diagnosis(i).Index.Find(i.Health.Findings, id)
+	if !ok {
+		return nil, nil, 0, false
+	}
+	f := i.Health.Findings[k]
+	rd := health.Readable(v)
+	if f.Resource != nil {
+		rd = namedSubject{v: v, subject: *f.Resource}
+	}
+	if !f.ShownTo(rd) {
+		return nil, nil, 0, false
+	}
+	d, fs := v.diagnosis(i), v.report(i).Findings
+	if k, ok := d.Index.Find(fs, id); ok {
+		return d, fs, k, true
+	}
+	return d, health.Project(health.Report{Findings: []health.Finding{f}}, rd).Findings, 0, true
 }
 
 // wireFix is fx on the wire; nil when fx is nil or names an object the caller

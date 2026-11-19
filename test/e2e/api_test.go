@@ -249,7 +249,13 @@ func kubectl(t *testing.T, v any, args ...string) {
 // kubectlRun runs kubectl against the harness cluster and returns its stdout.
 func kubectlRun(t *testing.T, args ...string) ([]byte, error) {
 	t.Helper()
-	return exec.Command("kubectl", append([]string{"--kubeconfig", harnessKubeconfig(t)}, args...)...).Output()
+	return kubectlRunContext(context.Background(), t, args...)
+}
+
+// kubectlRunContext is kubectlRun, killed when ctx ends.
+func kubectlRunContext(ctx context.Context, t *testing.T, args ...string) ([]byte, error) {
+	t.Helper()
+	return exec.CommandContext(ctx, "kubectl", append([]string{"--kubeconfig", harnessKubeconfig(t)}, args...)...).Output()
 }
 
 // kcond is a condition as the controller wrote it; lastTransitionTime is left out.

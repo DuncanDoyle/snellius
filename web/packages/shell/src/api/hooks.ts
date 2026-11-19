@@ -7,6 +7,7 @@ import type {
   HealthReport,
   InstallSummary,
   MetaResponse,
+  NamespacesResponse,
   OverviewResponse,
   RawHealthReport,
   Ref,
@@ -18,15 +19,31 @@ export const POLL_MS = 5000;
 /**
  * Error retry for every request. SWR skips interval polls while a key holds an error, so this is what keeps the
  * 5 s rhythm through an outage: one retry per interval, no backoff, no jitter, no cap. A 404 retries too, so a page
- * notices the object appear. Only a 400 stops: a bad request stays bad for that URL (a rejected cursor stays rejected).
+ * notices the object appear. A 400 or 401 stops. A hidden tab holds the retry until it is visible again.
  */
 export const retryEveryPoll: NonNullable<SWRConfiguration["onErrorRetry"]> = (err, _key, _config, revalidate, opts) => {
-  if (err instanceof ApiError && err.status === 400) return;
-  setTimeout(() => revalidate(opts), POLL_MS);
+  // A 400 stays bad for that URL; a 401 needs a sign-in, not another request.
+  if (err instanceof ApiError && (err.status === 400 || err.status === 401)) return;
+  setTimeout(() => whenVisible(() => revalidate(opts)), POLL_MS);
 };
 
+/** Runs fn now if the tab is visible, else once it next becomes visible. */
+function whenVisible(fn: () => void) {
+  if (document.visibilityState !== "hidden") return fn();
+  const on = () => {
+    if (document.visibilityState === "hidden") return;
+    document.removeEventListener("visibilitychange", on);
+    fn();
+  };
+  document.addEventListener("visibilitychange", on);
+}
+
 // No keepPreviousData: on an install switch it would show the old install's data under the new URL.
-export const live: SWRConfiguration = { refreshInterval: POLL_MS, onErrorRetry: retryEveryPoll };
+export const live: SWRConfiguration = {
+  refreshInterval: POLL_MS,
+  refreshWhenHidden: false,
+  onErrorRetry: retryEveryPoll,
+};
 
 /** True when data collected at collectedAt is older than two poll intervals; pass useNow() as now. */
 export function isStale(collectedAt: string, now: number): boolean {
@@ -62,6 +79,13 @@ export const installApi = (id: string) => `/api/v1/installs/${encodeURIComponent
 /** GET /api/v1/installs/{id}/overview. */
 export function useOverview(id: string) {
   return useSWR<OverviewResponse, ApiError>(`${installApi(id)}/overview`, apiFetch, live);
+}
+
+/** GET /api/v1/installs/{id}/namespaces, the namespace scope's choices; fetched only while enabled, not polled. */
+export function useNamespaces(id: string, enabled: boolean) {
+  return useSWR<NamespacesResponse, ApiError>(enabled && id ? `${installApi(id)}/namespaces` : null, apiFetch, {
+    onErrorRetry: retryEveryPoll,
+  });
 }
 
 /** GET /api/v1/installs/{id}/health. */

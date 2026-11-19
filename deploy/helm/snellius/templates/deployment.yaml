@@ -9,8 +9,25 @@ spec:
     matchLabels: {{- include "snellius.selector" . | nindent 6 }}
   template:
     metadata:
-      labels: {{- include "snellius.selector" . | nindent 8 }}
+      labels:
+        {{- include "snellius.selector" . | nindent 8 }}
+        {{- if eq (include "snellius.authMode" .) "local" }}
+        istio.io/dataplane-mode: none
+        {{- end }}
+      {{- if eq (include "snellius.authMode" .) "local" }}
+      annotations:
+        sidecar.istio.io/inject: "false"
+      {{- end }}
     spec:
+      {{- include "snellius.requireOIDC" . }}
+      {{- $secure := eq (include "snellius.authMode" .) "secure" }}
+      {{- $secretName := include "snellius.secretRef" (dict "root" . "name" "clientSecret" "field" "existingSecret") }}
+      {{- $secretKey := include "snellius.secretRef" (dict "root" . "name" "clientSecret" "field" "key") | default "client-secret" }}
+      {{- $caName := include "snellius.secretRef" (dict "root" . "name" "ca" "field" "existingConfigMap") }}
+      {{- $caKey := include "snellius.secretRef" (dict "root" . "name" "ca" "field" "key") | default "ca.pem" }}
+      {{- with .Values.hostAliases }}
+      hostAliases: {{- toYaml . | nindent 8 }}
+      {{- end }}
       serviceAccountName: {{ include "snellius.sa" . }}
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -18,7 +35,57 @@ spec:
           image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-            - --listen=:8080
+            - --listen={{ if eq (include "snellius.authMode" .) "local" }}127.0.0.1:8080{{ else }}:8080{{ end }}
+            - --probe-listen=:8081
+            - --auth-mode={{ (include "snellius.authMode" .) }}
+            {{- with include "snellius.allowedHosts" . }}
+            - --allowed-hosts={{ . }}
+            {{- end }}
+            - --audit-levels={{ include "snellius.auditLevels" . }}
+            {{- if $secure }}
+            - --oidc-issuer-url={{ include "snellius.oidcValue" (dict "root" . "key" "issuerURL") }}
+            - --oidc-client-id={{ include "snellius.oidcValue" (dict "root" . "key" "clientID") }}
+            - --oidc-redirect-url={{ include "snellius.oidcValue" (dict "root" . "key" "redirectURL") }}
+            {{- with include "snellius.oidcScopes" . }}
+            - --oidc-scopes={{ . }}
+            {{- end }}
+            {{- if $secretName }}
+            - --oidc-client-secret-file=/etc/snellius/oidc/secret/client-secret
+            {{- end }}
+            {{- if $caName }}
+            - --oidc-ca-file=/etc/snellius/oidc/ca/ca.pem
+            {{- end }}
+            {{- with include "snellius.sessionValue" (dict "root" . "key" "idle") }}
+            - --session-idle={{ . }}
+            {{- end }}
+            {{- with include "snellius.sessionValue" (dict "root" . "key" "absolute") }}
+            - --session-absolute={{ . }}
+            {{- end }}
+            {{- with include "snellius.sessionValue" (dict "root" . "key" "max") }}
+            - --session-max={{ . }}
+            {{- end }}
+            {{- with include "snellius.authzValue" (dict "root" . "key" "cacheTTL") }}
+            - --authz-cache-ttl={{ . }}
+            {{- end }}
+            {{- if eq (include "snellius.authzValue" (dict "root" . "key" "namedGetScan")) "true" }}
+            - --authz-named-get-scan
+            {{- end }}
+            {{- with include "snellius.authzValue" (dict "root" . "key" "maxInFlight") }}
+            - --authz-max-in-flight={{ . }}
+            {{- end }}
+            {{- with include "snellius.authzValue" (dict "root" . "key" "rate") }}
+            - --authz-rate={{ . }}
+            {{- end }}
+            {{- with include "snellius.authzValue" (dict "root" . "key" "burst") }}
+            - --authz-burst={{ . }}
+            {{- end }}
+            {{- if eq (include "snellius.cookieSecure" .) "false" }}
+            - --cookie-secure=false
+            {{- end }}
+            {{- with include "snellius.trustedProxyCIDRs" . }}
+            - --trusted-proxy-cidrs={{ . }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.install.pin }}
             - --install={{ . }}
             {{- end }}
@@ -46,8 +113,14 @@ spec:
             {{- range .Values.extraArgs }}
             - {{ . | quote }}
             {{- end }}
-          {{- if or (dig "limits" "memory" "" .Values.resources) .Values.memoryLimit .Values.extraEnv }}
           env:
+            # The binary compares these to refuse local mode on the host network.
+            - name: POD_IP
+              valueFrom:
+                fieldRef: { fieldPath: status.podIP }
+            - name: HOST_IP
+              valueFrom:
+                fieldRef: { fieldPath: status.hostIP }
             {{- if dig "limits" "memory" "" .Values.resources }}
             # The container's memory limit in bytes; the binary sets the Go memory target to 90 % of it (D-025).
             - name: SNELLIUS_MEMORY_LIMIT
@@ -61,19 +134,45 @@ spec:
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- end }}
           ports:
             - { name: http, containerPort: 8080 }
-          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 5 }
-          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+            - { name: probe, containerPort: 8081 }
+          readinessProbe: { httpGet: { path: /readyz, port: probe }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: probe }, periodSeconds: 10 }
           resources: {{- toYaml .Values.resources | nindent 12 }}
           securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
-          {{- with .Values.extraVolumeMounts }}
-          volumeMounts: {{- toYaml . | nindent 12 }}
+          {{- if or .Values.extraVolumeMounts (and $secure (or $secretName $caName)) }}
+          volumeMounts:
+            {{- if and $secure $secretName }}
+            - { name: oidc-client-secret, mountPath: /etc/snellius/oidc/secret, readOnly: true }
+            {{- end }}
+            {{- if and $secure $caName }}
+            - { name: oidc-ca, mountPath: /etc/snellius/oidc/ca, readOnly: true }
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
         {{- with .Values.extraContainers }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.extraVolumes }}
-      volumes: {{- toYaml . | nindent 8 }}
+      {{- if or .Values.extraVolumes (and $secure (or $secretName $caName)) }}
+      volumes:
+        {{- if and $secure $secretName }}
+        - name: oidc-client-secret
+          secret:
+            secretName: {{ $secretName }}
+            items:
+              - { key: {{ $secretKey }}, path: client-secret }
+        {{- end }}
+        {{- if and $secure $caName }}
+        - name: oidc-ca
+          configMap:
+            name: {{ $caName }}
+            items:
+              - { key: {{ $caKey }}, path: ca.pem }
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}

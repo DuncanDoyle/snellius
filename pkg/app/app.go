@@ -6,10 +6,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,9 +24,14 @@ import (
 	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/flowcontrol"
 	"k8s.io/utils/clock"
 
 	"github.com/DuncanDoyle/snellius/pkg/api"
+	"github.com/DuncanDoyle/snellius/pkg/audit"
+	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
+	"github.com/DuncanDoyle/snellius/pkg/auth/sar"
+	"github.com/DuncanDoyle/snellius/pkg/auth/session"
 	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/collect"
 	"github.com/DuncanDoyle/snellius/pkg/ctrllogs"
@@ -35,15 +43,44 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/health"
 	"github.com/DuncanDoyle/snellius/pkg/install"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
+	"github.com/DuncanDoyle/snellius/pkg/limits"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
+	"github.com/DuncanDoyle/snellius/pkg/obs"
 	"github.com/DuncanDoyle/snellius/pkg/proxystats"
 	"github.com/DuncanDoyle/snellius/pkg/setup"
 )
 
 // Options are the runtime settings.
 type Options struct {
-	// Listen is the HTTP address; empty means :8080 in-cluster and 127.0.0.1:8080 locally.
+	// Listen is the HTTP address; empty means 127.0.0.1:8080, or :8080 in-cluster in secure mode.
 	Listen string
+	// AuthMode is "local" (default: loopback only, Host-guarded) or "secure".
+	AuthMode string
+	// OIDC configures sign-in in secure mode; local mode ignores it.
+	OIDC oidc.Config
+	// CookieInsecure drops the Secure attribute from sign-in cookies, for plain-HTTP testing only.
+	CookieInsecure bool
+	// SessionIdle and SessionAbsolute bound a secure-mode session; zero means 30 min and 8 h.
+	SessionIdle, SessionAbsolute time.Duration
+	// SessionMax is the most sessions held at once; zero means 1,000.
+	SessionMax int
+	// AuthzCacheTTL bounds every cached allowed permission check in secure mode; zero means 60 s.
+	AuthzCacheTTL time.Duration
+	// AuthzNamedGetScan adds a named get to secure-mode list checks the list denies (D-100).
+	AuthzNamedGetScan bool
+	// AuthzMaxInFlight, AuthzRate and AuthzBurst bound the secure-mode SARs
+	// across viewers: at once, per second, and at once above the rate (D-100). Zero means the sar default.
+	AuthzMaxInFlight, AuthzRate, AuthzBurst int
+	// TrustedProxyCIDRs are the peers whose X-Request-Id and X-Forwarded-For are trusted.
+	TrustedProxyCIDRs []netip.Prefix
+	// AllowedHosts are extra Host names local mode serves, besides loopback.
+	AllowedHosts []string
+	// AuditLevels is the comma list of audit levels to write; empty means audit.DefaultLevels.
+	AuditLevels string
+	// AuditOut receives the audit JSON lines; nil means stdout.
+	AuditOut io.Writer
+	// ProbeListen is the health-probe address; empty means :8081 in-cluster and 127.0.0.1:8081 locally.
+	ProbeListen string
 	// Pinned restricts the UI to one install: its ID, or namespace/name (D-016).
 	Pinned string
 	// PollInterval is the maximum time between model recomputes: the safety
@@ -212,21 +249,41 @@ type Clients struct {
 	InCluster bool
 	// Scraper overrides the metrics scraper InCluster selects; nil keeps it.
 	Scraper ctrlmetrics.Scraper
+	// SAR sends SubjectAccessReviews without a client-side rate limit, so the
+	// authoriser's own limit is the only one; nil means Kube.
+	SAR kubernetes.Interface
 }
 
 // App is a built, not yet started, backend.
 type App struct {
 	Engine  *engine.Engine
 	Handler http.Handler
-	cfg     engine.Config
-	cache   *cache.Cache
-	kinds   *kinds.Monitor
-	opts    Options
+	// Metrics is served on the probe listener.
+	Metrics *obs.Registry
+	// Audit writes the audit records.
+	Audit *audit.Logger
+	// probe replaces the probe handler; tests only.
+	probe http.Handler
+	cfg   engine.Config
+	cache *cache.Cache
+	kinds *kinds.Monitor
+	opts  Options
+	// authz is the authoriser the handler was built with.
+	authz api.Authorizer
 	// reg starts the extension collectors; packs runs the pack collectors; collected is their store.
 	reg, packs *extension.Registry
 	collectors []extension.Collector
 	collected  *collect.Store
 	deps       extension.Deps
+	// oidc discovers the issuer in secure mode; nil when the configuration is invalid (oidcErr).
+	// flow serves /auth/login and /auth/callback; nil when oidc is.
+	oidc    *oidc.Provider
+	oidcErr error
+	flow    *oidc.Flow
+	// sessions holds secure-mode sessions; nil in local mode.
+	sessions *session.Store
+	// sar is the secure-mode authoriser whose cache Start sweeps; nil otherwise.
+	sar *sar.Authorizer
 	// discovered is closed after the first model with an install over a settled cache.
 	discovered chan struct{}
 }
@@ -263,6 +320,14 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		}
 		crds.observe(m.Snapshot.CRDs)
 	}
+	metrics := obs.NewRegistry()
+	// One recorder serves the compute bounds and the check cap, on the engine's clock.
+	limitNow := cfg.Now
+	if limitNow == nil && cfg.Clock != nil {
+		limitNow = cfg.Clock.Now
+	}
+	lim := limits.New(metrics, cfg.Logger, limitNow)
+	cfg.Limits = lim
 	eng := engine.New(cfg)
 	env := extension.CollectorEnv{Kube: c.Kube, InCluster: c.InCluster, Scraper: c.Scraper, Interval: o.MetricsInterval,
 		MaxAge: setup.MetricsMaxAge(o.MetricsInterval), Installs: eng.Installs, Current: eng.Current, Discovered: discovered,
@@ -271,7 +336,48 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		env.Clock = o.Clock
 	}
 	packCols := reg.PackCollectors(env)
-	deps := extension.Deps{Current: eng.Current, Authorizer: reg.Authorizer, Capabilities: reg.CapabilityStates, Logger: slog.Default()}
+	levels, err := audit.ParseLevels(o.AuditLevels)
+	if err != nil {
+		return nil, err
+	}
+	auditOut := o.AuditOut
+	if auditOut == nil {
+		auditOut = os.Stdout
+	}
+	mode := o.AuthMode
+	if mode == "" {
+		mode = ModeLocal
+	}
+	metrics.Gauge("snellius_auth_mode", "Authentication mode of this process; 1 for the active mode.", "mode").Set(1, mode)
+	auditOpts := []audit.Option{audit.WithServer(serverName())}
+	if o.Clock != nil {
+		auditOpts = append(auditOpts, audit.WithClock(o.Clock))
+	}
+	auditLog := audit.New(auditOut, levels, metrics, auditOpts...)
+	// Extensions get the same authoriser as the core handler. In secure mode
+	// SAR always decides, and a registry authoriser can only narrow it.
+	authz := reg.Authorizer
+	var sarAuthz *sar.Authorizer
+	if o.AuthMode == ModeSecure {
+		var clk clock.WithTicker = clock.RealClock{}
+		if o.Clock != nil {
+			clk = o.Clock
+		}
+		sarKube := c.SAR
+		if sarKube == nil {
+			sarKube = c.Kube
+		}
+		sarAuthz = sar.New(sar.Options{Checker: sar.NewKubeChecker(sarKube), Kinds: newSARKinds(cfg.Served, mon.Catalog),
+			AllowTTL: o.AuthzCacheTTL, Clock: clk, Metrics: metrics, NamedGetScan: o.AuthzNamedGetScan,
+			MaxInFlight: o.AuthzMaxInFlight, Rate: o.AuthzRate, Burst: o.AuthzBurst})
+		if noAuthorizer(authz) {
+			authz = sarAuthz
+		} else {
+			authz = api.Narrowed{Base: sarAuthz, Policy: authz}
+		}
+	}
+	deps := extension.Deps{Current: eng.Current, Authorizer: authz, Capabilities: reg.CapabilityStates, Logger: slog.Default(),
+		View: func(r *http.Request) api.Viewer { return api.ViewerOf(r, authz) }}
 	mounts, err := reg.Mounts(deps)
 	if err != nil {
 		return nil, err
@@ -300,10 +406,28 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 		}
 		scoped = endpoints.Bounded(cache.NewScopedReader(c.Kube, clk), endpoints.DefaultBounds, clk)
 	}
-	h := api.NewHandler(eng, o.UI, reg.Authorizer, api.WithExtMounts(mounts...), api.WithCoreCapabilities(core), api.WithCapabilitySources(reg.CapabilityStates),
+	var prov *oidc.Provider
+	var flow *oidc.Flow
+	var oidcErr error
+	var sessions *session.Store
+	if o.AuthMode == ModeSecure {
+		sessions, prov, flow, oidcErr = buildSignIn(c.Kube, o, auditLog, metrics)
+	}
+	hopts := []api.HandlerOption{api.WithExtMounts(mounts...), api.WithCoreCapabilities(core), api.WithCapabilitySources(reg.CapabilityStates),
 		api.WithCommands(reg.Commands), api.WithInstallCommands(commands), api.WithInstallFeatures(reg.FeaturesFor),
-		api.WithPacks(reg.Packs()...), api.WithInstallKinds(reg.KindAppliesTo), api.WithScopedReader(scoped), api.WithBackendConsumers(consumers))
-	return &App{Engine: eng, Handler: h, cfg: cfg, cache: ca, kinds: mon, opts: o, discovered: discovered, reg: reg,
+		api.WithPacks(reg.Packs()...), api.WithInstallKinds(reg.KindAppliesTo), api.WithScopedReader(scoped), api.WithBackendConsumers(consumers)}
+	if o.AuthMode == ModeSecure {
+		// The commit wrapper compares allow expiries on the clock that stamped them.
+		var clk clock.PassiveClock = clock.RealClock{}
+		if o.Clock != nil {
+			clk = o.Clock
+		}
+		hopts = append(hopts, api.WithSecureMode(), api.WithSessionGate(sessions.Middleware), api.WithCommitCheck(sessions.StillSignedIn),
+			api.WithAuthzAudit(authzAuditor(auditLog)), api.WithCheckCapHit(capHitter(lim, eng.Installs)), api.WithCommitClock(clk.Now),
+			api.WithRequestAudit(requestAuditor(auditLog), auditLog.Enabled(audit.LevelDisclosure)))
+	}
+	h := api.NewHandler(eng, o.UI, authz, hopts...)
+	return &App{Engine: eng, oidc: prov, flow: flow, oidcErr: oidcErr, sessions: sessions, sar: sarAuthz, Handler: h, Metrics: metrics, Audit: auditLog, cfg: cfg, cache: ca, kinds: mon, opts: o, authz: authz, discovered: discovered, reg: reg,
 		packs: extension.NewCore(extension.WithCollectors(packCols...)), collectors: packCols, collected: collected, deps: deps}, nil
 }
 
@@ -317,6 +441,52 @@ func (a *App) Start(ctx context.Context) {
 	a.reg.RunCollectors(ctx, a.deps, a.collected)
 	go a.Engine.Run(ctx, a.opts.PollInterval)
 	go a.kinds.Run(ctx, a.opts.KindsInterval)
+	if a.sessions != nil {
+		go a.sessions.Run(ctx)
+	}
+	if a.sar != nil {
+		go a.sar.Run(ctx)
+	}
+}
+
+// authzAuditor writes a security record for each request answered 503
+// authz-unavailable or authz-busy, with the request's session and Kubernetes identity.
+func authzAuditor(l *audit.Logger) func(r *http.Request, reason string) {
+	return func(r *http.Request, reason string) {
+		rec := audit.FromRequest(r)
+		rec.Level, rec.Action, rec.Outcome, rec.Reason = audit.LevelSecurity, "authz-unavailable", "failure", reason
+		if info, ok := session.FromContext(r.Context()); ok {
+			rec.User = audit.Identity{Issuer: info.Issuer, Subject: info.Subject}
+			rec.Kube = audit.Kube{Username: info.Identity.Username, Groups: info.Identity.Groups}
+			rec.Session = info.AuditID
+		}
+		l.Emit(r.Context(), rec)
+	}
+}
+
+// capHitter records a request that passed the check cap on lim, with its
+// session's audit ID and the install its path names.
+func capHitter(lim *limits.Recorder, installs func() []install.Install) func(*http.Request) {
+	return func(r *http.Request) {
+		info, _ := session.FromContext(r.Context())
+		lim.Hit(limits.AuthzChecks, requestInstall(r, installs), info.AuditID)
+	}
+}
+
+// requestInstall is the install r's path names under /api/v1/installs/, or ""
+// when it names none or one installs does not list.
+func requestInstall(r *http.Request, installs func() []install.Install) string {
+	rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/installs/")
+	if !ok {
+		return ""
+	}
+	id, _, _ := strings.Cut(rest, "/")
+	for _, i := range installs() {
+		if i.ID() == id {
+			return id
+		}
+	}
+	return ""
 }
 
 // Run is RunWith over extension.New(opts...): the core plus the kgateway pack.
@@ -332,11 +502,27 @@ func RunWith(ctx context.Context, kubeconfig string, o Options, reg *extension.R
 	if err != nil {
 		return err
 	}
+	if err := validateMode(o.AuthMode); err != nil {
+		return err
+	}
+	if o.AuthMode == "" {
+		o.AuthMode = ModeLocal
+	}
 	if o.Listen == "" {
 		o.Listen = "127.0.0.1:8080"
-		if inCluster {
+		if inCluster && o.AuthMode == ModeSecure {
 			o.Listen = ":8080"
 		}
+	}
+	if o.ProbeListen == "" {
+		o.ProbeListen = "127.0.0.1:8081"
+		if inCluster {
+			o.ProbeListen = ":8081"
+		}
+	}
+	podIP, hostIP := podHostIPs()
+	if err := checkListen(o.AuthMode, o.Listen, podIP, hostIP); err != nil {
+		return err
 	}
 	kube, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
@@ -350,43 +536,105 @@ func RunWith(ctx context.Context, kubeconfig string, o Options, reg *extension.R
 	if err != nil {
 		return err
 	}
-	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Metadata: md, InCluster: inCluster}, o, reg)
+	sarKube, err := kubernetes.NewForConfig(sarConfig(cfg))
 	if err != nil {
 		return err
 	}
-	return serve(ctx, a, o.Listen, func(addr net.Addr) { slog.Info("snellius listening", "addr", addr.String(), "inCluster", inCluster) })
+	a, err := Build(Clients{Dynamic: dyn, Kube: kube, Discovery: kube.Discovery(), Metadata: md, InCluster: inCluster, SAR: sarKube}, o, reg)
+	if err != nil {
+		return err
+	}
+	return serve(ctx, a, o.Listen, o.ProbeListen, func(main, probe net.Listener) {
+		slog.Info("snellius listening", "addr", main.Addr().String(), "probeAddr", probe.Addr().String(), "inCluster", inCluster)
+	})
 }
 
-// serve listens on addr, starts a and serves its handler until ctx is done,
-// then drains in-flight requests for up to 5 s. Everything it started is
-// cancelled when it returns; onListen, if set, receives the bound address.
-func serve(ctx context.Context, a *App, addr string, onListen func(net.Addr)) error {
+// serve listens on addr (the UI and API) and probeAddr (probes and metrics),
+// starts a and serves both until ctx is done, then drains in-flight requests
+// for up to drainTimeout, then closes what is left. Either listener failing to
+// bind or either server failing stops both. Everything it started is cancelled
+// when it returns; onListen, if set, receives the bound listeners.
+func serve(ctx context.Context, a *App, addr, probeAddr string, onListen func(main, probe net.Listener)) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
+	probeLn, err := net.Listen("tcp", probeAddr)
+	if err != nil {
+		_ = ln.Close()
+		return fmt.Errorf("listen probe: %w", err)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	a.Start(ctx)
-	srv := &http.Server{Handler: a.Handler, ReadHeaderTimeout: 10 * time.Second}
+	// The writer outlives the servers so records from draining requests are written.
+	auditCtx, stopAudit := context.WithCancel(context.Background())
+	auditDone := make(chan struct{})
+	go func() { a.Audit.Run(auditCtx); close(auditDone) }()
+	defer func() { stopAudit(); <-auditDone }()
+	a.Audit.Emit(ctx, audit.Record{Level: audit.LevelSecurity, Action: "startup", Outcome: "success", Mode: a.mode(), Listen: addr})
+	warnIgnoredOIDC(a.mode(), a.opts.OIDC)
+	if a.oidc != nil {
+		go a.oidc.Run(ctx)
+	}
+	if a.mode() == ModeLocal {
+		slog.Warn("local mode: anyone who can port-forward to Snellius sees everything it reads", "addr", ln.Addr().String())
+	}
+	probe := a.probe
+	if probe == nil {
+		probe = api.ProbeHandler(a.readiness(), a.Metrics)
+	}
+	srvs := []*http.Server{
+		{Handler: a.servedHandler(), ReadHeaderTimeout: 10 * time.Second},
+		{Handler: probe, ReadHeaderTimeout: 10 * time.Second},
+	}
 	drained := make(chan struct{})
 	go func() { //nolint:gosec // shutdown must outlive the cancelled serve context
 		defer close(drained)
 		<-ctx.Done()
-		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
+		sctx, scancel := context.WithTimeout(context.Background(), drainTimeout)
 		defer scancel()
-		_ = srv.Shutdown(sctx)
+		var wg sync.WaitGroup
+		for _, s := range srvs {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				// Past the drain timeout, close the connections still open.
+				if err := s.Shutdown(sctx); err != nil {
+					slog.Warn("drain timed out; closing open connections", "err", err)
+					_ = s.Close()
+				}
+			}()
+		}
+		wg.Wait()
 	}()
 	if onListen != nil {
-		onListen(ln.Addr())
+		onListen(ln, probeLn)
 	}
-	err = srv.Serve(ln)
-	cancel()
+	errs := make(chan error, len(srvs))
+	for i, l := range []net.Listener{ln, probeLn} {
+		go func() { errs <- srvs[i].Serve(l) }()
+	}
+	var failure error
+	for range srvs {
+		if err := <-errs; !errors.Is(err, http.ErrServerClosed) && failure == nil {
+			failure = err
+		}
+		cancel()
+	}
 	<-drained
-	if !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("serve: %w", err)
+	if failure != nil {
+		return fmt.Errorf("serve: %w", failure)
 	}
 	return nil
+}
+
+// sarConfig is a copy of cfg without client-go's default 5 QPS limit, for
+// SubjectAccessReviews only: --authz-rate and --authz-burst bound them (D-100).
+func sarConfig(cfg *rest.Config) *rest.Config {
+	c := rest.CopyConfig(cfg)
+	c.RateLimiter = flowcontrol.NewFakeAlwaysRateLimiter()
+	return c
 }
 
 // restConfig prefers the in-cluster config when kubeconfig is empty, then
@@ -436,4 +684,55 @@ func (r *crdRefresher) observe(crds []cache.CRDMeta) {
 			slog.Warn("re-listing served kinds after a CRD change failed", "err", err)
 		}
 	}()
+}
+
+// buildSignIn builds the session store, the OIDC provider and the sign-in flow.
+// The store always exists in secure mode; the error means sign-in is not configured.
+func buildSignIn(kube kubernetes.Interface, o Options, auditLog *audit.Logger, metrics *obs.Registry) (*session.Store, *oidc.Provider, *oidc.Flow, error) {
+	clk := clock.WithTicker(clock.RealClock{})
+	if o.Clock != nil {
+		clk = o.Clock
+	}
+	// The store and the flow refer to each other: the flow completes into the store, the store refreshes through the flow.
+	var prov *oidc.Provider
+	var flow *oidc.Flow
+	store := session.New(session.Options{Idle: o.SessionIdle, Absolute: o.SessionAbsolute, Max: o.SessionMax, Clock: clk, Audit: auditLog, Metrics: metrics,
+		CookieSecure: !o.CookieInsecure, ClientID: o.OIDC.ClientID, RedirectURL: o.OIDC.RedirectURL,
+		Refresher: refresherFunc(func(ctx context.Context, rt string) (oidc.Result, error) {
+			if flow == nil {
+				return oidc.Result{}, errors.New("sign-in is not configured")
+			}
+			return flow.Refresh(ctx, rt)
+		}),
+		EndSession: func() string {
+			if prov == nil {
+				return ""
+			}
+			if eps := prov.Endpoints(); eps != nil {
+				return eps.EndSessionEndpoint
+			}
+			return ""
+		}})
+	if err := o.OIDC.Validate(); err != nil {
+		return store, nil, nil, err
+	}
+	p, err := oidc.NewProvider(o.OIDC, clk)
+	if err != nil {
+		return store, nil, nil, err
+	}
+	f, err := oidc.NewFlow(oidc.FlowOptions{Config: o.OIDC, Provider: p, Reviewer: oidc.NewKubeReviewer(kube),
+		Completer: store, Audit: auditLog, Clock: clk, CookieSecure: !o.CookieInsecure})
+	if err != nil {
+		return store, nil, nil, err
+	}
+	prov, flow = p, f
+	return store, prov, flow, nil
+}
+
+// refresherFunc adapts a function to session.Refresher.
+type refresherFunc func(ctx context.Context, refreshToken string) (oidc.Result, error)
+
+// Refresh implements session.Refresher.
+func (f refresherFunc) Refresh(ctx context.Context, refreshToken string) (oidc.Result, error) {
+	return f(ctx, refreshToken)
 }

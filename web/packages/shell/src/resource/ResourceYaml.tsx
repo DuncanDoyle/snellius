@@ -2,9 +2,9 @@ import type { SerializedStyles } from "@emotion/react";
 import styled from "@emotion/styled";
 import { dump } from "js-yaml";
 import { useMemo, useState } from "react";
+import { ApiErrorState } from "../api/errorState";
 import { useResource } from "../api/hooks";
 import type { Ref } from "../api/types";
-import { useVocabulary } from "../shell/extension";
 import { TextButton } from "../states/controls";
 import { PageNotice } from "../states/PageNotice";
 import { PageState } from "../states/PageState";
@@ -101,14 +101,11 @@ interface ResourceYamlProps {
 
 /** The YAML of one resource with its own load states, for a tab inside a page that has its own header. */
 export function ResourceYaml({ installId, refValue, stylesOverride }: ResourceYamlProps) {
-  const vocab = useVocabulary();
   const { data, error } = useResource(installId, refValue);
   const y = useYaml(data);
   if (!data) {
     if (error?.status === 404) return <PageState kind="empty" title="Not in this install's scope" />;
-    if (error?.status === 503) return <PageState kind="connecting" title={vocab.connecting} message={error.message} />;
-    if (error)
-      return <PageState kind="error" title="Cannot load resource" message={error.message} copyText={error.message} />;
+    if (error) return <ApiErrorState error={error} title="Cannot load resource" />;
     return <PageState kind="loading" title="Loading resource…" />;
   }
   return (

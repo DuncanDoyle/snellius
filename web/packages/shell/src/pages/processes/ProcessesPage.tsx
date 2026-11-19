@@ -5,13 +5,14 @@ import { useNow } from "../../api/clock";
 import { useProcesses } from "../../api/diagHooks";
 import { isStale, useInstallFeature } from "../../api/hooks";
 import type { GatewayProcesses, Page, ProcessSet } from "../../api/types";
-import { columnCopy, diagnosticsCopy, listCopy, processesCopy } from "../../copy/explorer";
+import { columnCopy, diagnosticsCopy, processesCopy } from "../../copy/explorer";
 import { DIAG_ROW_H, ProcessTable } from "../../diagnostics/ProcessTable";
 import { ListFrame } from "../../explore/ListFrame";
 import { useListPage } from "../../explore/listQuery";
 import { type ObjectColumn, ObjectTable } from "../../explore/ObjectTable";
 import { StateFilter } from "../../explore/StateFilter";
 import { HealthBadge } from "../../health/HealthBadge";
+import { NotChecked } from "../../health/NotChecked";
 import { StaleView } from "../../health/staleView";
 import { PageState } from "../../states/PageState";
 import { Shimmer } from "../../states/Shimmer";
@@ -92,6 +93,8 @@ function useProcessesList(id: string, query: URLSearchParams) {
 
 /** The ready count, or "Not observed"; never a state of its own (D-016). */
 function ProxyCount({ set }: { set: ProcessSet }) {
+  if (set.notAssessed)
+    return <NotChecked label={diagnosticsCopy.notChecked} reason={diagnosticsCopy.notCheckedStatus} />;
   if (!set.observed) return <Muted>{diagnosticsCopy.notObserved}</Muted>;
   if (set.ready === undefined || set.desired === undefined) return <Muted>{diagnosticsCopy.notReported}</Muted>;
   return <>{diagnosticsCopy.readyOf(set.ready, set.desired)}</>;
@@ -121,7 +124,17 @@ function recentRestarts(set: ProcessSet): number | undefined {
 
 function columns(installId: string): ObjectColumn<GatewayProcesses>[] {
   return [
-    { id: "health", header: columnCopy.status, width: "120px", cell: (r) => <HealthBadge state={r.health} /> },
+    {
+      id: "health",
+      header: columnCopy.status,
+      width: "120px",
+      cell: (r) =>
+        r.notAssessed ? (
+          <NotChecked label={diagnosticsCopy.notChecked} reason={diagnosticsCopy.notCheckedStatus} />
+        ) : (
+          <HealthBadge state={r.health} />
+        ),
+    },
     { id: "name", header: processesCopy.gateway, cell: (r) => <NameCell r={r.gateway} installId={installId} /> },
     { id: "proxies", header: processesCopy.proxies, width: "130px", cell: (r) => <ProxyCount set={r.set} /> },
     {
@@ -241,8 +254,9 @@ export function ProcessesPage({ stylesOverride }: ProcessesPageProps = {}) {
           page={page}
           loading={!l.data}
           busy={l.busy}
-          emptyTitle={l.filtered ? listCopy.emptyFiltered(NOUN[1]) : listCopy.empty(NOUN[1])}
-          onClearFilters={l.filtered ? l.clearFilters : undefined}
+          emptyTitle={l.emptyTitle(NOUN[1])}
+          clearLabel={l.emptyActionLabel}
+          onClearFilters={l.onEmptyAction}
           sort={NO_SORT}
           onSort={noop}
           onPage={l.setCursor}

@@ -173,6 +173,31 @@ describe("Processes page", () => {
     expect(within(rowOf("edge")).getByText(diagnosticsCopy.readyOf(1, 1))).toBeInTheDocument();
   });
 
+  it("a viewer without the full read in secure mode sees Not checked, never a state or counts", async () => {
+    const b = processes(processesRestrictedGolden);
+    const notAssessed = { observed: false, processes: [], notAssessed: true };
+    const reply: ProcessesResponse = {
+      ...b,
+      controller: notAssessed,
+      proxies: {
+        ...b.proxies,
+        deniedInInstall: undefined,
+        items: b.proxies.items.map((r) => ({ ...r, health: "unknown" as const, notAssessed: true, set: notAssessed })),
+      },
+    };
+    serve((u) => (u.pathname === `${API}/processes` ? reply : undefined));
+    const { container } = mount(`/i/${ID}/processes`);
+    await screen.findByText("2 Gateways");
+    const edge = rowOf("edge");
+    expect(within(edge).getAllByText(diagnosticsCopy.notChecked)).toHaveLength(2);
+    expect(within(edge).getAllByTestId("not-checked")[0]).toHaveAttribute("title", diagnosticsCopy.notCheckedStatus);
+    expect(within(edge).queryByText("Unknown")).toBeNull();
+    expect(within(edge).queryByText(diagnosticsCopy.notObserved)).toBeNull();
+    const ctrl = screen.getByRole("region", { name: diagnosticsCopy.controller });
+    expect(within(ctrl).getByText(diagnosticsCopy.notChecked)).toBeInTheDocument();
+    expect(container.textContent).not.toContain(diagnosticsCopy.readyOf(1, 1));
+  });
+
   it("hidden versions and restarts read Hidden, not Not reported", async () => {
     serve((u) => (u.pathname === `${API}/processes` ? processes(processesRestrictedGolden) : undefined));
     mount(`/i/${ID}/processes`);

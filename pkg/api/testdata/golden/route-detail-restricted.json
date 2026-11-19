@@ -210,6 +210,15 @@
     ],
     "childCount": 1,
     "collectedAt": "2026-10-17T12:00:00Z",
+    "config": {
+      "reason": {
+        "code": "KGWUI-013",
+        "kind": "finding",
+        "message": "Backend not found",
+        "more": 6
+      },
+      "state": "error"
+    },
     "declaredCount": 1,
     "effective": [
       {
@@ -970,6 +979,15 @@
         }
       }
     ],
+    "path": {
+      "incomplete": false,
+      "reason": {
+        "code": "KGWUI-013",
+        "kind": "path-problem",
+        "message": "Backend not found"
+      },
+      "state": "error"
+    },
     "reason": {
       "code": "KGWUI-013",
       "finding": "f1-3wufqpqyklpby4glalwrwjzzqb",

@@ -84,7 +84,8 @@ const ProxySlot = styled.p`
 /** A source's summary: the read's count, or the cached count when the read established none, or why there is none. */
 export function sourceSummary(e: Endpoints): { text: string; cached: boolean } {
   const counted = e.ready !== undefined && e.total !== undefined;
-  if (e.complete === "complete" || e.complete === "not-applicable") return { text: endpointsText(e), cached: false };
+  if (e.complete === "complete" || e.complete === "not-applicable" || e.complete === "not-permitted")
+    return { text: endpointsText(e), cached: false };
   // Partial, unavailable, timed out or busy: a count here comes from the cache, never from this read.
   if (counted) {
     const cached = endpointsCopy.cached(e.ready ?? 0, e.total ?? 0);
@@ -125,7 +126,10 @@ export function EndpointsSection({ sources, noSuchPorts = [], onRetry, stylesOve
           const s = lacks ? { text: portChainCopy.noSuchPort(e.port?.port ?? 0), cached: false } : sourceSummary(e);
           // Not applicable reads nothing, and an unavailable source without counts was not read: no read time.
           const timed =
-            e.complete !== "not-applicable" && !(e.complete === "unavailable" && e.ready === undefined) && !lacks;
+            e.complete !== "not-applicable" &&
+            e.complete !== "not-permitted" &&
+            !(e.complete === "unavailable" && e.ready === undefined) &&
+            !lacks;
           const items = e.complete === "complete" || e.complete === "partial" ? (e.items ?? []) : undefined;
           return (
             <Source key={`${e.source}/${e.port?.port ?? i}`} data-testid="endpoints-source" data-complete={e.complete}>

@@ -131,6 +131,8 @@ func WithScopeVerifier(v scopeverify.Verifier) Option { return func(r *Registry)
 // WithChecks adds health checks to the default pack (kgateway in New, the
 // core in NewCore); by convention their finding codes start with prefix, such
 // as "ACME-". A reserved or repeated prefix adds nothing and Registry.Err reports it.
+// In secure mode a viewer without the full read sees their results as "Not checked"
+// and none of their findings (D-106).
 func WithChecks(prefix string, c ...health.Check) Option {
 	return func(r *Registry) {
 		switch {
@@ -153,6 +155,7 @@ func WithChecks(prefix string, c ...health.Check) Option {
 // collide with core, platform or other extension capabilities; app.Build calls
 // each source once to check, so a source must report a stable set of names.
 // Sources run on every /api/v1/meta request: keep them fast and safe for concurrent use.
+// Every viewer gets the same states, so a source reports only the extension's own state, never cluster objects.
 func WithCapabilities(f func() []api.Capability) Option {
 	return func(r *Registry) { r.capSources = append(r.capSources, f) }
 }
@@ -173,7 +176,8 @@ func (r *Registry) CheckCapabilities(platformNames []string) error {
 }
 
 // WithAuthorizer replaces the default api.AllowAll. Every API response with
-// resources, findings or counts goes through it (D-013).
+// resources, findings or counts goes through it (D-013). In secure mode it
+// only narrows the SAR authoriser: both must allow.
 func WithAuthorizer(a api.Authorizer) Option { return func(r *Registry) { r.Authorizer = a } }
 
 // WithProxyModeResolver replaces the upstream GatewayParameters resolution.

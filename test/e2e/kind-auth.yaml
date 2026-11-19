@@ -1,0 +1,16 @@
+# Structured authentication configuration for the secure-mode e2e (setup.sh SECURE=1).
+# setup.sh fills API_VERSION, ISSUER_URL, CLIENT_ID and the CA_PEM line from the test issuer.
+apiVersion: apiserver.config.k8s.io/API_VERSION
+kind: AuthenticationConfiguration
+jwt:
+  - issuer:
+      url: ISSUER_URL
+      audiences: [CLIENT_ID]
+      certificateAuthority: CA_PEM
+    claimMappings:
+      username:
+        claim: sub
+        prefix: "oidc:"
+      groups:
+        claim: groups
+        prefix: "oidc:"

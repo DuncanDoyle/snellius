@@ -2,6 +2,7 @@
 package api
 
 import (
+	"slices"
 	"time"
 
 	"github.com/DuncanDoyle/snellius/pkg/health"
@@ -26,7 +27,8 @@ type InstallSummary struct {
 	// GroupRows is the number of groups diagnostics lists: the install page
 	// reserves that many Needs attention rows while diagnostics load.
 	GroupRows int `json:"groupRows"`
-	// ComputedAt is when the model behind Health was computed. Clients fall back
+	// ComputedAt is when the model behind Health was computed; in secure mode without
+	// the full read it is the confirmation time (D-109). Clients fall back
 	// to it when ConfirmedAt is absent.
 	ComputedAt time.Time `json:"computedAt"`
 	// ConfirmedAt is when the model was last confirmed to match the cluster
@@ -35,6 +37,9 @@ type InstallSummary struct {
 	// Features are the install's UI features (Feature*); always sent, so an
 	// absent list means an older server (Phase 5 design §10).
 	Features []string `json:"features"`
+	// DetailsHidden is set when the caller may not read the source of every
+	// metadata field, which is then empty (design §7.4).
+	DetailsHidden bool `json:"detailsHidden,omitempty"`
 }
 
 // HealthSummary is the state and per-severity counts.
@@ -49,6 +54,14 @@ type OverviewResponse struct {
 	overview.Overview
 	Gateways    []OverviewGatewayRow `json:"gateways"`
 	CollectedAt time.Time            `json:"collectedAt"`
+}
+
+// NamespacesResponse is GET …/namespaces: the sorted namespaces of the
+// install's route, Gateway and ListenerSet rows the caller can see.
+type NamespacesResponse struct {
+	Install     string    `json:"install"`
+	Namespaces  []string  `json:"namespaces"`
+	CollectedAt time.Time `json:"collectedAt"`
 }
 
 // MetaResponse is GET /api/v1/meta.
@@ -75,12 +88,19 @@ type MetaResponse struct {
 	// Filters lists, per list, the filters added after v1, so a client sends
 	// one only when this backend applies it (design §7.2).
 	Filters map[string][]string `json:"filters,omitempty"`
+	// AuthMode is "secure" when the server was built with WithSecureMode, else "local" (no sign-in).
+	AuthMode string `json:"authMode"`
+	// LimitedView is set in secure mode when the caller may not list every
+	// served kind cluster-wide; only the caller's own rights decide it (design §7.5).
+	LimitedView bool `json:"limitedView,omitempty"`
 }
 
 // addedFilters are the list filters added after API v1 (design §7.2). The
 // delegation and findings lists are new; listing their filters tells a
-// client the endpoint exists (PF8, Phase 3 design §13.1).
-var addedFilters = map[string][]string{"routes": {"listener"}, "delegation": {"rule", "ref", "outcome"}, "findings": findingsFilters}
+// client the endpoint exists (PF8, Phase 3 design §13.1). Every list the
+// namespace scope applies to lists it (D-100 item 8).
+var addedFilters = map[string][]string{"routes": {"listener", scopeParam}, "gateways": {scopeParam}, "listenersets": {scopeParam},
+	"paths": {scopeParam}, "backends": {scopeParam}, "delegation": {"rule", "ref", "outcome"}, "findings": append(slices.Clone(findingsFilters), scopeParam), "processes": {scopeParam}}
 
 // deploymentKind is listed in /api/v1/meta because finding links reach
 // controller Deployments (D-013). It is read through typed informers, not counted.

@@ -114,12 +114,12 @@ Why now: about 60% of the code is already generic, and the refactor is cheaper b
 - Must work with `Backend` status alone; Services and EndpointSlices are optional (D-016). Envoy cluster and endpoint health from the proxies moves to the proxy endpoint view after GA (D-069, #35); Phase 6 keeps the seams for it.
 
 ### Phase 7 — Identity & Access
-**Status:** Not started
+**Status:** Complete (2026-11-19, v0.8.0) — `docs/phases/phase-7/phase-7-complete.md`
 **Docs:** `docs/phases/phase-7/`
 
 Inserted 2026-11-14 (D-084): authentication and authorisation come before any new feature. Ships as `v0.8.0`. Visibility follows Kubernetes RBAC exactly (principle 9, D-085).
 - **Local mode (default):** UI and API on 127.0.0.1 in the pod, reachable only by `kubectl port-forward`, with a banner; whoever may port-forward sees everything Snellius reads (D-086).
-- **Secure mode (production):** OIDC login through the issuer the cluster trusts; identity from TokenReview, with the cluster's claim mapping copied as a fallback and checked at startup; access from SubjectAccessReview per object, cached briefly; fails closed. Exposing Snellius on a Service or HTTPRoute requires it. OpenShift's built-in OAuth follows after this phase, once a test cluster exists (user, 2026-11-14).
+- **Secure mode (production):** OIDC login through the issuer the cluster trusts; identity from TokenReview (no claim-mapping fallback in v0.8.0, D-098; managed clusters such as GKE and AKS through #51); access from SubjectAccessReview per object, cached briefly; fails closed. Exposing Snellius on a Service or HTTPRoute requires it. OpenShift's built-in OAuth follows after this phase, once a test cluster exists (user, 2026-11-14).
 - **Visibility everywhere:** pages, lists, counts, facets, search, the map, exports and the API follow D-085's rule; pages from before Phase 6 get the D-077 treatment.
 - **Two signals per route** (D-087): route configuration and traffic path. The traffic path reads unknown or incomplete when parts are hidden; `gateway-rejecting` and `backend-problem` move into it.
 - **Sessions:** authorization code with PKCE, server-held tokens, idle and absolute expiry, CSRF protection.

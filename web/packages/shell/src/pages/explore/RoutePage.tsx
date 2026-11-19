@@ -7,6 +7,7 @@ import { useInstallFeature } from "../../api/hooks";
 import type { LinkedRef, ParentRef, RouteDetail } from "../../api/types";
 import { detailCopy, routeCopy, traceCopy } from "../../copy/explorer";
 import { trafficCopy } from "../../copy/traffic";
+import { DelegationNotCheckedView } from "../../explore/DelegationNotChecked";
 import { firstFailing } from "../../explore/ProblemStrip";
 import { useInstallId } from "../../shell/extension";
 import { useTwoColumns } from "../../shell/layout";
@@ -31,11 +32,13 @@ const Cards = styled.div`
 `;
 
 // region Helpers
+/** Whether a parent route names d, in its spec or its status. */
+const isChild = (d: RouteDetail) => d.parentRefs.some(isRouteRef) || d.parents.some((p) => isRouteRef(p.target));
+
 /** A child takes its hostnames from a parent route; a route under a listener from the listener. */
 function hostnameText(d: RouteDetail) {
   if (d.hostnames.length) return d.hostnames.join(", ");
-  const child = d.parentRefs.some(isRouteRef) || d.parents.some((p) => isRouteRef(p.target));
-  return <Muted>{child ? routeCopy.inheritsParent : routeCopy.inheritsListener}</Muted>;
+  return <Muted>{isChild(d) ? routeCopy.inheritsParent : routeCopy.inheritsListener}</Muted>;
 }
 
 /** Which parent routes may delegate here, from the spec's parentRefs (computed-rules §5.3). */
@@ -43,6 +46,12 @@ function permissionText(d: RouteDetail) {
   if (!d.parentRefs.length) return routeCopy.allowsAny;
   const routes = d.parentRefs.filter(isRouteRef).map((p) => `${p.namespace}/${p.name}`);
   return routes.length ? routeCopy.allows(routes) : routeCopy.allowsNone;
+}
+
+/** The route's one parent Gateway, for the strip's link; none when it has several, as the rejecting one is not named. */
+function soleGateway(d: RouteDetail): LinkedRef | undefined {
+  const gws = d.parentRefs.filter((p) => p.kind === "Gateway" && p.target).map((p) => p.target as LinkedRef);
+  return gws.length === 1 ? gws[0] : undefined;
 }
 
 const refKey = (p: ParentRef) => [p.group, p.kind, p.namespace, p.name, p.sectionName, p.port].join("/");
@@ -80,6 +89,9 @@ export function RoutePage({ stylesOverride }: RoutePageProps = {}) {
   const hasDelegation = !!data?.rules.some((r) => r.backendRefs.some((b) => b.delegation));
   // Delegation copy and blocks need a rule set that computes it and an HTTPRoute; the tab is the kgateway web pack's.
   const delegation = useInstallFeature(id, "delegation") !== false && kind === "HTTPRoute";
+  // The detail says when it withholds delegation analysis (D-114); a child's paths and effective matches are part of it.
+  const withheld = !!data?.delegationNotChecked;
+  const notChecked = withheld && delegation && !!data && isChild(data);
   const unlisted = useMemo(() => (data ? unlistedRefs(data) : []), [data]);
   // The parents and up-chain this page links decide the links of the same objects in the trail.
   const trailRefs = useMemo(() => (data ? linkedRefs(data) : undefined), [data]);
@@ -144,6 +156,7 @@ export function RoutePage({ stylesOverride }: RoutePageProps = {}) {
         data && {
           condition: firstFailing(data.parents.filter((p) => p.ours).flatMap((p) => p.conditions)),
           conditionsId: "route-parents",
+          gateway: soleGateway(data),
         }
       }
       trailRefs={trailRefs}
@@ -179,23 +192,31 @@ export function RoutePage({ stylesOverride }: RoutePageProps = {}) {
           {data.serves ? (
             <Section aria-labelledby="route-serves">
               <h2 id="route-serves">
-                {traceCopy.serves} <span className="note">{data.serves.length}</span>
+                {traceCopy.serves}{" "}
+                {notChecked && !data.serves.length ? null : <span className="note">{data.serves.length}</span>}
               </h2>
-              <Serves installId={id} serves={data.serves} hostnames={kind !== "TCPRoute"} />
+              <Serves installId={id} serves={data.serves} hostnames={kind !== "TCPRoute"} notChecked={notChecked} />
             </Section>
           ) : null}
           <Section aria-labelledby="route-rules">
             <h2 id="route-rules">
               {routeCopy.rules} <span className="note">{data.rules.length}</span>
             </h2>
-            {data.rules.length ? (
-              <RuleTable installId={id} kind={kind} rules={data.rules} serves={data.serves} />
-            ) : (
-              <RuleList installId={id} kind={kind} rules={data.rules} serves={data.serves} />
-            )}
+            <DelegationNotCheckedView.Provider value={withheld}>
+              {data.rules.length ? (
+                <RuleTable installId={id} kind={kind} rules={data.rules} serves={data.serves} />
+              ) : (
+                <RuleList installId={id} kind={kind} rules={data.rules} serves={data.serves} />
+              )}
+            </DelegationNotCheckedView.Provider>
           </Section>
-          {delegation && data.effective?.length ? (
-            <EffectiveMatches installId={id} edges={data.effective} truncated={data.effectiveTruncated} />
+          {delegation && (data.effective?.length || notChecked) ? (
+            <EffectiveMatches
+              installId={id}
+              edges={data.effective ?? []}
+              truncated={data.effectiveTruncated}
+              notChecked={notChecked}
+            />
           ) : null}
           {delegation ? <ChildRoutes installId={id} route={data.ref} expected={data.childCount} /> : null}
         </>

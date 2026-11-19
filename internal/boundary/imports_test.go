@@ -26,8 +26,10 @@ var discovery = []string{"DiscoveryClient", "Resolve", "NewMonitor", "Monitor"}
 var allowed = map[string]string{
 	"internal/testutil/clients.go":  "fake clients for tests",
 	"internal/testutil/fixtures.go": "typed fixtures for tests",
+	"pkg/auth/oidc/tokenreview.go":  "TokenReview is the sign-in identity authority (design §4.2)",
+	"pkg/auth/sar/checker.go":       "SubjectAccessReview is the per-user authorisation authority (design §6.1)",
 	"pkg/api/handlers.go":           "serves Deployments that findings reference",
-	"pkg/app/app.go":                "builds the Kubernetes clients and resolves served kinds",
+	"pkg/app/app.go":                "builds the Kubernetes clients, resolves served kinds and wires TokenReview",
 	"pkg/cache/cache.go":            "the Kubernetes informers",
 	"pkg/cache/crds.go":             "Gateway API CRD metadata through the metadata client",
 	"pkg/cache/events.go":           "Warning Events on controller and proxy Pods",

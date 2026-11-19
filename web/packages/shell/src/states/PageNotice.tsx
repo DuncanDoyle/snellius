@@ -1,6 +1,7 @@
 import type { SerializedStyles } from "@emotion/react";
 import styled from "@emotion/styled";
 import type { ApiError } from "../api/client";
+import { apiErrorState, authzNotice } from "../api/errorState";
 import { HealthIcon } from "../health/HealthIcon";
 import { useVocabulary } from "../shell/extension";
 import type { HealthState } from "../theme/tokens";
@@ -28,13 +29,19 @@ interface PageNoticeProps {
   error: ApiError;
   /** The page's error title, e.g. "Cannot load findings". */
   title: string;
+  /** Replaces the "title: error" text with fixed wording. */
+  text?: string;
   stylesOverride?: SerializedStyles;
 }
 
 /** Inline notice over data that is still shown after a poll failed. */
-export function PageNotice({ error, title, stylesOverride }: PageNoticeProps) {
-  const connecting = error.status === 503;
+export function PageNotice({ error, title, text, stylesOverride }: PageNoticeProps) {
+  const state = apiErrorState(error);
+  const authz = authzNotice(state);
+  // Every 503 kind clears by itself on a later poll.
+  const connecting = state === "connecting" || authz !== undefined;
   const { connecting: waiting } = useVocabulary();
+  const own = authz ?? (connecting ? `${waiting}: ${error.message}` : `${title}: ${error.message}`);
   return (
     <Box
       $state={connecting ? "unknown" : "error"}
@@ -43,7 +50,7 @@ export function PageNotice({ error, title, stylesOverride }: PageNoticeProps) {
       stylesOverride={stylesOverride}
     >
       <HealthIcon state={connecting ? "unknown" : "error"} notice />
-      {connecting ? `${waiting}: ${error.message}` : `${title}: ${error.message}`}
+      {text ?? own}
     </Box>
   );
 }

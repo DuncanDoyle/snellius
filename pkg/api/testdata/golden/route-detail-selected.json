@@ -15,6 +15,9 @@
     },
     "childCount": 0,
     "collectedAt": "2026-10-17T12:00:00Z",
+    "config": {
+      "state": "healthy"
+    },
     "declaredCount": 0,
     "effective": [
       {
@@ -62,6 +65,13 @@
     "install": "kgw.kgateway",
     "parentRefs": [],
     "parents": [],
+    "path": {
+      "incomplete": false,
+      "reason": {
+        "kind": "not-attached"
+      },
+      "state": "unknown"
+    },
     "ref": {
       "group": "gateway.networking.k8s.io",
       "kind": "HTTPRoute",

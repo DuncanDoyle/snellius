@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import type { ProcessSummary, ProxySummary } from "../api/types";
 import { diagnosticsCopy, findingsCopy } from "../copy/explorer";
 import { HealthBadge } from "../health/HealthBadge";
+import { NotChecked } from "../health/NotChecked";
 
 // region Styles
 /** Height of one line, fixed from the first render so polled counts shift nothing. */
@@ -46,20 +47,22 @@ export function ProcessLine(props: ProcessLineProps) {
   let facts: ReactNode;
   if (props.kind === "controller") {
     const s = props.summary;
-    facts = !s.observed ? (
-      <span className="muted">{diagnosticsCopy.notObserved}</span>
-    ) : (
-      <>
-        {s.ready !== undefined && s.desired !== undefined ? (
-          <span>{diagnosticsCopy.readyOf(s.ready, s.desired)}</span>
-        ) : null}
-        {s.restricted ? (
-          <span className="muted">{findingsCopy.restricted}</span>
-        ) : s.version ? (
-          <span>{diagnosticsCopy.version(s.version)}</span>
-        ) : null}
-      </>
-    );
+    // A not-assessed line without counts says nothing more; its state already says Not checked.
+    facts =
+      s.notAssessed && !s.observed ? null : !s.observed ? (
+        <span className="muted">{diagnosticsCopy.notObserved}</span>
+      ) : (
+        <>
+          {s.ready !== undefined && s.desired !== undefined ? (
+            <span>{diagnosticsCopy.readyOf(s.ready, s.desired)}</span>
+          ) : null}
+          {s.restricted ? (
+            <span className="muted">{findingsCopy.restricted}</span>
+          ) : s.version ? (
+            <span>{diagnosticsCopy.version(s.version)}</span>
+          ) : null}
+        </>
+      );
   } else {
     const s = props.summary;
     // Self-managed Gateways can never be ready, so the ratio leaves them out.
@@ -86,7 +89,11 @@ export function ProcessLine(props: ProcessLineProps) {
         {props.kind === "controller" ? diagnosticsCopy.controller : diagnosticsCopy.proxies}
       </span>
       <span className="facts">
-        <HealthBadge state={state} />
+        {props.summary.notAssessed ? (
+          <NotChecked label={diagnosticsCopy.notChecked} reason={diagnosticsCopy.notCheckedStatus} />
+        ) : (
+          <HealthBadge state={state} />
+        )}
         {facts}
       </span>
     </Line>

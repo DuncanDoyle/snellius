@@ -146,7 +146,7 @@ func (p *projector) digest(r Row, id uint64, out *Projection, i int) uint64 {
 // title is the message the API shows as a finding signal's title: the first
 // finding on ref with code and a message, as pkg/api's signalTitles picks it.
 func (p *projector) title(code string, ref objects.Ref) string {
-	for _, f := range p.findings[ref] {
+	for _, f := range p.findings.of(ref) {
 		if f.Code == code && f.Message != "" {
 			return f.Message
 		}

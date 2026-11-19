@@ -137,6 +137,8 @@ type ParentLink struct {
 	// Dups are the later spec indexes that resolve to Ref; one written
 	// differently has its own report key and check (rules §8.2). Usually nil.
 	Dups []int
+	// flags are the row flags this link sets.
+	flags Flag
 }
 
 // RouteRow is one route the install lists (design §3.5): an owned route,
@@ -172,6 +174,10 @@ type RouteRow struct {
 	DroppedDeps []DepSet
 	// search is the lower-cased "namespace/name" and hostnames.
 	search string
+	// rejectedBy are the Gateways with a KGWUI-001 that set FlagGatewayRejecting, in link order.
+	rejectedBy []objects.Ref
+	// problemBackends are the non-mirror backends with an error or warning finding, in rule order.
+	problemBackends []objects.Ref
 }
 
 // BackendUse is one row naming a backend. Mirror is set when the row names
@@ -215,6 +221,8 @@ type ListenerSetRow struct {
 	// Members and Disagreements are as on GatewayRow.
 	Members       []RowID
 	Disagreements int
+	// programmed is a current Programmed=True: a rejecting parent then lifts the row.
+	programmed bool
 }
 
 // Worst is the first error and the first warning finding on one object, and
@@ -256,6 +264,9 @@ type Index struct {
 	ByListener map[ListenerKey][]Member
 	// Listeners holds every computed listener count.
 	Listeners map[ListenerKey]ListenerFacts
+	// unknownMembers lists view A's members per listener whose count is
+	// unknown: a viewer's visible count never depends on routes it cannot read.
+	unknownMembers map[ListenerKey][]Member
 	// RuleSet, RuleLabel and RuleNote are view A's rule set, its display name and its selection label.
 	RuleSet, RuleLabel, RuleNote string
 	// DelegRows are view B's rows, sorted by (parent, rule, ref, child), each
@@ -280,8 +291,20 @@ type Index struct {
 	// DelegationCap names the first compute cap views B and C hit, or "".
 	DelegationCap string
 	admitted      map[objects.Ref]Admission
+	// findings are the report's findings, and findingsOf indexes them per resource, in report order.
+	findings   []health.Finding
+	findingsOf map[objects.Ref][]int32
+	// unknown is the install-wide unknown of the precomputed states.
+	unknown bool
 	// parentKinds are the served Gateway and ListenerSet kinds.
 	parentKinds map[objects.GroupKind]bool
+	// controllers are the install's controller names and noDelegation is its
+	// rule set's delegation switch: install context for PathIncomplete.
+	controllers  []string
+	noDelegation bool
+	// parentObjs holds every ListenerSet and HTTPRoute of the snapshot, member or
+	// not: PathIncomplete reads a readable parent from its own object.
+	parentObjs map[objects.Ref]*unstructured.Unstructured
 }
 
 // DepSet is a computed result's dependencies, as indexes into Index.Refs.

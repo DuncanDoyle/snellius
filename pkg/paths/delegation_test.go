@@ -208,6 +208,31 @@ func TestDelegatedUnconfirmable(t *testing.T) {
 	}
 }
 
+// TestWithholdBuildsNoDelegation: built with Withhold, the unconfirmable world
+// keeps its delegation rows with no view C state and has no child rows (D-114).
+func TestWithholdBuildsNoDelegation(t *testing.T) {
+	_, i := buildWith(t, worldSnap(t, "v2.5.0", nil, edge("http"), root(prefixes([]string{"/api"}, testutil.DelegateTo("shop", "cart")),
+		prefixes([]string{"/other"}, testutil.DelegateTo("shop", "cart"))), child("cart", false, prefixes([]string{"/api/cart"}, svc("c")))))
+	top := paths.Build(paths.Input{Index: i.Index, Views: i.Computed, Decode: objects.Direct{}, Delegates: true, Withhold: true})
+	ds := delegationRows(top)
+	if len(ds) != 2 || len(delegated(top)) != 0 {
+		t.Fatalf("delegation rows %d, child rows %d", len(ds), len(delegated(top)))
+	}
+	for _, r := range ds {
+		if d := top.Delegation(r); d.Unknown != "" || d.Unconfirmable || d.NotComputed || d.Truncated || d.Matches != nil {
+			t.Errorf("rule %d: state %+v, want none", top.Rule(r).Index, d)
+		}
+	}
+	p := paths.Project(top, paths.ProjectInput{Model: i, Now: testutil.Now})
+	for k := range top.Rows {
+		for _, s := range p.Problems[k].Signals {
+			if s.Kind == paths.SignalDelegation {
+				t.Errorf("row %d: delegation signal %+v", k, s)
+			}
+		}
+	}
+}
+
 // TestNoDelegator: without a Delegator, a backendRef to an HTTPRoute is an
 // ordinary ref of kind HTTPRoute, and there are no child rows.
 func TestNoDelegator(t *testing.T) {

@@ -3,6 +3,7 @@ import styled from "@emotion/styled";
 import { EyeOff, Info } from "lucide-react";
 import { useContext } from "react";
 import type { PathSummary as Summary } from "../../api/types";
+import { isSecureMode } from "../../auth/mode";
 import { summaryCopy } from "../../copy/traffic";
 import { HealthIcon } from "../../health/HealthIcon";
 import { StaleView } from "../../health/staleView";
@@ -95,7 +96,7 @@ export function PathSummary({ summary, stylesOverride }: PathSummaryProps) {
         ) : (
           <Shimmer h={14} stylesOverride={wide} />
         )}
-        {summary?.hidden ? (
+        {summary?.hidden && !isSecureMode() ? (
           <span className="note">
             <EyeOff size={14} aria-hidden="true" />
             {summaryCopy.hidden}

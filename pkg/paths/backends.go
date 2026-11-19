@@ -30,6 +30,20 @@ type BackendsInput struct {
 	Can     func(objects.Ref) bool
 	// Only, when set, lists that backend alone, if it is listed.
 	Only *objects.Ref
+	// Scope, when not nil, lists only the backends in these namespaces,
+	// asking nothing of the others (D-100 item 8).
+	Scope []string
+	// Subject, when set, is a backend the caller admitted by name: Can is not
+	// asked about it, and it is still listed only for a visible reason (D-100).
+	Subject *objects.Ref
+}
+
+// admits reports whether the viewer of in may see backend ref: the named subject, else Can.
+func (in *BackendsInput) admits(ref objects.Ref) bool {
+	if in.Subject != nil && *in.Subject == ref {
+		return true
+	}
+	return in.Can == nil || in.Can(ref)
 }
 
 // Backend is one listed backend as a viewer may see it (design §8.1).
@@ -74,15 +88,15 @@ type backends struct {
 	in    BackendsInput
 	set   BackendSet
 	index map[objects.Ref]int
-	// rowRoutes are, per item, the routes with any path row to it, visible or not.
-	rowRoutes [][]objects.Ref
+	// rowRoutes are, per target, the routes with any path row to it, visible or not.
+	rowRoutes map[objects.Ref][]objects.Ref
 	// sets are, per item, the distinct signal sets of its visible rows.
 	sets [][][]Signal
 	// listed is set, per item, by a reason to list it the viewer may see.
 	listed []bool
 	// accepted memoises per attachment whether its status accepts it: 1 yes, -1 no.
 	accepted []int8
-	found    map[objects.Ref][]*health.Finding
+	found    *foundIndex
 }
 
 // Backends lists the backends of design §8.1 from t, projected by p: every
@@ -129,6 +143,12 @@ func NewMembership(t *Topology, in BackendsInput) *Membership {
 	return m
 }
 
+// InScope is the in-scope Backends, sorted; the caller must not change it.
+func (m *Membership) InScope() []objects.Ref { return m.inScope }
+
+// Target is row r's backendRef or mirror target; false when it has none.
+func (t *Topology) Target(r Row) (objects.Ref, bool) { return t.target(r) }
+
 func (m *Membership) targetOf(t *Topology, k int32) objects.Ref {
 	ref, _ := t.target(t.Rows[k])
 	return ref
@@ -138,7 +158,7 @@ func (m *Membership) targetOf(t *Topology, k int32) objects.Ref {
 // the reasons of collect, for one ref.
 func (m *Membership) Listed(t *Topology, in BackendsInput, ref objects.Ref) bool {
 	can := func(x objects.Ref) bool { return in.Can == nil || in.Can(x) }
-	if !can(ref) {
+	if !in.admits(ref) {
 		return false
 	}
 	if _, ok := slices.BinarySearchFunc(m.inScope, ref, compareRefs); ok {
@@ -177,20 +197,22 @@ func collect(t *Topology, p *Projection, in BackendsInput) *backends {
 
 func (b *backends) can(ref objects.Ref) bool { return b.in.Can == nil || b.in.Can(ref) }
 
-func (b *backends) wanted(ref objects.Ref) bool { return b.in.Only == nil || *b.in.Only == ref }
+func (b *backends) wanted(ref objects.Ref) bool {
+	return (b.in.Only == nil || *b.in.Only == ref) && explore.InScope(b.in.Scope, ref.Namespace)
+}
 
 // add returns ref's item, adding it on first sight; nil when the viewer may not see it.
 func (b *backends) add(ref objects.Ref) *Backend {
 	if i, ok := b.index[ref]; ok {
 		return &b.set.Items[i]
 	}
-	if !b.can(ref) {
+	if !b.in.admits(ref) {
 		b.set.Hidden = true
 		return nil
 	}
 	b.index[ref] = len(b.set.Items)
 	b.set.Items = append(b.set.Items, Backend{Ref: ref})
-	b.rowRoutes, b.sets, b.listed = append(b.rowRoutes, nil), append(b.sets, nil), append(b.listed, false)
+	b.sets, b.listed = append(b.sets, nil), append(b.listed, false)
 	return &b.set.Items[len(b.set.Items)-1]
 }
 
@@ -205,12 +227,34 @@ func insert[T any](s []T, v T, compare func(T, T) int) []T {
 
 func compareRefs(a, b objects.Ref) int { return a.Compare(b) }
 
-// rows adds the targets of the path rows.
+// ShowsRow reports whether Backends over in reads row r's problem, asking in
+// what rows asks: a wanted target, readable routes, an admitted target and a visible row.
+func (in *BackendsInput) ShowsRow(t *Topology, r Row) bool {
+	ref, ok := t.target(r)
+	if !ok || in.Only != nil && *in.Only != ref || !explore.InScope(in.Scope, ref.Namespace) {
+		return false
+	}
+	if in.Can != nil && slices.ContainsFunc(t.chain(r), func(ri int32) bool { return !in.Can(t.Refs[t.routes[ri].ref]) }) {
+		return false
+	}
+	return in.admits(ref) && (in.Visible == nil || in.Visible(t.Deps(r)))
+}
+
+// rows adds the targets of the path rows whose routes the viewer may see:
+// a hidden route never asks about its target (D-085).
 func (b *backends) rows() {
 	t := b.t
+	b.rowRoutes = map[objects.Ref][]objects.Ref{}
 	for k, r := range t.Rows {
 		ref, ok := t.target(r)
 		if !ok || !b.wanted(ref) {
+			continue
+		}
+		chain := t.chain(r)
+		route := t.Refs[t.routes[chain[len(chain)-1]].ref]
+		b.rowRoutes[ref] = insert(b.rowRoutes[ref], route, compareRefs)
+		if slices.ContainsFunc(chain, func(ri int32) bool { return !b.can(t.Refs[t.routes[ri].ref]) }) {
+			b.set.Hidden = true
 			continue
 		}
 		it := b.add(ref)
@@ -218,9 +262,6 @@ func (b *backends) rows() {
 			continue
 		}
 		i := b.index[ref]
-		chain := t.chain(r)
-		route := t.Refs[t.routes[chain[len(chain)-1]].ref]
-		b.rowRoutes[i] = insert(b.rowRoutes[i], route, compareRefs)
 		if b.in.Visible != nil && !b.in.Visible(t.Deps(r)) {
 			b.set.Hidden = true
 			continue
@@ -295,19 +336,20 @@ func (b *backends) written() {
 			if !row.Owned {
 				continue
 			}
+			// The route first: a hidden one never asks about its target (D-085).
+			if !b.can(row.Ref) {
+				b.set.Hidden = true
+				continue
+			}
 			if it == nil {
 				if it = b.add(ref); it == nil {
 					return
 				}
 			}
-			if !b.can(row.Ref) {
-				b.set.Hidden = true
-				continue
-			}
 			it.Routes = insert(it.Routes, row.Ref, compareRefs)
 			i := b.index[ref]
 			b.listed[i] = true
-			if _, ok := slices.BinarySearchFunc(b.rowRoutes[i], row.Ref, compareRefs); ok {
+			if _, ok := slices.BinarySearchFunc(b.rowRoutes[ref], row.Ref, compareRefs); ok {
 				continue
 			}
 			for _, port := range writtenPorts(row, ref) {
@@ -321,7 +363,9 @@ func (b *backends) written() {
 		return
 	}
 	for ref, uses := range ix.ByBackend {
-		each(ref, uses)
+		if b.wanted(ref) {
+			each(ref, uses)
+		}
 	}
 }
 
@@ -395,12 +439,13 @@ func (b *backends) consumers() {
 		if !b.wanted(c.BackendRef) {
 			continue
 		}
-		it := b.add(c.BackendRef)
-		if it == nil {
-			continue
-		}
+		// The consumer first: a hidden one never asks about its backend (D-085).
 		if !b.can(c.Consumer) {
 			b.set.Hidden = true
+			continue
+		}
+		it := b.add(c.BackendRef)
+		if it == nil {
 			continue
 		}
 		b.listed[b.index[c.BackendRef]] = true
@@ -422,22 +467,14 @@ func (b *backends) finish() {
 	}
 	f := &facts{snap: b.in.Snapshot, need: func(ns, name string) bool { return need[ns+"/"+name] }}
 	if len(b.set.Items) > 0 {
-		b.found = map[objects.Ref][]*health.Finding{}
-		for j := range b.in.Model.Health.Findings {
-			fd := &b.in.Model.Health.Findings[j]
-			if fd.Resource != nil {
-				if _, ok := b.index[*fd.Resource]; ok {
-					b.found[*fd.Resource] = append(b.found[*fd.Resource], fd)
-				}
-			}
-		}
+		b.found = indexFindings(b.in.Model.Health.Findings, b.p.filter, func(r objects.Ref) bool { _, ok := b.index[r]; return ok })
 	}
 	for i := range b.set.Items {
 		it := &b.set.Items[i]
 		switch {
 		case isService(it.Ref):
 			for _, port := range it.Ports {
-				ph := portHealthOf(b.in.ProjectInput, f, portKey{it.Ref.Namespace, it.Ref.Name, port}, b.found[it.Ref])
+				ph := portHealthOf(b.in.ProjectInput, f, portKey{it.Ref.Namespace, it.Ref.Name, port}, b.found.of(it.Ref), b.p.filter.permits(it.Ref.Namespace))
 				if ph.ep != nil {
 					it.Endpoints = append(it.Endpoints, ph.ep)
 				}
@@ -454,11 +491,14 @@ func (b *backends) finish() {
 			it.Endpoints = []*Endpoints{{Complete: EndpointsNotApplicable}}
 			// KGWUI-002 exists only for a Backend a route uses; with no visible route
 			// the judge alone decides, so a hidden route's use shows nothing (D-077).
-			found := b.found[it.Ref]
+			found := b.found.of(it.Ref)
 			if len(it.Routes) == 0 {
 				found = nil
 			}
 			it.Own = backendSignals(nil, b.in.Model, it.Ref, u, found)
+		}
+		if fl := b.p.filter; fl != nil && fl.Signal != nil {
+			it.Own = slices.DeleteFunc(it.Own, func(s Signal) bool { return !fl.keeps(s) })
 		}
 		it.Own = merge("", nil, it.Own).Signals
 		it.Problem = merge(it.Problem.State, b.sets[i], it.Own)
@@ -546,7 +586,9 @@ type BackendQuery struct {
 	// Kind is the backend's kind, such as Service or Backend.
 	Kind      string
 	Namespace string
-	States    []health.State
+	// Scope, when not nil, keeps only the backends in these namespaces (D-100 item 8).
+	Scope  []string
+	States []health.State
 	// Used is yes for a backend a visible route or consumer uses, no for one none does.
 	Used string
 	// Gateways match a backend with a visible path through one of them, by namespace and name.
@@ -623,6 +665,9 @@ func RunBackends(set BackendSet, q BackendQuery) (BackendPage, error) {
 	gws, nss := map[objects.Ref]int{}, map[string]int{}
 	for i := range set.Items {
 		b := &set.Items[i]
+		if !explore.InScope(q.Scope, b.Ref.Namespace) {
+			continue
+		}
 		if q.matches(b, qs, facetNone) {
 			es = append(es, i)
 		}

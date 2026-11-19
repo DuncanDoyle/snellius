@@ -14,6 +14,7 @@ import (
 
 	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/ctrllogs"
+	"github.com/DuncanDoyle/snellius/pkg/health/own"
 	"github.com/DuncanDoyle/snellius/pkg/install"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
@@ -56,10 +57,28 @@ func ok(name string, required bool, at time.Time) CheckResult {
 	return CheckResult{Name: name, OK: true, Required: required, CollectedAt: at}
 }
 
-func unavailable(in Input, name, why string) ([]Finding, CheckResult) {
+// unavailable is a KGWUI-008 and a required result that is not OK. With
+// collection, why must be fixed text that names no object: every viewer sees both.
+func unavailable(in Input, name, why string, collection bool) ([]Finding, CheckResult) {
+	var b *Basis
+	r := CheckResult{Name: name, Required: true, CollectedAt: in.Now, Error: why, Collection: collection}
+	if collection {
+		b, r.fixed = &Basis{Collection: true, text: why}, why
+	}
 	return []Finding{{Code: CodeSignalUnavailable, Slug: "signal-unavailable", Severity: SeverityInfo, Install: in.Install.ID(),
-			Message: "Could not check " + name, Detail: why, Key: []string{name}}},
-		CheckResult{Name: name, Required: true, CollectedAt: in.Now, Error: why}
+		Message: "Could not check " + name, Detail: why, Key: []string{name}, Basis: b}}, r
+}
+
+// accessText is fixed text for why access a fails: the API server's own
+// message may name namespaces, objects or the UI's ServiceAccount.
+func accessText(a cache.Access) string {
+	switch AccessAvailability(a) {
+	case AvailDenied:
+		return "access denied"
+	case AvailFailing:
+		return "the watch is failing"
+	}
+	return "not synced yet"
 }
 
 // cacheCheck: the snapshot is synced and the core kinds are readable; optional
@@ -78,7 +97,7 @@ func (cacheCheck) Inputs() InputSet {
 func (c cacheCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 	in := ctx.Input
 	if !in.Snapshot.Synced {
-		return unavailable(in, c.Name(), "cache not synced")
+		return unavailable(in, c.Name(), "cache not synced", true)
 	}
 	var fs []Finding
 	core := []schema.GroupVersionResource{cache.NamespacesGVR, cache.PodsGVR, cache.DeploymentsGVR}
@@ -90,14 +109,16 @@ func (c cacheCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 	for _, gvr := range core {
 		if a, known := in.Snapshot.Access[gvr]; known && !a.OK {
 			fs = append(fs, Finding{Code: CodeSignalUnavailable, Slug: "signal-unavailable", Severity: SeverityInfo, Install: in.Install.ID(),
-				Message: "No access to " + resourceName(gvr), Detail: a.Err, Key: []string{c.Name(), resourceName(gvr)}})
+				Message: "No access to " + resourceName(gvr), Detail: a.Err, Key: []string{c.Name(), resourceName(gvr)},
+				Basis: &Basis{Collection: true, text: accessText(a)}})
 		}
 	}
 	if len(fs) > 0 {
 		slices.SortFunc(fs, func(a, b Finding) int {
 			return cmp.Or(cmp.Compare(a.Message, b.Message), cmp.Compare(a.Detail, b.Detail))
 		})
-		return fs, CheckResult{Name: c.Name(), Required: true, CollectedAt: in.Snapshot.TakenAt, Error: fmt.Sprintf("%d kinds not readable", len(fs))}
+		why := fmt.Sprintf("%d kinds not readable", len(fs))
+		return fs, CheckResult{Name: c.Name(), Required: true, CollectedAt: in.Snapshot.TakenAt, Error: why, Collection: true, fixed: why}
 	}
 	return nil, ok(c.Name(), true, in.Snapshot.TakenAt)
 }
@@ -136,8 +157,9 @@ func (c kindsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 	}
 	why := "served kinds changed: " + in.KindsChange.String()
 	return []Finding{{Code: CodeSignalUnavailable, Slug: "signal-unavailable", Severity: SeverityInfo, Install: in.Install.ID(),
-			Message: "Served kinds changed; restart the UI to watch them", Detail: in.KindsChange.String(), Key: []string{c.Name()}}},
-		CheckResult{Name: c.Name(), Required: true, CollectedAt: in.Now, Error: why}
+			Message: "Served kinds changed; restart the UI to watch them", Detail: in.KindsChange.String(), Key: []string{c.Name()},
+			Basis: &Basis{Collection: true, text: in.KindsChange.String()}}}, // kind names come from API discovery
+		CheckResult{Name: c.Name(), Required: true, CollectedAt: in.Now, Error: why, Collection: true, fixed: why}
 }
 
 // scopeCheck: the install's scope could be determined.
@@ -154,7 +176,7 @@ func (scopeCheck) Inputs() InputSet { return InputSet{} }
 func (c scopeCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 	in := ctx.Input
 	if in.Install.Scope.Mode == install.ScopeUnknown {
-		return unavailable(in, c.Name(), in.Install.Scope.Err)
+		return unavailable(in, c.Name(), in.Install.Scope.Err, false) // install context, not collection
 	}
 	r := ok(c.Name(), true, in.Now)
 	switch in.Install.Scope.Source {
@@ -229,16 +251,18 @@ func Desired(d *appsv1.Deployment) int32 {
 // Optional types are evaluated only when present.
 var (
 	classRequired    = []string{"Accepted"}
-	gatewayRequired  = []string{"Accepted", "Programmed"}
-	listenerRequired = []string{"Accepted", "Programmed"}
-	listenerOptional = []string{"ResolvedRefs"}
-	routeRequired    = []string{"Accepted", "ResolvedRefs"}
+	gatewayRequired  = own.GatewayRequired()
+	listenerRequired = own.ListenerRequired()
+	listenerOptional = own.ListenerOptional()
+	routeRequired    = own.RouteRequired()
 	routeOptional    = []string{kgatewayProgrammed}
-	policyRequired   = []string{"Accepted"}
-	policyOptional   = []string{"Attached"}
+	policyRequired   = own.PolicyRequired()
+	policyOptional   = own.PolicyOptional()
 )
 
-// conditionsCheck: KGWUI-002, 003, 013–017 and KGWUI-011's status trigger. Freshness is decided before
+// conditionsCheck: KGWUI-002, 003, 013–017 and KGWUI-011's status trigger. The
+// own-object findings (002 on a Gateway, ListenerSet, route or policy; 003, 013,
+// 014 and 015 on a route) come from package own through runOwn (D-106). Freshness is decided before
 // status (D-006): a missing status block, a missing required condition, a
 // condition with reason Pending, or any stale condition makes the resource
 // "not yet processed"; only current conditions are reported or count as
@@ -262,106 +286,80 @@ func (c conditionsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 	in := ctx.Input
 	var fs []Finding
 	id := in.Install.ID()
-	// owner is the condition's discriminator owner: self, a listener, a parent or an ancestor.
-	add := func(u *unstructured.Unstructured, sev Severity, cond metav1.Condition, extra string, owner []string) {
-		f := Finding{Code: CodeConditionFalse, Slug: "condition-false", Severity: sev, Install: id, Resource: ref(u),
-			Message: message(cond), Detail: detail(cond, extra), Since: since(cond), Key: append(slices.Clip(owner), cond.Type)}
-		in.delegationCondition(&f, u, cond)
-		fs = append(fs, f)
-	}
-	// One KGWUI-003 per (resource, parentRef); parent is the zero value for
-	// everything but route parents.
-	type pendingKey struct {
-		res    objects.Ref
-		parent objects.ParentRef
-	}
-	reported := map[pendingKey]int{}       // index in fs
+	reported := map[objects.Ref]int{}      // index in fs of each resource's own KGWUI-003
 	inGrace := map[objects.Ref]time.Time{} // resources being processed: their grace end
 	grace := func(r objects.Ref, end time.Time) {
 		if at, ok := inGrace[r]; !ok || end.Before(at) {
 			inGrace[r] = end
 		}
 	}
-	// notProcessed reports u (for parent) once: info while u's current
-	// generation was first seen less than Grace ago, warning after. A later
-	// block whose kind comes first in §10.1 order replaces the evidence.
-	notProcessed := func(u *unstructured.Unstructured, parent objects.ParentRef, msg, why string, ev *FreshnessEvidence) {
+	// notProcessed reports u once: info while u's current generation was first
+	// seen less than Grace ago, warning after. A later block whose kind comes
+	// first in §10.1 order replaces the evidence. A route's come from package own.
+	notProcessed := func(u *unstructured.Unstructured, msg, why string, ev *FreshnessEvidence) {
 		r := objects.RefOf(u)
-		k := pendingKey{r, parent}
-		if i, ok := reported[k]; ok {
+		if i, ok := reported[r]; ok {
 			if prev := fs[i].Facts.(*FreshnessEvidence); freshnessRank[ev.Freshness] < freshnessRank[prev.Freshness] {
 				fs[i].Detail, fs[i].Facts = why, ev
 			}
 			return
 		}
-		reported[k] = len(fs)
+		reported[r] = len(fs)
 		sev := SeverityWarning
 		if seen := in.firstSeen(u); in.Now.Sub(seen) < Grace {
 			sev, msg = SeverityInfo, "Being processed by the controller"
 			grace(r, seen.Add(Grace))
 		}
-		key := []string{ownerSelf}
-		if parent != (objects.ParentRef{}) {
-			key = in.parentKey(u, parent)
-		}
 		fs = append(fs, Finding{Code: CodeRouteUnattached, Slug: "route-unattached", Severity: sev, Install: id, Resource: &r,
-			Message: msg, Detail: why, Key: key, Facts: ev, parent: &parent})
+			Message: msg, Detail: why, Key: []string{ownerSelf}, Facts: ev, parent: &objects.ParentRef{}})
 	}
-	// pendingFor reports a block of u that is not processed; parent is set for
-	// route parents. An experimental-only kind gets a hint (D-018 §2).
-	pendingFor := func(u *unstructured.Unstructured, parent objects.ParentRef, why, kind string, observed int64) {
-		notProcessed(u, parent, "Not yet processed by the controller", why+in.experimentalHint(u), in.freshnessEvidence(u, kind, observed))
+	// pending reports a block of u that is not processed. An experimental-only kind gets a hint (D-018 §2).
+	pending := func(u *unstructured.Unstructured, why, kind string, observed int64) {
+		notProcessed(u, "Not yet processed by the controller", why+in.experimentalHint(u), in.freshnessEvidence(u, kind, observed))
 	}
-	pending := func(u *unstructured.Unstructured, why, kind string) { pendingFor(u, objects.ParentRef{}, why, kind, 0) }
 	// current reports false when the block is pending: a required condition is
 	// missing or Unknown, a present condition has reason Pending, or a present
 	// condition may describe an older generation (including observedGeneration 0).
-	current := func(u *unstructured.Unstructured, parent objects.ParentRef, cs []metav1.Condition, required, optional []string, extra string) bool {
+	current := func(u *unstructured.Unstructured, cs []metav1.Condition, required, optional []string, extra string) bool {
 		if why, kind, observed := blockFreshness(u, cs, required, optional); why != "" {
-			pendingFor(u, parent, why+within(extra), kind, observed)
+			pending(u, why+within(extra), kind, observed)
 			return false
 		}
 		return true
 	}
-	// evaluate reports every present condition of a current block that is False;
-	// current() has already turned a required Unknown into "not processed".
-	// A nil owner is a route parent's, resolved on its first finding.
+	// evaluate reports the derived findings of a current block: a GatewayClass's
+	// 002, and a listener's 013 and 014. Package own reports the other 002s.
 	// While conflict is set, 017 owns the listener's Accepted and Programmed False with that reason.
 	var conflict string
-	evaluate := func(u *unstructured.Unstructured, parent objects.ParentRef, cs []metav1.Condition, required, optional []string, extra string, owner []string) {
-		if !current(u, parent, cs, required, optional, extra) {
+	evaluate := func(u *unstructured.Unstructured, cs []metav1.Condition, required, optional []string, extra string, owner []string) {
+		if !current(u, cs, required, optional, extra) {
 			return
 		}
+		class := u.GroupVersionKind().Kind == "GatewayClass"
 		for _, ts := range [2][]string{required, optional} {
 			for _, t := range ts {
 				if cond := objects.FindCondition(cs, t); cond != nil && cond.Status == metav1.ConditionFalse {
 					if conflict != "" && cond.Reason == conflict && (t == "Accepted" || t == "Programmed") {
 						continue
 					}
-					if owner == nil {
-						owner = in.parentKey(u, parent)
-					}
-					// 013, 014 and 015 own their reasons; 002 takes the rest (D-030).
-					if l := listenerName(parent, owner); parent != (objects.ParentRef{}) || l != "" {
-						if f, ok := in.refsFinding(u, *cond, l, extra, owner); ok {
+					// 013 and 014 own their reasons; 002 takes the rest (D-030).
+					if listenerName(objects.ParentRef{}, owner) != "" {
+						if f, ok := in.listenerRefsFinding(u, *cond, extra, owner); ok {
 							fs = append(fs, f)
-							continue
 						}
+						continue
 					}
-					if parent != (objects.ParentRef{}) {
-						if f, ok := in.ruleFinding(u, *cond, extra, owner, ctx.WakeAt); ok {
-							fs = append(fs, f)
-							continue
-						}
+					if class {
+						fs = append(fs, Finding{Code: CodeConditionFalse, Slug: "condition-false", Severity: SeverityError, Install: id, Resource: ref(u),
+							Message: message(*cond), Detail: detail(*cond, extra), Since: since(*cond), Key: append(slices.Clip(owner), cond.Type)})
 					}
-					add(u, SeverityError, *cond, extra, owner)
 				}
 			}
 		}
 	}
 	self := []string{ownerSelf}
 	for _, gc := range in.Owned.GatewayClasses {
-		evaluate(gc, objects.ParentRef{}, objects.Conditions(gc), classRequired, nil, "", self)
+		evaluate(gc, objects.Conditions(gc), classRequired, nil, "", self)
 	}
 	// listeners evaluates the listener status of a Gateway or ListenerSet; both
 	// share the listener status shape. With all, every configured listener
@@ -377,7 +375,7 @@ func (c conditionsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 			l, ok := byName[name]
 			if !ok {
 				if all {
-					pending(u, "No status for listener "+name, FreshnessNeverWritten)
+					pending(u, "No status for listener "+name, FreshnessNeverWritten, 0)
 				}
 				continue
 			}
@@ -390,7 +388,7 @@ func (c conditionsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 			if cf != nil {
 				conflict = cf.Reason
 			}
-			evaluate(u, objects.ParentRef{}, l.Conditions, listenerRequired, listenerOptional, "listener "+l.Name, owner)
+			evaluate(u, l.Conditions, listenerRequired, listenerOptional, "listener "+l.Name, owner)
 			conflict = ""
 			if cf != nil {
 				if sides == nil {
@@ -405,69 +403,56 @@ func (c conditionsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 			}
 		}
 	}
-	// owned are the Gateways and ListenerSets of this install: the only
-	// ancestors whose policy status counts here.
-	owned := map[objects.Ref]bool{}
 	// ListenerSet status is required like a Gateway's (D-017 §2). The CRDs
 	// default top-level conditions, so none at all is never written (§10.1). A rejected
 	// ListenerSet may have no listener status (reason NotAllowed), so while it
 	// is Accepted=False only the listener blocks present are judged.
 	for _, ls := range in.Owned.ListenerSets {
-		owned[objects.RefOf(ls)] = true
 		v := in.views().ListenerSet(ls)
 		cs := v.Conditions
 		if len(cs) == 0 {
-			pending(ls, noControllerStatus, FreshnessNeverWritten)
+			pending(ls, noControllerStatus, FreshnessNeverWritten, 0)
 			continue
 		}
-		if !current(ls, objects.ParentRef{}, cs, gatewayRequired, nil, "") {
+		if !current(ls, cs, gatewayRequired, nil, "") {
 			continue
 		}
-		evaluate(ls, objects.ParentRef{}, cs, gatewayRequired, nil, "", self)
+		evaluate(ls, cs, gatewayRequired, nil, "", self)
 		listeners(ls, v.Parent.Ref(), v.Listeners, v.ListenerStatus, objects.FindCondition(cs, "Accepted").Status != metav1.ConditionFalse)
 	}
 	for _, gw := range in.Owned.Gateways {
-		owned[objects.RefOf(gw)] = true
 		v := in.views().Gateway(gw)
 		if len(v.Conditions) == 0 {
-			pending(gw, noControllerStatus, FreshnessNeverWritten)
+			pending(gw, noControllerStatus, FreshnessNeverWritten, 0)
 		} else {
-			evaluate(gw, objects.ParentRef{}, v.Conditions, gatewayRequired, nil, "", self)
+			evaluate(gw, v.Conditions, gatewayRequired, nil, "", self)
 		}
 		listeners(gw, objects.RefOf(gw), v.Listeners, v.ListenerStatus, true)
 	}
-	// Routes: one status block per current parentRef of this install, and per
-	// reported HTTPRoute parent, matched on the full parentRef including section name and port.
-	for _, r := range in.Owned.Routes {
-		if in.ignored(r.Obj) {
-			continue
-		}
-		status := in.routeParents(r.Obj)
-		for _, p := range slices.Concat(r.Parents, r.RouteParents) {
-			extra := "parent " + parentDesc(p)
-			var st *objects.RouteParentStatus
-			for i := range status {
-				if status[i].ParentRef == p && slices.Contains(in.Install.ControllerNames, status[i].ControllerName) {
-					st = &status[i]
-					break
+	// Own-object findings: 003 on a route, 002 from own status, 013, 014 and 015 on a route (D-106).
+	// Owned routes come first in attached; each gets one walk for its four analyzers.
+	attached, routes := ownRoutes(in.Owned), len(in.Owned.Routes)
+	routeFs := runOwn(ctx, []own.Kind{own.Parents, own.Status, own.Refs, own.Rules}, attached[:routes])
+	parentFs := slices.Concat(routeFs[0], runOwn(ctx, []own.Kind{own.Parents}, attached[routes:])[0])
+	var byRef map[objects.Ref]*unstructured.Unstructured // built for the first route in grace
+	for _, f := range parentFs {
+		if f.Severity == SeverityInfo {
+			if byRef == nil {
+				byRef = make(map[objects.Ref]*unstructured.Unstructured, len(attached))
+				for _, u := range attached {
+					byRef[objects.RefOf(u)] = u
 				}
 			}
-			if st == nil {
-				pendingFor(r.Obj, p, noControllerStatus+" for "+extra, FreshnessNeverWritten, 0)
-				continue
-			}
-			evaluate(r.Obj, p, st.Conditions, routeRequired, in.conditions().RouteOptional, extra, nil)
+			grace(*f.Resource, in.firstSeen(byRef[*f.Resource]).Add(Grace))
 		}
 	}
-	// Routes whose parent does not exist. A parent of a kind the cache cannot
-	// read may only be missing from the cache; cluster access already reports it.
-	for _, u := range in.Owned.Unattached {
-		if !in.readable(u.Parent.Group, u.Parent.Kind) || in.ignored(u.Route.Obj) {
-			continue
-		}
-		notProcessed(u.Route.Obj, u.Parent, "Not attached: parent not found",
-			"Parent "+parentDesc(u.Parent)+" does not exist", in.freshnessEvidence(u.Route.Obj, FreshnessNeverWritten, 0))
-	}
+	fs = append(fs, parentFs...)
+	status := []own.Kind{own.Status}
+	fs = append(fs, runOwn(ctx, status, slices.Concat(in.Owned.Gateways, in.Owned.ListenerSets))[0]...)
+	fs = append(fs, routeFs[1]...)
+	fs = append(fs, runOwn(ctx, status, objectsOf(in.Owned.Policies))[0]...)
+	fs = append(fs, routeFs[2]...)
+	fs = append(fs, routeFs[3]...)
 	// Declared candidates: KGWUI-011's status trigger. Inside its grace the
 	// route is being processed, so this check is pending (design §6.2).
 	declared := len(fs)
@@ -486,6 +471,11 @@ func (c conditionsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 	// processed only for another install, so none here means not yet processed;
 	// on v2.3/v2.4 that includes a policy whose target is missing. A computed
 	// 016 for every target replaces that 003 (design §7.6).
+	// Their 002s come from package own.
+	owned := map[objects.Ref]bool{}
+	for _, u := range slices.Concat(in.Owned.Gateways, in.Owned.ListenerSets) {
+		owned[objects.RefOf(u)] = true
+	}
 	targets := in.newPolicyTargets(ctx.State, ctx.Hold)
 	for _, p := range in.Owned.Policies {
 		tfs, allMissing := targets.findings(p.Obj)
@@ -503,7 +493,7 @@ func (c conditionsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 		}
 		if len(mine) == 0 {
 			if !allMissing {
-				pending(p.Obj, noControllerStatus, FreshnessNoAncestor)
+				pending(p.Obj, noControllerStatus, FreshnessNoAncestor, 0)
 			}
 			continue
 		}
@@ -511,28 +501,19 @@ func (c conditionsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 			extra := "ancestor " + a.AncestorRef.Kind + " " + a.AncestorRef.Ref().String()
 			owner := append([]string{ownerAncestor}, refKey(a.AncestorRef.Ref())...)
 			owner = append(owner, a.AncestorRef.SectionName, strconv.Itoa(int(a.AncestorRef.Port)))
-			if !current(p.Obj, objects.ParentRef{}, a.Conditions, policyRequired, policyOptional, extra) {
+			if !current(p.Obj, a.Conditions, policyRequired, policyOptional, extra) {
 				continue
 			}
 			// 016 owns TargetNotFound where the rule set reads it from status (D-030).
-			tnf, fromStatus := in.statusTargetFinding(p.Obj, a.Conditions, extra, owner)
-			if fromStatus {
+			if tnf, fromStatus := in.statusTargetFinding(p.Obj, a.Conditions, extra, owner); fromStatus {
 				fs = append(fs, tnf)
-			}
-			// Only the freshness-checked types are judged; others may be stale.
-			for _, t := range append(slices.Clone(policyRequired), policyOptional...) {
-				if cond := objects.FindCondition(a.Conditions, t); cond != nil && (!fromStatus || cond.Reason != "TargetNotFound") {
-					if sev, report := policySeverity(*cond); report {
-						add(p.Obj, sev, *cond, extra, owner)
-					}
-				}
 			}
 		}
 	}
 	targets.save(ctx.State)
 	// Status-only owners become ranks; 002 then ranks the condition type and a computed 011 its parent.
-	rankOwners(fs, ownerAncestor, ownerAncestor)
-	rankOwners(fs, ownerStatusParent, ownerParent)
+	rankOwners(fs, ownerAncestor, ownerAncestor, ctx.sink.ownedSet())
+	rankOwners(fs, ownerStatusParent, ownerParent, ctx.sink.ownedSet())
 	ordinalKeys(fs, func(f *Finding) (int, bool) {
 		switch {
 		case f.Code == CodeConditionFalse:
@@ -545,7 +526,7 @@ func (c conditionsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 			return 0, true
 		}
 		return 0, false
-	})
+	}, ctx.sink.ownedSet())
 	for _, end := range inGrace {
 		ctx.Hold(end, 1, resourceHoldReason)
 	}
@@ -657,18 +638,6 @@ func (in Input) readable(group, kind string) bool {
 	return true
 }
 
-// parentDesc describes p as "Kind ns/name", plus its section and port when set.
-func parentDesc(p objects.ParentRef) string {
-	d := p.Kind + " " + p.Namespace + "/" + p.Name
-	if p.SectionName != "" {
-		d += " section " + p.SectionName
-	}
-	if p.Port != 0 {
-		d += fmt.Sprintf(" port %d", p.Port)
-	}
-	return d
-}
-
 // parentKind reports whether group/kind is a served Gateway or ListenerSet kind.
 func (in Input) parentKind(group, kind string) bool {
 	for _, k := range in.Served {
@@ -685,22 +654,6 @@ func within(extra string) string {
 		return ""
 	}
 	return " (" + extra + ")"
-}
-
-// policySeverity maps a current policy ancestor condition to a severity
-// (design §5.2: Overridden is info, PartiallyValid a warning).
-// Reason Pending never reaches it: current() treats it as not processed.
-func policySeverity(c metav1.Condition) (Severity, bool) {
-	switch c.Reason {
-	case "PartiallyValid":
-		return SeverityWarning, true
-	case "Overridden":
-		return SeverityInfo, true
-	}
-	if c.Status == metav1.ConditionFalse {
-		return SeverityError, true
-	}
-	return "", false
 }
 
 // proxyCheck: KGWUI-006. Proxies are Deployments in the Gateway's namespace

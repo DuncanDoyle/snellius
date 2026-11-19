@@ -3,8 +3,8 @@ import { EyeOff } from "lucide-react";
 import { useMemo } from "react";
 import { useBackends } from "../../api/exploreHooks";
 import type { BackendRow, BackendsResponse, Page } from "../../api/types";
+import { isSecureMode } from "../../auth/mode";
 import { backendsCopy } from "../../copy/backends";
-import { listCopy } from "../../copy/explorer";
 import { trafficCopy } from "../../copy/traffic";
 import { ListFrame } from "../../explore/ListFrame";
 import { listValues, useListPage } from "../../explore/listQuery";
@@ -148,7 +148,7 @@ export function BackendsPage({ stylesOverride }: BackendsPageProps = {}) {
           selected={namespace}
           onChange={(v) => l.setFilter({ namespace: single(namespace, v) })}
         />
-        {l.data?.hidden ? (
+        {l.data?.hidden && !isSecureMode() ? (
           <span className="label" data-testid="backends-hidden">
             <EyeOff size={14} aria-hidden="true" /> {backendsCopy.hidden}
           </span>
@@ -159,11 +159,12 @@ export function BackendsPage({ stylesOverride }: BackendsPageProps = {}) {
           installId={l.id}
           page={page}
           busy={l.busy}
-          onClearFilters={l.filtered ? l.clearFilters : undefined}
+          onClearFilters={l.onEmptyAction}
           sort={l.sort}
           onSort={l.setSort}
           onPage={l.setCursor}
-          emptyTitle={l.filtered ? listCopy.emptyFiltered(backendsCopy.noun[1]) : listCopy.empty(backendsCopy.noun[1])}
+          emptyTitle={l.emptyTitle(backendsCopy.noun[1])}
+          clearLabel={l.emptyActionLabel}
         />
       </StaleGate>
     </ListFrame>

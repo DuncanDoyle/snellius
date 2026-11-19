@@ -58,8 +58,11 @@ func (h *handler) pathList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	t, proj, kept := h.pathModel(p, i)
 	v := h.view(r)
+	t, proj, kept := h.pathModel(p, i, v)
+	rows := pathScope(t, q.Scope)
+	prefetchPaths(v, i.Index, t, q.Scope, rows)
+	proj = proj.For(t, v.projectInput(p, i), v.scopedFilter(i, t, v.visibleRows(t, rows)))
 	resp, err := pathsPage(h.linker(v, p, i, t, proj), p, i, v, t, proj, kept, q)
 	if err != nil {
 		fail(w, err)
@@ -68,17 +71,57 @@ func (h *handler) pathList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// pathScope picks the rows of t whose root route is in scope; nil when scope is nil.
+func pathScope(t *paths.Topology, scope []string) func(paths.Row) bool {
+	if scope == nil {
+		return nil
+	}
+	return func(r paths.Row) bool { return explore.InScope(scope, t.RootNamespace(r)) }
+}
+
+// prefetchPaths resolves the buckets of the install's routes in scope, the
+// roots, then the dependencies of the rows rows picks (all when nil) that no
+// denied root hides.
+func prefetchPaths(v *view, ix *explore.Index, t *paths.Topology, scope []string, rows func(paths.Row) bool) {
+	if ix != nil {
+		v.prefetch(func(add func(objects.Ref)) {
+			for i := range ix.Routes {
+				if explore.InScope(scope, ix.Routes[i].Ref.Namespace) {
+					add(ix.Routes[i].Ref)
+				}
+			}
+		})
+	}
+	prefetchRows(v, t, rows)
+}
+
+// prefetchRows resolves the dependencies of t's rows that want picks (all
+// when nil), as prefetchSets does.
+func prefetchRows(v *view, t *paths.Topology, want func(paths.Row) bool) {
+	if !v.batching() {
+		return
+	}
+	var sets []explore.DepSet
+	for _, r := range t.Rows {
+		if want == nil || want(r) {
+			sets = append(sets, t.Deps(r))
+		}
+	}
+	v.prefetchSets(sets, func(k int32) objects.Ref { return t.Refs[k] })
+}
+
 // pathModel is install i's topology from the path memo and its projection
-// for p; kept is false when the topology is over the memo cap.
-func (h *handler) pathModel(p *engine.Published, i *engine.InstallModel) (t *paths.Topology, proj *paths.Projection, kept bool) {
+// for p; kept is false when the topology is over the memo cap. A caller of v
+// without delegation analysis gets the topology built without it (D-114).
+func (h *handler) pathModel(p *engine.Published, i *engine.InstallModel, v *view) (t *paths.Topology, proj *paths.Projection, kept bool) {
 	m, id := p.Model, i.Resolved.ID()
 	h.pathMemo.Prune(m)
-	key := paths.TopoKey{Install: id, Source: m.Snapshot.Source, Seq: m.Seq}
+	key := paths.TopoKey{Install: id, Source: m.Snapshot.Source, Seq: m.Seq, Withhold: v.noDelegation()}
 	if i.Computed != nil {
 		key.Views = i.Computed.Generation
 	}
 	t, kept = h.pathMemo.Topology(key, func() *paths.Topology {
-		in := paths.Input{Index: i.Index, Views: i.Computed, Delegates: i.Rules.Delegator() != nil}
+		in := paths.Input{Index: i.Index, Views: i.Computed, Delegates: i.Rules.Delegator() != nil, Withhold: key.Withhold}
 		if i.Index != nil {
 			in.Decode = indexViews{ix: i.Index}
 		}
@@ -99,18 +142,22 @@ func projectInput(p *engine.Published, i *engine.InstallModel) paths.ProjectInpu
 	return paths.ProjectInput{Model: i, Next: m.Next, Snapshot: m.Snapshot, Now: m.ComputedAt, EndpointsCap: endpointsCap(i)}
 }
 
-// pathsPage is the page of t, projected by proj, that q asks for, as the caller of v may see it, linked by l.
+// pathsPage is the page of t, projected by proj, that q asks for, as the
+// caller of v may see it, linked by l. proj is already the caller's (Projection.For).
 func pathsPage(l linker, p *engine.Published, i *engine.InstallModel, v *view, t *paths.Topology, proj *paths.Projection, kept bool, q paths.Query) (PathsResponse, error) {
 	var visible func(explore.DepSet) bool
-	if !v.all {
+	if !v.readsAll() {
 		visible = func(d explore.DepSet) bool { return v.allowTable(t, d) }
 	}
 	pg, err := paths.Run(t, proj, q, visible)
 	if err != nil {
 		return PathsResponse{}, err
 	}
-	pg.Summary.Unmemoised = !kept
-	titles := findingTitles(i, proj, pg.Rows)
+	// The memo cap is over the whole topology, so only a full reader is told.
+	pg.Summary.Unmemoised = !kept && !v.projects()
+	// Secure mode says nothing of what was left out: the permissions note replaces it (design §7.5).
+	pg.Summary.Hidden = pg.Summary.Hidden && !v.omits()
+	titles := findingTitles(v, i, proj, pg.Rows)
 	rows := make([]PathRowDTO, 0, len(pg.Rows))
 	for _, k := range pg.Rows {
 		rows = append(rows, pathRow(l, titles, t, proj, k))
@@ -120,7 +167,7 @@ func pathsPage(l linker, p *engine.Published, i *engine.InstallModel, v *view, t
 		sum.NotComputed = NotComputedNoAttachments
 	}
 	return PathsResponse{Install: i.Resolved.ID(), Revision: strconv.FormatUint(pg.Digest, 36), Rows: rows, Next: pg.Next, Prev: pg.Prev,
-		Summary: sum, CollectedAt: wireTime(p.ConfirmedAt)}, nil
+		Summary: sum, DelegationNotChecked: v.noDelegation(), CollectedAt: wireTime(p.ConfirmedAt)}, nil
 }
 
 // titleKey is a finding's code and resource.
@@ -130,19 +177,19 @@ type titleKey struct {
 }
 
 // findingTitles maps the code and resource of each finding signal on the
-// page's rows to its finding's message, the first finding's when several
-// share both. Only the page's keys are held, so a request allocates per row
-// shown, not per finding.
-func findingTitles(i *engine.InstallModel, proj *paths.Projection, rows []int32) map[titleKey]string {
+// page's rows to its finding's message, the first shown finding's when
+// several share both. Only the page's keys are held, so a request allocates
+// per row shown, not per finding.
+func findingTitles(v *view, i *engine.InstallModel, proj *paths.Projection, rows []int32) map[titleKey]string {
 	sets := make([][]paths.Signal, 0, len(rows))
 	for _, k := range rows {
 		sets = append(sets, proj.Problems[k].Signals)
 	}
-	return signalTitles(i, sets...)
+	return signalTitles(v, i, sets...)
 }
 
 // signalTitles is findingTitles for the finding signals in sets.
-func signalTitles(i *engine.InstallModel, sets ...[]paths.Signal) map[titleKey]string {
+func signalTitles(v *view, i *engine.InstallModel, sets ...[]paths.Signal) map[titleKey]string {
 	var out map[titleKey]string
 	for _, set := range sets {
 		for _, s := range set {
@@ -163,7 +210,7 @@ func signalTitles(i *engine.InstallModel, sets ...[]paths.Signal) map[titleKey]s
 			continue
 		}
 		k := titleKey{f.Code, *f.Resource}
-		if t, ok := out[k]; ok && t == "" {
+		if t, ok := out[k]; ok && t == "" && v.shown(f) {
 			out[k] = f.Message
 		}
 	}

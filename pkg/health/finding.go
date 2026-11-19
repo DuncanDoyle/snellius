@@ -3,12 +3,16 @@
 package health
 
 import (
+	"crypto/sha256"
+	"reflect"
+	"slices"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/computed"
+	"github.com/DuncanDoyle/snellius/pkg/health/own"
 	"github.com/DuncanDoyle/snellius/pkg/install"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
@@ -66,7 +70,247 @@ const (
 
 // Grace is how long a resource may lack current status before it is reported
 // as not yet processed.
-const Grace = 60 * time.Second
+const Grace = own.Grace
+
+// Class says who may see a finding (D-106).
+type Class uint8
+
+// Classes. The zero value is derived, so every finding is derived unless runOwn marks it.
+const (
+	// ClassDerived findings are shown only to a viewer with the full read.
+	ClassDerived Class = iota
+	// ClassOwn findings come from package own and are shown per finding.
+	ClassOwn
+)
+
+// Class is f's class: ClassOwn only for a finding from package own.
+func (f *Finding) Class() Class { return f.class }
+
+// Derived is f without its visibility marks: derived, with no basis. It only
+// hides f from more viewers, so any caller may use it.
+func (f Finding) Derived() Finding {
+	f.class, f.Basis = ClassDerived, nil
+	return f
+}
+
+// Basis is what decided a finding, for who may see it (D-106).
+type Basis struct {
+	// Collection marks a finding decided only by Snellius's own collection and access state.
+	Collection bool
+	// Refs are the objects an own-object analyzer named, present or absent.
+	Refs []objects.Ref
+	// text is a collection finding's fixed Detail, which names no object, for Project.
+	text string
+}
+
+// refs are b's Refs; nil for a nil b.
+func (b *Basis) refs() []objects.Ref {
+	if b == nil {
+		return nil
+	}
+	return b.Refs
+}
+
+// collection reports whether b marks a collection finding, by flag or fixed text.
+func (b *Basis) collection() bool { return b != nil && (b.Collection || b.text != "") }
+
+// fixedText is b's fixed collection Detail; "" for a nil b.
+func (b *Basis) fixedText() string {
+	if b == nil {
+		return ""
+	}
+	return b.text
+}
+
+// Only conditionsCheck (through runOwn) may mark a finding own-object, and only
+// the collection checks may mark output collection; Evaluate clears the rest.
+func ownTrusted(c Check) bool { _, ok := c.(conditionsCheck); return ok }
+
+func collectionTrusted(c Check) bool {
+	switch c.(type) {
+	case cacheCheck, kindsCheck, endpointsCheck:
+		return true
+	}
+	return false
+}
+
+// ownedSet is what runOwn produced in one check run, by content. Each
+// registered finding carries its entry; confine keeps ClassOwn only on a
+// finding whose content and key still match that entry, once each, so a copy
+// changed or duplicated after runOwn is derived.
+type ownedSet struct {
+	entries []ownedEntry
+	// scratch holds the last print, reused so a check does not allocate.
+	scratch []byte
+}
+
+// ownedEntry is one registered finding: the digest of its print, and its key.
+// was is the key it was registered under, once rekey has moved it.
+type ownedEntry struct {
+	digest   [sha256.Size]byte
+	key, was []string
+	moved    bool
+	taken    bool
+}
+
+// unprinted are the fields ownedSet compares apart from a print: Key, and reg, which names the entry.
+var unprinted = func() uint64 {
+	k, _ := reflect.TypeFor[Finding]().FieldByName("Key")
+	r, _ := reflect.TypeFor[Finding]().FieldByName("reg")
+	return 1<<k.Index[0] | 1<<r.Index[0]
+}()
+
+// digest is f's content but its Key and reg: every field, exported or not, of
+// f and all it points to (deepPrint); false when it cannot be printed.
+func (o *ownedSet) digest(f *Finding) ([sha256.Size]byte, bool) {
+	p, ok := printFields(o.scratch[:0], reflect.ValueOf(f).Elem(), unprinted, 0)
+	o.scratch = p
+	if !ok {
+		return [sha256.Size]byte{}, false
+	}
+	return sha256.Sum256(p), true
+}
+
+// entry is f's entry while it is not taken and holds f's key, else nil. A
+// nil key and an empty one differ, as they would in a print.
+func (o *ownedSet) entry(f *Finding) *ownedEntry {
+	if o == nil || f.reg <= 0 || int(f.reg) > len(o.entries) {
+		return nil
+	}
+	e := &o.entries[f.reg-1]
+	if e.taken || !sameKey(e.key, f.Key) {
+		return nil
+	}
+	return e
+}
+
+// sameKey compares keys as a print would: a nil key and an empty one differ.
+func sameKey(a, b []string) bool {
+	return (a == nil) == (b == nil) && slices.Equal(a, b)
+}
+
+// claim is the entry rekey may move for f. A finding still under the registered
+// key that the entry has moved from must also match its digest: a changed copy
+// rekeyed first cannot keep the entry from the original, whichever comes first.
+func (o *ownedSet) claim(f *Finding) *ownedEntry {
+	if o == nil || f.reg <= 0 || int(f.reg) > len(o.entries) {
+		return nil
+	}
+	e := &o.entries[f.reg-1]
+	switch {
+	case e.taken:
+		return nil
+	case sameKey(e.key, f.Key):
+		if !e.moved {
+			e.was, e.moved = e.key, true
+		}
+		return e
+	case e.moved && sameKey(e.was, f.Key):
+		if d, ok := o.digest(f); ok && d == e.digest {
+			return e
+		}
+	}
+	return nil
+}
+
+// rekey runs rewrite, which changes only f's Key; a registered own-object
+// finding stays registered under its new key. Only the key normalisers call it.
+func (o *ownedSet) rekey(f *Finding, rewrite func()) {
+	var e *ownedEntry
+	if f.class == ClassOwn {
+		e = o.claim(f)
+	}
+	rewrite()
+	if e != nil {
+		e.key = slices.Clone(f.Key)
+	}
+}
+
+// add registers f and marks it with its entry.
+func (o *ownedSet) add(f *Finding) {
+	f.reg = 0
+	d, ok := o.digest(f)
+	if !ok {
+		return
+	}
+	o.entries = append(o.entries, ownedEntry{digest: d, key: slices.Clone(f.Key)})
+	f.reg = int32(len(o.entries)) //nolint:gosec // one check run registers far fewer than 2^31 findings
+}
+
+// take reports whether f still matches its entry, not yet taken, and takes it.
+func (o *ownedSet) take(f *Finding) bool {
+	e := o.entry(f)
+	if e == nil {
+		return false
+	}
+	if d, ok := o.digest(f); !ok || d != e.digest {
+		return false
+	}
+	e.taken = true
+	return true
+}
+
+// confine clears from c's output every visibility mark c may not set (D-106),
+// and ClassOwn from any finding of a trusted check that owned does not hold.
+// It copies fs before it changes it.
+func confine(c Check, fs []Finding, cr CheckResult, owned *ownedSet) ([]Finding, CheckResult) {
+	own, coll := ownTrusted(c), collectionTrusted(c)
+	if !coll {
+		cr.Collection, cr.fixed = false, ""
+	}
+	// A trusted check keeps ClassOwn only on what runOwn produced, unchanged.
+	var forged []bool
+	if own {
+		forged = make([]bool, len(fs))
+		for i := range fs {
+			forged[i] = fs[i].class != ClassDerived && !owned.take(&fs[i])
+		}
+	}
+	marked := func(i int) bool {
+		f := &fs[i]
+		return !own && (f.class != ClassDerived || len(f.Basis.refs()) > 0) || own && forged[i] || !coll && f.Basis.collection()
+	}
+	marks := false
+	for i := range fs {
+		marks = marks || marked(i)
+	}
+	if !marks {
+		return fs, cr
+	}
+	// The clone shares each Basis with fs, so a changed one is replaced, not edited.
+	fs = slices.Clone(fs)
+	for i := range fs {
+		if !own || forged[i] {
+			fs[i].class = ClassDerived
+		}
+		if fs[i].Basis == nil {
+			continue
+		}
+		b := *fs[i].Basis
+		if !own || forged[i] {
+			b.Refs = nil
+		}
+		if !coll {
+			b.Collection, b.text = false, ""
+		}
+		fs[i].Basis = nil
+		if len(b.Refs) > 0 || b.Collection || b.text != "" {
+			fs[i].Basis = &b
+		}
+	}
+	return fs, cr
+}
+
+// Readable says which objects a viewer may read.
+type Readable interface {
+	Ref(objects.Ref) bool
+}
+
+// NamedReadable is a Readable that also says which objects a viewer may read
+// by name: an object named in a readable one, present or absent (D-100 item 1).
+type NamedReadable interface {
+	Named(objects.Ref) bool
+}
 
 // Finding is one problem or notable fact about an install.
 type Finding struct {
@@ -102,9 +346,17 @@ type Finding struct {
 	// generation. It replaces Since for a caller who may not view all of
 	// Evidence, so Since tells that caller nothing about it. Never serialised.
 	ResourceSince *time.Time `json:"-"`
+	// class is ClassOwn for a finding from package own, else ClassDerived.
+	// Only fromOwn sets it; Class reads it. Never serialised.
+	class Class
+	// Basis is what decided the finding, nil when nothing did; runOwn sets its
+	// Refs. A pointer keeps the other findings small. Never serialised.
+	Basis *Basis `json:"-"`
 	// parent is the route parentRef a KGWUI-003 or KGWUI-011 finding is about;
 	// it orders findings. A pointer keeps the other findings small.
 	parent *objects.ParentRef
+	// reg is 1 + the finding's ownedSet entry, 0 for none; only ownedSet.add sets it.
+	reg int32
 }
 
 // CheckResult records whether a check could collect current input. A Required
@@ -134,6 +386,17 @@ type CheckResult struct {
 	// Hold says the check is still deciding on some items; nil when it waits on none.
 	// Evaluate sets it from the run's RunContext.Hold calls (D-068).
 	Hold *Hold `json:"hold,omitempty"`
+	// NotAssessed marks a result shown as "Not checked" to a viewer without the full read.
+	NotAssessed bool `json:"notAssessed,omitempty"`
+	// Collection marks a collection or access failure (a watch denied, the
+	// cache not synced). Every viewer sees it, Error replaced by fixed text
+	// that names no object. Never serialised.
+	Collection bool `json:"-"`
+	// fixed is a collection result's fixed Error, for Project.
+	fixed string
+	// crdNoted marks a Detail with a CRD comparison note; noCRDNote is that Detail without it, for Withhold.
+	crdNoted  bool
+	noCRDNote string
 }
 
 // Hold is what a check waits on before it decides: counts and a time, never
@@ -200,12 +463,7 @@ type Input struct {
 
 // ConditionTypes are an implementation's route condition types beyond
 // Gateway API's (Phase 5 design §9).
-type ConditionTypes struct {
-	// RouteOptional are judged on a route parent when present.
-	RouteOptional []string
-	// RouteRejected carry a replaced or dropped rule, KGWUI-015, when False.
-	RouteRejected []string
-}
+type ConditionTypes = own.ConditionTypes
 
 // KgatewayConditions are kgateway's: kgateway.dev/Programmed, and the
 // replaced rule on Accepted (2.3) or kgateway.dev/Programmed (2.4 on).
@@ -214,7 +472,7 @@ func KgatewayConditions() ConditionTypes {
 }
 
 // kgatewayProgrammed is kgateway's route condition type.
-const kgatewayProgrammed = "kgateway.dev/Programmed"
+const kgatewayProgrammed = own.KgatewayProgrammed
 
 // conditions returns in.Conditions, or KgatewayConditions when it is unset.
 func (in Input) conditions() ConditionTypes {

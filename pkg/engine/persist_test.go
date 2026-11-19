@@ -783,7 +783,7 @@ func TestOrphanIncompleteNoFinding(t *testing.T) {
 		t.Fatalf("cap %q", c)
 	}
 	noFinding(t, m, health.CodeDelegatedNotAttached, "apps/o", "with a cut parent")
-	if n := strings.Count(log.String(), "cap=contexts"); n != 1 {
+	if n := strings.Count(log.String(), "limit=delegation-contexts"); n != 1 {
 		t.Fatalf("cap logged %d times:\n%s", n, log.String())
 	}
 }
@@ -918,28 +918,6 @@ func TestScopeUnknownNoDelegationFindings(t *testing.T) {
 	}
 	if n == 0 || len(s.e.persist.m) != 0 {
 		t.Fatalf("%d delegation checks, %d windows", n, len(s.e.persist.m))
-	}
-}
-
-// The cap is logged once per distinct value, as install rejections are:
-// clearing and hitting it again logs nothing new.
-func TestDelegationCapLoggedOncePerValue(t *testing.T) {
-	var log bytes.Buffer
-	capped := dworld{routes: append(dbase(testutil.DelegateWildcard("apps")), dleaf("apps", "o", "/other", nil))}
-	clear := dworld{routes: []*unstructured.Unstructured{droot("api", "/api", map[string]any{"name": "svc", "port": int64(80)})}}
-	s := newDStepper(t, func(c *Config) {
-		c.DelegationBounds = computed.DefaultBounds
-		c.DelegationBounds.Contexts = 1
-		c.Logger = slog.New(slog.NewTextHandler(&log, nil))
-	})
-	for i, w := range []dworld{capped, clear, capped, clear, capped} {
-		m := w.step(s, time.Duration(i)*time.Second)
-		if got, want := m.Installs[0].Computed.Delegation.Cap, map[bool]string{true: computed.CapContexts, false: ""}[i%2 == 0]; got != want {
-			t.Fatalf("step %d: cap %q, want %q", i, got, want)
-		}
-	}
-	if n := strings.Count(log.String(), "cap=contexts"); n != 1 {
-		t.Fatalf("cap logged %d times:\n%s", n, log.String())
 	}
 }
 

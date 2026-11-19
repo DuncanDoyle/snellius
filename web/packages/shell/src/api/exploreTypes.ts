@@ -42,6 +42,8 @@ export interface Page<T> {
   next?: string;
   prev?: string;
   deniedInInstall?: number;
+  /** The caller gets no delegation analysis here (D-114). */
+  delegationNotChecked?: boolean;
   collectedAt: string;
 }
 
@@ -106,6 +108,21 @@ export interface RouteRow {
   health: HealthState;
   reason?: RowReason;
   mirror?: boolean;
+  /** The route's own findings; `health` is the summary of both signals. */
+  config: RouteConfigSignal;
+  /** The route's traffic path. */
+  path: RoutePathSignal;
+}
+/** A route's configuration signal. */
+export interface RouteConfigSignal {
+  state: HealthState;
+  reason?: RowReason;
+}
+/** A route's traffic path signal; incomplete says the viewer may not read all the path needs. */
+export interface RoutePathSignal {
+  state: HealthState;
+  reason?: RowReason;
+  incomplete: boolean;
 }
 /** A detail page's reason: its list row's reason plus, for kind finding, the deciding finding's id. */
 export type DetailReason = RowReason & { finding?: string };
@@ -372,7 +389,11 @@ export interface RouteDetail {
   ancestorsTruncated: boolean;
   childCount: number;
   declaredCount: number;
+  /** The caller gets no delegation analysis (D-114). */
+  delegationNotChecked?: boolean;
   collectedAt: string;
+  config: RouteConfigSignal;
+  path: RoutePathSignal;
 }
 
 // Views B and C (2.4). Task 66 renders them.
@@ -491,10 +512,22 @@ export interface Endpoints {
   source: string;
   port?: BackendPort;
   runtime?: EndpointsRuntime;
-  /** Meaningless when complete is "not-applicable": nothing was read. */
+  /** Meaningless when complete is "not-applicable" or "not-permitted": nothing was read. */
   readAt: string;
-  /** A backend detail's scoped read may also be "timed-out" or "busy". */
-  complete: "complete" | "partial" | "failed" | "unavailable" | "stale" | "not-applicable" | "timed-out" | "busy";
+  /**
+   * "not-permitted": the viewer may not list the Service's EndpointSlices.
+   * A backend detail's scoped read may also be "timed-out" or "busy".
+   */
+  complete:
+    | "complete"
+    | "partial"
+    | "failed"
+    | "unavailable"
+    | "stale"
+    | "not-applicable"
+    | "not-permitted"
+    | "timed-out"
+    | "busy";
   ready?: number;
   total?: number;
   items?: Endpoint[];
@@ -573,6 +606,8 @@ export interface PathsResponse {
   next?: string;
   prev?: string;
   summary: PathSummary;
+  /** The caller gets no paths through parent routes (D-114). */
+  delegationNotChecked?: boolean;
   collectedAt: string;
 }
 
@@ -601,6 +636,8 @@ export interface BackendsResponse {
   hidden?: boolean;
   /** The Gateways and namespaces of the visible backends, each counted with every filter but its own. */
   facets?: BackendFacets;
+  /** The caller gets no paths through parent routes (D-114). */
+  delegationNotChecked?: boolean;
   collectedAt: string;
 }
 /** A Gateway and the backends it has a visible path to. */
@@ -669,5 +706,7 @@ export interface BackendDetail {
   explanations: RefExplanation[];
   service?: ServiceFact;
   conditions?: Condition[];
+  /** The caller gets no paths through parent routes (D-114). */
+  delegationNotChecked?: boolean;
   collectedAt: string;
 }

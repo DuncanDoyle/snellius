@@ -17,10 +17,12 @@ import {
   computedCopy,
   delegationCopy,
   detailCopy,
+  diagnosticsCopy,
   effectiveCopy,
   listCopy,
   routeCopy,
   routeStateDelegationCopy,
+  traceCopy,
 } from "../../copy/explorer";
 import { hrefPath, pseudoRules, renderWithTheme, WithKgatewayPack } from "../../test/render";
 import { controlRoomDark, controlRoomLight } from "../../theme/themes";
@@ -711,4 +713,81 @@ it("rows are a table whose cells sit under named column headers", async () => {
   const cells = within(row as HTMLElement).getAllByRole("cell");
   expect(cells).toHaveLength(heads.length);
   expect(cells[2]).toHaveTextContent(delegationCopy.outcomes.dropped);
+});
+
+describe("a response that withholds delegation analysis (D-114)", () => {
+  /** mid as the server sends it to that viewer: no counts, checks, effective matches or paths through parents. */
+  const limited = () => {
+    const d = detail(routeGolden);
+    for (const r of d.rules)
+      for (const b of r.backendRefs)
+        if (b.delegation)
+          b.delegation = { ...b.delegation, computed: undefined, selected: undefined, attached: undefined };
+    d.parentRefs = [{ group: GW, kind: "HTTPRoute", namespace: "shop", name: "root" }];
+    return { ...d, effective: undefined, serves: [], delegationNotChecked: true };
+  };
+
+  it("says Not checked for refs, effective matches and serves, and fetches no rows", async () => {
+    // /meta says the full read: the response alone decides.
+    serve(api({ name: "mid", d: limited() }));
+    const first = mount(`${page("shop/mid")}?open=1`);
+    await loaded();
+    const declared = screen.getByTestId("backend-declared");
+    expect(await within(declared).findByText(diagnosticsCopy.notChecked)).toBeInTheDocument();
+    expect(within(declared).queryByTestId("ref-counts")).toBeNull();
+    expect(within(screen.getByRole("region", { name: effective })).getByTestId("not-checked")).toBeInTheDocument();
+    const serves = screen.getByRole("region", { name: new RegExp(`^${traceCopy.serves}`) });
+    expect(within(serves).getByTestId("not-checked")).toBeInTheDocument();
+    expect(serves).not.toHaveTextContent(traceCopy.servesNone);
+    first.unmount();
+
+    mount(`${page("shop/mid")}?tab=delegation`);
+    const [s] = await tabLoaded();
+    await within(s as HTMLElement).findByText(diagnosticsCopy.notChecked);
+    expect(within(s as HTMLElement).queryByRole("button", { name: delegationCopy.toggleRows(false) })).toBeNull();
+    expect(delegationCalls()).toHaveLength(0);
+  });
+
+  it("a full reader keeps the counts", async () => {
+    serve(api({ name: "mid", d: detail(routeGolden) }));
+    mount(`${page("shop/mid")}?open=1`);
+    await loaded();
+    expect(within(screen.getByTestId("backend-declared")).getByTestId("ref-counts")).toBeInTheDocument();
+    expect(screen.queryByTestId("not-checked")).toBeNull();
+  });
+
+  it("a polled detail that flips the marker switches the view both ways while /meta stays a full read", async () => {
+    let withheld = false;
+    serve(api({ name: "mid", d: withheld ? limited() : detail(routeGolden) }));
+    // The detail is chosen per poll: a permission change lands on the next one. /meta never changes.
+    vi.mocked(fetch).mockImplementation(async (url) => {
+      const u = new URL(String(url), "http://ui");
+      const r = api({ name: "mid", d: withheld ? limited() : detail(routeGolden) })(u);
+      return r === undefined
+        ? new Response(JSON.stringify({ error: "not found" }), { status: 404 })
+        : new Response(JSON.stringify(r), { status: 200 });
+    });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mount(`${page("shop/mid")}?open=1`);
+      await loaded();
+      const declared = () => screen.getByTestId("backend-declared");
+      expect(within(declared()).getByTestId("ref-counts")).toBeInTheDocument();
+      const poll = () =>
+        act(async () => {
+          await vi.advanceTimersByTimeAsync(POLL_MS + 100);
+        });
+      withheld = true;
+      await poll();
+      await waitFor(() => expect(within(declared()).getByTestId("not-checked")).toBeInTheDocument());
+      expect(within(declared()).queryByTestId("ref-counts")).toBeNull();
+      expect(screen.getByRole("region", { name: effective })).toHaveTextContent(diagnosticsCopy.notChecked);
+      withheld = false;
+      await poll();
+      await waitFor(() => expect(within(declared()).getByTestId("ref-counts")).toBeInTheDocument());
+      expect(screen.queryByTestId("not-checked")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

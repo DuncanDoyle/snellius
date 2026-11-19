@@ -62,6 +62,8 @@ type builder struct {
 	rejecting map[objects.Ref]bool
 	// conds are the install's condition types beyond Gateway API's.
 	conds health.ConditionTypes
+	// findingsOf indexes the report's findings per resource, in report order.
+	findingsOf map[objects.Ref][]int32
 }
 
 // Build builds the index of one install. It is pure: the same input gives
@@ -102,14 +104,16 @@ func Build(in Input) *Index {
 		b.gateways(ix, lsViews)
 	}
 	ix.parentKinds = b.parents
-	ix.Findings = b.worst
+	ix.controllers, ix.noDelegation = b.in.Install.ControllerNames, b.in.Install.NoDelegation
+	ix.parentObjs = b.parentObjects()
+	ix.Findings, ix.findings, ix.findingsOf, ix.unknown = b.worst, b.in.Health.Findings, b.findingsOf, b.unknown
 	ix.admitted = b.admit(ix)
 	return ix
 }
 
 // findings fills the worst finding per object and the install-wide unknown rule.
 func (b *builder) findings() {
-	b.worst = map[objects.Ref]Worst{}
+	b.worst, b.findingsOf = map[objects.Ref]Worst{}, map[objects.Ref][]int32{}
 	fs := b.in.Health.Findings
 	for i := range fs {
 		f := &fs[i]
@@ -117,6 +121,7 @@ func (b *builder) findings() {
 			continue
 		}
 		b.worst[*f.Resource] = b.worst[*f.Resource].Add(f)
+		b.findingsOf[*f.Resource] = append(b.findingsOf[*f.Resource], int32(i)) // #nosec G115 -- a finding count fits in int32
 		if f.Severity != health.SeverityError && f.Severity != health.SeverityWarning {
 			continue
 		}
@@ -210,12 +215,12 @@ func (b *builder) routes() {
 	}
 	for _, u := range o.Unattached {
 		i := b.rowFor(u.Route.Kind, u.Route.Obj, false)
-		b.link(i, ParentLink{Target: u.Parent.Ref(), Ref: u.Parent, Attachment: AttachmentPending, Pending: pendingParentMissing})
+		b.link(i, ParentLink{Target: u.Parent.Ref(), Ref: u.Parent, Attachment: AttachmentPending, Pending: pendingParentMissing, flags: FlagPending})
 		b.rows[i].Flags |= FlagPending
 	}
 	for _, c := range o.Declared {
 		i := b.rowFor(c.Route.Kind, c.Route.Obj, false)
-		b.link(i, ParentLink{Target: c.Parent.Ref(), Ref: c.Parent, Attachment: AttachmentDeclared})
+		b.link(i, ParentLink{Target: c.Parent.Ref(), Ref: c.Parent, Attachment: AttachmentDeclared, flags: FlagDeclared})
 		b.rows[i].Flags |= FlagDeclared
 	}
 	b.unwatchedRows()
@@ -287,6 +292,13 @@ func (b *builder) via(target objects.Ref) *objects.Ref {
 // of the install's controllers, current entries only (Phase 1 freshness),
 // and adds the row's flags (design §6.1).
 func (b *builder) fromStatus(i int, p objects.ParentRef) ParentLink {
+	l := b.statusLink(i, p)
+	b.rows[i].Flags |= l.flags
+	return l
+}
+
+// statusLink is fromStatus without the row: the link with the flags it sets.
+func (b *builder) statusLink(i int, p objects.ParentRef) ParentLink {
 	r, status := &b.rows[i], b.aux[i].status
 	l := ParentLink{Target: p.Ref(), Ref: p, Via: b.via(p.Ref())}
 	var st *objects.RouteParentStatus
@@ -298,12 +310,12 @@ func (b *builder) fromStatus(i int, p objects.ParentRef) ParentLink {
 	}
 	if st == nil {
 		l.Attachment, l.Pending = AttachmentPending, pendingNoStatus
-		r.Flags |= FlagPending
+		l.flags |= FlagPending
 		return l
 	}
 	if why := health.RoutePendingFor(r.Obj, st.Conditions, b.conds); why != "" {
 		l.Attachment, l.Pending = AttachmentPending, why
-		r.Flags |= FlagPending
+		l.flags |= FlagPending
 		return l
 	}
 	// Current: Accepted and ResolvedRefs are present and neither is Unknown.
@@ -311,24 +323,29 @@ func (b *builder) fromStatus(i int, p objects.ParentRef) ParentLink {
 	acc := objects.FindCondition(cs, "Accepted")
 	if acc.Status == metav1.ConditionTrue {
 		l.Attachment = AttachmentAccepted
-		r.Flags |= FlagAccepted
+		l.flags |= FlagAccepted
 	} else {
 		l.Attachment = AttachmentNotAccepted
-		r.Flags |= FlagNotAccepted
+		l.flags |= FlagNotAccepted
 		if (acc.Reason == "RouteRuleReplaced" || acc.Reason == "RouteRuleDropped") && slices.Contains(b.conds.RouteRejected, "Accepted") {
-			r.Flags |= FlagNotProgrammed // a replaced or dropped rule, reported through Accepted (kgateway 2.3)
+			l.flags |= FlagNotProgrammed // a replaced or dropped rule, reported through Accepted (kgateway 2.3)
 		}
 	}
 	if c := objects.FindCondition(cs, "ResolvedRefs"); c.Status == metav1.ConditionFalse {
-		r.Flags |= FlagRefsUnresolved
+		l.flags |= FlagRefsUnresolved
 	}
 	for _, t := range b.conds.RouteOptional {
 		if c := objects.FindCondition(cs, t); c != nil && c.Status == metav1.ConditionFalse {
-			r.Flags |= FlagNotProgrammed
+			l.flags |= FlagNotProgrammed
 		}
 	}
-	if b.rejecting != nil && (b.rejecting[l.Target] || l.Via != nil && b.rejecting[*l.Via]) && isTrue(cs, programmedType) {
-		r.Flags |= FlagGatewayRejecting
+	if b.rejecting != nil && isTrue(cs, programmedType) {
+		for _, g := range []*objects.Ref{&l.Target, l.Via} {
+			if g != nil && b.rejecting[*g] {
+				l.flags |= FlagGatewayRejecting
+				r.rejectedBy = append(r.rejectedBy, *g)
+			}
+		}
 	}
 	// The deciding condition: the first False among Accepted, ResolvedRefs and the optional types.
 	var optional *metav1.Condition
@@ -550,9 +567,11 @@ func (b *builder) index(ix *Index) {
 		// The first backend with an error or warning finding lifts the row; mirrors never do (D-082).
 		for _, t := range a.targets {
 			if w := b.worst[t.Ref]; !t.Mirror && (w.Error != nil || w.Warning != nil) {
-				ref := t.Ref
-				r.Backend, r.Flags, r.State = &ref, r.Flags|FlagBackendProblem, lifted(r.State, true)
-				break
+				if r.Backend == nil {
+					ref := t.Ref
+					r.Backend, r.Flags, r.State = &ref, r.Flags|FlagBackendProblem, lifted(r.State, true)
+				}
+				r.problemBackends = append(r.problemBackends, t.Ref)
 			}
 		}
 	}
@@ -599,7 +618,8 @@ func (b *builder) gateways(ix *Index, lsViews []*objects.ListenerSetView) {
 		ref := objects.RefOf(u)
 		l := ListenerSetRow{Ref: ref, Obj: u, View: v, Parent: v.Parent.Ref(), Routes: ix.ByParent[ref],
 			Members: ix.members(ref, v.Listeners), Disagreements: b.disagreements[ref]}
-		l.State = lifted(b.state(ref), b.rejecting[l.Parent] && health.GatewayPending(u, v.Conditions) == "" && isTrue(v.Conditions, "Programmed"))
+		l.programmed = health.GatewayPending(u, v.Conditions) == "" && isTrue(v.Conditions, "Programmed")
+		l.State = lifted(b.state(ref), b.rejecting[l.Parent] && l.programmed)
 		if c := objects.FindCondition(v.Conditions, "Accepted"); c != nil && c.Status != metav1.ConditionTrue {
 			l.AcceptedReason = c.Reason
 		}
@@ -741,9 +761,14 @@ func (b *builder) views(ix *Index) {
 				}
 			}
 		}
-		// An unknown count presents no members, even when the rules list some (setting-unknown).
+		// An unknown count presents no members, even when the rules list some (setting-unknown);
+		// a viewer's visible count still reads them.
 		k := ListenerKey{m.Resource, m.Listener}
 		if !ix.Listeners[k].Known {
+			if ix.unknownMembers == nil {
+				ix.unknownMembers = map[ListenerKey][]Member{}
+			}
+			ix.unknownMembers[k] = append(ix.unknownMembers[k], Member{Row: id, ParentRef: m.ParentRef, Hostnames: m.Hostnames, Deps: deps})
 			continue
 		}
 		ms, ok := ix.ByListener[k]
@@ -756,8 +781,10 @@ func (b *builder) views(ix *Index) {
 		}
 		ix.ByListener[k] = append(ms, Member{Row: id, ParentRef: m.ParentRef, Hostnames: m.Hostnames, Deps: deps})
 	}
-	for _, ms := range ix.ByListener {
-		slices.SortFunc(ms, func(x, y Member) int { return cmp.Or(cmp.Compare(x.Row, y.Row), cmp.Compare(x.ParentRef, y.ParentRef)) })
+	for _, byL := range []map[ListenerKey][]Member{ix.ByListener, ix.unknownMembers} {
+		for _, ms := range byL {
+			slices.SortFunc(ms, func(x, y Member) int { return cmp.Or(cmp.Compare(x.Row, y.Row), cmp.Compare(x.ParentRef, y.ParentRef)) })
+		}
 	}
 	b.checks(ix, v.Checks)
 	for i := range ix.Routes {
@@ -1315,4 +1342,20 @@ func (ix *Index) members(resource objects.Ref, ls []objects.Listener) []RowID {
 	}
 	slices.Sort(out)
 	return slices.Compact(out)
+}
+
+// parentObjects indexes the snapshot's ListenerSets and HTTPRoutes by ref.
+func (b *builder) parentObjects() map[objects.Ref]*unstructured.Unstructured {
+	if b.in.Snapshot == nil {
+		return nil
+	}
+	m := map[objects.Ref]*unstructured.Unstructured{}
+	for _, k := range b.in.Served {
+		if k.Category == kinds.CategoryListenerSet || isHTTPRoute(k.Group, k.Kind) {
+			for _, u := range b.in.Snapshot.Objects[k.GVR()] {
+				m[objects.RefOf(u)] = u
+			}
+		}
+	}
+	return m
 }

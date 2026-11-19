@@ -1,36 +1,26 @@
 # Phase status
 
 ## Phase
-Phase: 7 — Identity & Access (inserted 2026-11-14, D-084)
-Base: 81a2c0b844677e9fa1f79b32b364066d4d17176b (main after #44)
-Docs: docs/phases/phase-7/
-Status: design
-
-### Queue
-- [ ] Design (`phases/phase-7/design.md`) ← CURRENT
-- [ ] Implementation plan
-- [ ] Codex review of design + plan, triage, user approval
-
-### Exit gates
-- [ ] tests/vet pass (observed)
-- [ ] all queue items done or deferred
-- [ ] design+plan cross-model review + triage
-- [ ] phase cross-model review + triage
-- [ ] decisions.md / design / plan in sync with code
-- [ ] snellius.dev matches the user-visible changes (program P-006; `npm run sync:findings` for finding codes)
-- [ ] phase-7-complete.md written, roadmap updated, tracked items closed
+Phase: 8 — Policies & Filters
+Base: set when the phase starts
+Docs: docs/phases/phase-8/
+Status: not started. Phase 7 closed 2026-11-19 (phases/phase-7/phase-7-complete.md), merged in #50 and released as `v0.8.0`. At the start: read the program file, remind the user about the upstream scope-endpoint issue, check kgateway#14815.
 
 ## Sub-phase
 Sub-phase: none
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md
-Waiting on: nothing (program file read 2026-11-14; no edge feeds Phase 7). Program file updated for the D-084 renumbering and the new edge E10 (kgwctl local MCP, D-089): kgateway-tooling `6612f3d`. Open `cross-repo` issues here: #15, #21 (Phase 12). Phase 7 ships as `v0.8.0` (user, 2026-11-14).
+Waiting on: nothing (program file read 2026-11-14, unchanged at 7.5 start 2026-11-17; no edge feeds Phase 7). Program file updated for the D-084 renumbering and the new edge E10 (kgwctl local MCP, D-089): kgateway-tooling `6612f3d`. Open `cross-repo` issues here: #15, #21 (Phase 12). Phase 7 ships as `v0.8.0` (user, 2026-11-14).
 Consumers: E2 (kgwctl Phase 1), E3 and E8 (kgwctl Phases 5 and 2): delivered in `v0.3.0` (2026-11-05, kgwctl#3), updated in `v0.4.0` (kgwctl#4), `v0.5.0` (module `github.com/DuncanDoyle/snellius`, kgwctl#5), `v0.6.0` (2026-11-09, generic core, kgwctl#7; E8 break, kgwctl#6) and `v0.7.0` (2026-11-12): kgwctl's E2 requests #18 (`cache.ListOnce`) and #19 (namespace-scoped inputs) shipped and closed; notified kgwctl#8, program file updated (kgateway-tooling `fd99830`). E7 (kgwctl Phase 6, policy model under `pkg/`) is UI Phase 8 (was 7 before D-084; program file not yet updated). An informational kgwctl compile job reports on every PR, never blocks.
 Open `cross-repo` issues (2026-11-13): here #15, #21 (xdsview E4/E5, for Phase 12); in kgwctl #1–#8 (notices from xdsview and this repo, consumer side).
 Provided to this repo: E4 and E5 from xdsview `v0.3.0` (renamed from krp; #15, #21) are for UI Phase 12 (was 11 before D-084).
 
 ## Carry-over (deferred to later phases)
+- (P3) Phase 8 (phase review, final check): extend the full-read-without-Events-or-CRDs test to deny each grant separately and to cover backend list, backend detail and route detail, with a byte baseline for the fully granted reader — src: phases/phase-7/reviews/phase-codex.md
+- (P4) Phase 8 and 9 (phase review PH6): extensions receive the raw publication beside per-object visibility helpers; inherited policies and winning-route predictions must use viewer-scoped computations so a hidden input cannot change a readable result (D-085) — src: phases/phase-7/reviews/phase-codex.md
+- (P3) After `v0.8.0` (user, 2026-11-18, D-118): compare how other Kubernetes UIs and platforms authorise per user, whether they hit the same check-rate limits, and whether Snellius's per-object visibility (D-085) causes them; what could be learned from their architecture. Include (user, 2026-11-18) an implicit namespace scope: derive the namespaces a viewer can read (cached SAR list answers, or SelfSubjectRulesReview as a hint only) and scope pages to them by default, SAR still deciding every object, shown in the UI with a way to widen; OpenShift's Projects API is the precedent
+- (P3) After `v0.8.0` (user, 2026-11-18): poll every 10 s instead of 5 s, pause while the tab is hidden and refresh on return (saves server work; check load follows answer lifetimes, not polls); a quiet "checking what you can see" hint after a few seconds of waiting; fairness between viewers in admission. No session cap for restricted viewers: idle sessions cost little, and D-116 already bounds concurrent work
 - (P3) REMIND USER at the start of each phase: file the upstream kgateway issue "Expose the controller's effective discovery scope through a read-only endpoint" (H9, D-009 §7). User chose to file it in a later phase (2026-10-20). Draft kept outside the repo (public repo). Before filing: confirm on a cluster that status stays after a namespace is deselected, and re-verify the file:line refs against kgateway main.
 - (P3) Scope verification for experimental Gateway API kinds: switch KGWUI-007 to the controller's enabled kinds once the upstream scope endpoint exists (D-017 §4) — src: phases/phase-1/reviews/phase-codex.md#5
 - (P3) Watch CRDs added or removed after startup without a restart — https://github.com/DuncanDoyle/kgateway-ui/issues/1
@@ -50,6 +40,7 @@ Provided to this repo: E4 and E5 from xdsview `v0.3.0` (renamed from krp; #15, #
 - Smaller Phase 2 and Phase 3 items (parked tasks, test gaps, layout at 720 px, P4 polish) — src: phases/phase-2/phase-2-complete.md and phases/phase-3/phase-3-complete.md, Deferred / open
 
 ## Notes
+- 2026-11-19: `v0.8.0` post-release, open until done: install `--version 0.8.0` in README and chart README; snellius.dev for `v0.8.0` (user, 2026-11-18; secure mode, sign-in setup, trust model, two signals, audit, capacity, changelog, `npm run sync:findings`); kgwctl `cross-repo` issue naming E2 and `v0.8.0` (`path: unknown, no-path` for callers without computed views; user approved); program file update in kgateway-tooling.
 - 2026-11-14: `v0.7.1` released (walkthrough fixes, #42 and #43, D-079 … D-083; phases/phase-6/phase-6-complete.md, Patch release v0.7.1). API v1 changes are additive. The snellius.dev sync now covers `v0.7.0` and `v0.7.1`.
 - 2026-11-12: Phase 6 closed (phases/phase-6/phase-6-complete.md), merged in #36 and released as `v0.7.0`. Its snellius.dev gate is still open: sync the site for `v0.7.0`. Open items from the record's Deferred / open: the KGWUI-023 title, the map's reserved rule column, export scope, the D-078 review. The user decides when Phase 7 starts; read the program file and set Base then.
 - 2026-11-13: axe scans of the main pages, light and dark, run in every e2e row (#37, `@axe-core/playwright`). Only serious and critical violations fail.

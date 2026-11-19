@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/DuncanDoyle/snellius/pkg/diagnose"
 	"github.com/DuncanDoyle/snellius/pkg/endpoints"
@@ -46,6 +47,32 @@ type handlerConfig struct {
 	scoped endpoints.ScopedReader
 	// consumersFor, if set, gives an install's non-route backend consumers.
 	consumersFor func(install.Install, *install.Owned) []objects.Consumer
+	// secure marks secure mode.
+	secure bool
+	// commitCheck and authzAudit are the commit wrapper's hooks (commit.go); nil means none.
+	commitCheck func(http.ResponseWriter, *http.Request) (*http.Request, error)
+	authzAudit  func(*http.Request, string)
+	// audit hears each answered /api/ request; disclosure keeps its body to scan (audit.go).
+	audit      func(AuditEvent)
+	disclosure bool
+	// gate wraps the handler inside the request audit, so its refusals are audited; nil means none.
+	gate func(http.Handler) http.Handler
+	// capHit hears each request that passes CheckLimit; nil means none.
+	capHit func(*http.Request)
+	// checkTrace hears each uncached check a request counts; nil means none.
+	checkTrace func(*http.Request, int, string, any)
+	// commitClock is the commit wrapper's clock; nil means time.Now.
+	commitClock func() time.Time
+	// bypass turns the secure-mode projection off, and off some of its steps;
+	// only the rule tests set them.
+	bypass bool
+	off    projStep
+}
+
+// WithSecureMode marks the handler secure: every /api/ response goes through
+// the per-viewer projection and the commit wrapper.
+func WithSecureMode() HandlerOption {
+	return func(c *handlerConfig) { c.secure = true }
 }
 
 // WithExtMounts serves m under /api/ext/{name}/. Callers check them with
@@ -138,12 +165,19 @@ func WriteError(w http.ResponseWriter, code int, msg string) { writeErr(w, code,
 
 // Visible returns the items whose ref the caller of r may view, in order,
 // and the number hidden, asking a about each ref once (D-013). Under
-// AllowAll, or a nil a, it makes no calls and returns items, clipped so an append cannot alias it.
+// AllowAll or a full read, it makes no calls and returns items, clipped so an append cannot alias it.
+// A nil a is AllowAll, or DenyAll in secure mode.
+// An ErrAuthorizer's error is recorded for the request and hides the ref; the API then answers 503.
+// In secure mode hidden is always 0 (D-085); Deps.View with VisibleTo is the secure-mode form.
 func Visible[T any](r *http.Request, a Authorizer, items []T, ref func(T) objects.Ref) (visible []T, hidden int) {
-	if a == nil || allowsAll(a) {
+	base, policy := unnarrow(orDefault(r, a))
+	if policy == nil && allowsAll(base) {
 		return slices.Clip(items), 0
 	}
-	v := &view{a: a, r: r, seen: map[objects.Ref]bool{}}
+	v := &view{a: base, policy: policy, r: r, lazy: true, seen: map[objects.Ref]bool{}}
+	if v.readsAll() {
+		return slices.Clip(items), 0
+	}
 	visible = make([]T, 0, len(items))
 	for _, it := range items {
 		if v.can(ref(it)) {
@@ -151,6 +185,9 @@ func Visible[T any](r *http.Request, a Authorizer, items []T, ref func(T) object
 		} else {
 			hidden++
 		}
+	}
+	if secureRequest(r) {
+		return visible, 0
 	}
 	return visible, hidden
 }

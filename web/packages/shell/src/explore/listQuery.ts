@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiError } from "../api/client";
+import { supportsFilter, useMeta } from "../api/hooks";
 import type { Page } from "../api/types";
+import { listCopy } from "../copy/explorer";
+import { shellCopy } from "../copy/shell";
 import { useInstallId } from "../shell/extension";
+import { useNamespaceScope } from "../shell/namespaceScopeStore";
 import { type ParamChanges, useUrlParams } from "../shell/urlParams";
 
 // region Helpers
@@ -9,7 +13,20 @@ export type ListName = "routes" | "gateways" | "listenersets" | "findings" | "pr
 
 /** The params each list's server documents (design §7.2), in the order they are sent. listener is 2.3 and never sent. */
 const API_PARAMS: Record<ListName, string[]> = {
-  routes: ["namespace", "kind", "parent", "attachment", "state", "health", "backend", "q", "sort", "cursor"],
+  routes: [
+    "namespace",
+    "kind",
+    "parent",
+    "attachment",
+    "state",
+    "health",
+    "config",
+    "path",
+    "backend",
+    "q",
+    "sort",
+    "cursor",
+  ],
   gateways: ["namespace", "health", "q", "sort", "cursor"],
   listenersets: ["namespace", "parent", "health", "q", "sort", "cursor"],
   findings: ["severity", "code", "kind", "namespace", "group", "q", "sort", "cursor"],
@@ -28,7 +45,18 @@ const DEFAULT_SORT: Record<ListName, string> = {
   backends: "problem.asc",
 };
 /** Repeatable params; the page URL holds them comma-joined (no value of theirs can contain a comma). */
-const REPEATED = new Set(["namespace", "kind", "state", "health", "backend", "severity", "code", "gateway"]);
+const REPEATED = new Set([
+  "namespace",
+  "kind",
+  "state",
+  "health",
+  "config",
+  "path",
+  "backend",
+  "severity",
+  "code",
+  "gateway",
+]);
 /** Params a list takes once although other lists repeat them; only the first URL value is sent. */
 const SINGLE: Partial<Record<ListName, Set<string>>> = {
   paths: new Set(["namespace", "kind"]),
@@ -47,6 +75,8 @@ export const FILTER_PARAMS = [
   "attachment",
   "state",
   "health",
+  "config",
+  "path",
   "backend",
   "severity",
   "code",
@@ -63,9 +93,19 @@ export function listValues(params: URLSearchParams, key: string): string[] {
   return params.get(key)?.split(",").filter(Boolean) ?? [];
 }
 
-/** The API query for list from the page URL: only documented params, repeatable ones expanded; skip is never sent. */
-export function apiQuery(list: ListName, params: URLSearchParams, q: string, skip: string[] = []): URLSearchParams {
+/**
+ * The API query for list from the page URL: only documented params, repeatable ones expanded; skip is never sent.
+ * scope, when not empty, is the header's namespace scope, sent comma-joined as namespaces.
+ */
+export function apiQuery(
+  list: ListName,
+  params: URLSearchParams,
+  q: string,
+  skip: string[] = [],
+  scope: readonly string[] = [],
+): URLSearchParams {
   const out = new URLSearchParams();
+  if (scope.length > 0) out.set("namespaces", scope.join(","));
   for (const key of API_PARAMS[list]) {
     if (skip.includes(key)) continue;
     if (key === "q") {
@@ -108,6 +148,7 @@ type ListHook<P> = (
 /**
  * URL state and data of one list page: filters, sort and cursor live in the query string (design §8.1).
  * skip names params the server does not advertise (/meta filters); they stay in the URL but are never sent.
+ * The header's namespace scope is sent when /meta lists it for list; a scope change returns to page one.
  */
 export function useListPage<T, P extends { install: string } = Page<T>>(
   list: ListName,
@@ -120,8 +161,35 @@ export function useListPage<T, P extends { install: string } = Page<T>>(
   const q = useDebounced(text, Q_DEBOUNCE_MS);
   // The debounced value starts at the URL's q, so a reload does not wait.
   const skipKey = skip.join(",");
-  const query = useMemo(() => apiQuery(list, params, q, skipKey.split(",")), [list, params, q, skipKey]);
-  const { data, error, cursorRejected, isLaggy } = useList(id, query);
+  const [scope, setScope] = useNamespaceScope();
+  const saved = scope.join(",");
+  // Whether the server takes the scope; undefined until /meta answers, false when it fails.
+  const { data: meta, error: metaError } = useMeta();
+  const supported = meta ? supportsFilter(meta, list, "namespaces") : metaError ? false : undefined;
+  // With a saved scope the list waits for /meta, so its first request is already scoped.
+  const held = saved !== "" && supported === undefined;
+  const scopeKey = supported ? saved : "";
+  // The URL's cursor belongs to the saved scope; after a change it is never sent, and is dropped.
+  const cursorScope = useRef(saved);
+  const stale = cursorScope.current !== saved;
+  useEffect(() => {
+    if (cursorScope.current === saved) return;
+    cursorScope.current = saved;
+    update({ cursor: null });
+  }, [saved, update]);
+  const query = useMemo(
+    () =>
+      apiQuery(
+        list,
+        params,
+        q,
+        [...skipKey.split(","), ...(stale ? ["cursor"] : [])],
+        scopeKey ? scopeKey.split(",") : [],
+      ),
+    [list, params, q, skipKey, stale, scopeKey],
+  );
+  // An empty install ID holds the request: list hooks then ask for nothing.
+  const { data, error, cursorRejected, isLaggy } = useList(held ? "" : id, query);
   // A rejected cursor is dropped (replace) and page one shows (design §8.6).
   useEffect(() => {
     if (cursorRejected) update({ cursor: null });
@@ -146,6 +214,16 @@ export function useListPage<T, P extends { install: string } = Page<T>>(
     setCursor: (c: string) => update({ cursor: c }),
     filtered,
     clearFilters,
+    /** The empty table's text: filters first, then the namespace scope, else the whole install. */
+    emptyTitle: (many: string) =>
+      filtered
+        ? listCopy.emptyFiltered(many)
+        : scopeKey
+          ? shellCopy.namespaceScope.emptyList(many)
+          : listCopy.empty(many),
+    /** The empty table's action and its label: clear the filters, or show all namespaces; none otherwise. */
+    onEmptyAction: filtered ? clearFilters : scopeKey ? () => setScope([]) : undefined,
+    emptyActionLabel: filtered ? listCopy.clearFilters : scopeKey ? shellCopy.namespaceScope.showAll : undefined,
     data,
     /** The rows are the previous query's while this one loads. */
     busy: isLaggy,

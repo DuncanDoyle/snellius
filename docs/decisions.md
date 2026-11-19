@@ -996,7 +996,7 @@ Measured on the reference machine, 5 runs per world:
 **Alternatives:** None of the four in 3.4; all four in 3.4 (a design change to the cache's access model).
 
 ## D-057 — Retained heap over 2.1 raised to 48 MiB; Service and EndpointSlice facts shrunk (2026-11-06, phase 3)
-**Status:** accepted 2026-11-06 (user)
+**Status:** accepted 2026-11-06 (user); budget raised to 64 MiB by D-100 (2026-11-15)
 
 **Context:** The 3.4 bench (`bench/3.4.txt`) measures +41.9 MiB retained heap over 2.1 in the measurement world, against the 40 MiB gate (D-054). Real data grew 4.4 MB (EndpointSlice facts, the snapshot's fact slices and the routes' Service backendRefs). Freed informer stores leave 6–14 MB of fragmentation that varies between runs. The Service and EndpointSlice watches hold about 960 B per object, not the design's 200 B (design §11).
 
@@ -1455,3 +1455,277 @@ Measured on the reference machine, 5 runs per world:
 4. kgwctl itself stays on kubeconfig (exec plugins such as kubelogin). It reports forbidden reads and never turns missing evidence into healthy. A browser or device-code login comes only if it ever calls a Snellius server.
 
 **Consequences:** The MCP server milestone splits into the two forms above.
+
+## D-090 … D-096 — Phase 7 design decisions (2026-11-14, Phase 7)
+**Status:** accepted under the user's AFK instruction (2026-11-14), after the Codex design and plan reviews (`phases/phase-7/reviews/design-codex.md`, `plan-codex.md`). Details in `phases/phase-7/design.md`.
+
+- **D-090** Identity comes from TokenReview with `audiences` set to Snellius's client ID, after full OIDC client validation (§4.1–4.2). The claim-mapping fallback needs a JWT library; its scope for `v0.8.0` and the dependency wait for the user (§4.3).
+- **D-091** A SubjectAccessReview authoriser: list then get, 30 s TTL never extended, a full-read fast path, hard bounds, `ErrAuthorizer` and a buffered response so an unavailable check answers 503, never 404 or a partial view (§6).
+- **D-092** Findings and object-derived check results carry a basis; a restricted viewer sees them only when the resource and the whole basis are readable. No permission beyond object RBAC; one permissions note per viewer (§7).
+- **D-093** Two signals in the API; legacy `health` keeps the D-082 lift and is at least unknown over a path that is incomplete for the viewer; incompleteness comes only from readable refs and permissions (§8).
+- **D-094** Audit as JSON lines on stdout with a fixed marker, the agreed levels and fields; OTLP later (§9).
+- **D-095** A probe listener with `/healthz`, `/readyz` (no install IDs) and a dependency-free `/metrics` (§3.3).
+- **D-096** Sessions in memory, one replica in secure mode; secure mode answers `503 secure-mode-incomplete` until 7.5 (§3.2, §5).
+
+## D-097 — TokenReview sets no audiences (2026-11-15, Phase 7, amends D-090)
+**Status:** accepted; found by the first `kind-secure` CI run.
+
+**Context:** D-090 set the TokenReview's `spec.audiences` to Snellius's client ID. The API server treats JWT authenticators as audience-agnostic: it matches `spec.audiences` only against its own ServiceAccount audiences (`--api-audiences`), so every review of an OIDC token came back unauthenticated.
+
+**Decision:** Snellius sends the TokenReview without `spec.audiences`. The API server checks the token against the audiences in its own JWT configuration. Snellius's binding to its client is its own `aud` (and `azp`) check, which it trusts once the API server has verified the signature. The `audience` sign-in failure reason goes; a refused review is `unauthenticated`.
+
+**Consequences:** The API server must accept the token through one of its configured audiences. The setups in the README do that with Snellius's client ID: the same client ID as the cluster, or an extra audience. A token whose `aud` lists both Snellius and an audience the cluster accepts, with `azp` naming Snellius, also works.
+
+## D-098 — No claim-mapping fallback in v0.8.0; managed clusters through #51 (2026-11-15, Phase 7, amends D-090)
+**Status:** accepted by the user (2026-11-15).
+
+**Context:** Secure mode needs an API server that accepts a token issued to Snellius. GKE, AKS with Entra ID and OpenShift's built-in sign-in do not accept one. The claim-mapping fallback (design §4.3) would cover them by having Snellius verify the token and rebuild the identity from its own settings. That copies the cluster's identity rules, so drift gives a user someone else's permissions, and it needs a JWT library.
+
+**Decision:** `v0.8.0` ships without claim mapping; sub-phase 7.7 is dropped. Clusters that cannot accept Snellius's token use local mode in `v0.8.0`. #51 explores sending the token those clusters already accept (a Google or Entra access token, or an OpenShift OAuth token) to TokenReview, which keeps the API server as the identity authority. Claim mapping stays the last resort if #51 and the infrastructure options (Pinniped, Identity Service for GKE) fail.
+
+**Consequences:** In `v0.8.0`, GKE and AKS users get no sign-in, no per-user view and no HTTPRoute exposure. The README says so.
+
+## D-099 — Permission cache: 30 s TTL for every decision, no RBAC watch (2026-11-15, Phase 7, amends D-091)
+**Status:** accepted by the user (2026-11-15), after two Codex rounds (`phases/phase-7/reviews/d099-codex.md`).
+
+**Context:** D-091 decided the full-read fast path only at sign-in and identity refresh, so a full reader who lost cluster-wide read kept the allow-all view for up to 15 min. An RBAC watch to invalidate the cache, with a 5 min TTL, was proposed to cut load. A watch event says RBAC changed, not that every API server has applied it, and a SubjectAccessReview cannot ask for a decision at a given version. A stale allow fetched just after the clear would then live for the whole TTL. Platforms that use RBAC watches safely (Rancher's steve, OpenShift's project cache) evaluate RBAC themselves from their own copy, which Snellius does not do (the API server is the only evaluator).
+
+**Decision:**
+1. Every permission decision, including the full-read fast path, expires after the TTL, anchored at the SAR's start and never extended. The fast path is rechecked lazily, when the identity next makes a request.
+2. TTL default 30 s, one setting: chart `auth.authz.cacheTTL`, flag `--authz-cache-ttl`, range 30 s to 15 min. Cache sizes and per-request limits stay internal.
+3. No RBAC watch in `v0.8.0`. 7.3's bench measures the check load; a watch with the same 30 s TTL (faster typical revocation, same worst case) is a later option. A longer TTL is the operator's explicit trade of freshness for load.
+
+**Consequences:** A revoked permission stays visible in Snellius for at most the TTL after the API server answers with the revocation. Load is about 25 checks per 30 s per active full reader.
+
+## D-100 — Permission checks scale with what a viewer can see (2026-11-15, Phase 7, amends D-057, D-091, D-099)
+**Status:** accepted by the user (2026-11-15), after the 7.3 bench and two Codex rounds (`phases/phase-7/reviews/sar-cost-codex.md`).
+
+**Context:** The 7.3 bench (Large: 100 namespaces, viewer allowed 10) showed list pages needing up to ~2,700 SARs per TTL, 503 at the 500-check cap, ~4,900 SARs/user/min against a target of 50, and cache bounds allowing ~6.5 GiB. Most checks were named `get`s on hidden objects, which D-091 used to honour `resourceNames` grants.
+
+**Decision:**
+1. **Lists enumerate by `list` permission.** An object appears in a list, count, facet or aggregate only when the viewer may `list` its resource in its namespace (cluster-wide for cluster-scoped kinds). Named `get` checks remain for detail pages and for objects named in a readable object, including targets that do not exist. A server flag (`--authz-named-get-scan`, chart `auth.authz.namedGetScan`, default off) restores scanning hidden objects with named `get` for clusters that rely on `resourceNames` read grants; the per-request cap still applies.
+2. **Asymmetric TTLs.** Allowed answers: default 60 s (`auth.authz.cacheTTL`, range 30 s to 15 min). Denied answers: 5 min. Both anchored at the SAR's start, never extended; errors are never cached. A cached full-read "false" keeps the expiry of a denying constituent; "true" expires at the earliest allowing constituent.
+3. **Fast path is lazy.** The full-read check runs only for requests whose handler needs a population, and a negative result is cached as in 2.
+4. **Validity at commit.** A response carries the earliest expiry of the allows it used; if that passed before commit, it is rebuilt once, else `503 authz-unavailable`.
+5. **Memory.** D-057's retained-heap budget rises from 48 to 64 MiB over the 2.1 baseline, with an 8 MiB sub-budget for the permission cache, enforced as a global byte bound (decisions, identity metadata, full-read entries) with LRU eviction; flights and queues bounded separately. The bench confirms the real number.
+6. **Load.** SAR resolution runs in parallel per request (8 workers), with a global limit of 32 concurrent SARs and 100 SAR/s, configurable (rate 1 to 10,000/s, burst default 500, amended 2026-11-15). SARs use their own client with no client-side throttle, so this limiter is the only one. The per-request cap is 1,000 distinct uncached SARs (amended 2026-11-15 from 500: `/backends` needs about 500 cold on Large unscoped once hidden routes add no checks; the global limiter protects the API server, the cap only bounds one request). `view` stays single-threaded: checks resolve into a request-local table first, then the handler renders.
+7. **Targets.** The 50 SARs/user/min target is replaced by measured targets on the Large fixture for a viewer allowed 10 namespaces: `/routes` at most 400 SARs cold, at most 150/min warm, every poll 200 without contention; every other list page at most 400 SARs cold, `/backends` at most 550 (amended 2026-11-15: `/paths` and `/backends` ask route roots before their dependencies, which keeps hidden routes from adding checks, and cost more than `/routes`; the 7.4 namespace scope cuts all of them about tenfold).
+8. **Namespace scope selector (7.4).** A persistent selector limits rows, counts and facets to chosen namespaces, so checks run only there. Cross-namespace dependencies keep their own checks; restricted ones stay unknown or incomplete.
+9. **README.** The defaults are the secure choice; the README explains how to tighten (`cacheTTL: 30s`, shorter session lifetimes) and how to relax (`cacheTTL` up to 15 min) and what each costs.
+
+**Consequences:** `resourceNames`-only read grants no longer make objects appear in lists by default. A removed RoleBinding stays effective in Snellius for up to 60 s, a new grant shows within 5 min. Fixed in 7.4 regardless: `deniedInInstall` counts and hidden findings in health aggregates (D-085), and EndpointSlices join the full-read set when they become an authorised population.
+
+## D-101 — At most 1,000 sessions by default, configurable; sessions hold only the refresh token (2026-11-16, Phase 7, amends D-096)
+**Status:** accepted by the user (2026-11-16), after the 7.3 memory bench.
+
+**Context:** The 7.3 bench measured the D-057 retained heap at +81.1 MiB against 64 MiB with 5,000 sessions (25.4 MiB, about 5.2 KiB each). Each session also held the ID token and access token, which nothing reads. A Snellius install serves a platform team and some application teams: dozens of people, not thousands.
+
+**Decision:**
+1. A session stores the identity, the refresh token and its timestamps, not the ID token or access token.
+2. At most 1,000 sessions by default: chart `auth.session.max`, flag `--session-max`, at least 1. Past it, the session unused for longest ends (audited, as before).
+3. `auth.session.idle` (30 min) and `auth.session.absolute` (8 h) stay as they are. The README and site docs say that the IdP's refresh-token lifetime can end a session sooner.
+
+**Consequences:** About 2 KiB per session, about 2 MiB at the default bound. An install with more concurrent browsers raises `auth.session.max` and accepts the memory.
+
+## D-102 — Install IDs keep the controller's namespace and name in secure mode (2026-11-16, Phase 7, exception to design §7.4)
+**Status:** accepted by the user (2026-11-16), after the 7.4 plan review (`reviews/plan-7.4-codex.md` #1).
+
+**Context:** An install's ID is `<namespace>.<name>` of its controller Deployment. It is the key in every install URL (`/i/{id}/…`, `/api/v1/installs/{id}/…`) and in `--install`, and the first release froze it as part of API v1. A restricted viewer who reaches an install through one readable object sees the ID even when they cannot read the Deployment. A hash of the Deployment's UID would hide the name, but changes on every reinstall or delete-and-recreate, which breaks bookmarks and shared links, and gives one install two URL schemes depending on the mode.
+
+**Decision:** The install ID stays `<namespace>.<name>` in every mode, for every viewer. Anyone who can see any object of an install learns its controller's namespace and name, and nothing more: edition, version, readiness, GatewayClass names and scope stay hidden per design §7.4.
+
+**Consequences:** The ID is a known disclosure, recorded here, not a D-085 leak: it never changes with hidden objects (`helm upgrade` patches the Deployment in place). A restricted viewer's responses contain no other field from the controller Deployment, and a test checks that.
+
+## D-103 — Every signed-in viewer sees every install (2026-11-16, Phase 7, amends D-102 and design §7.4)
+**Status:** accepted by the user (2026-11-16), after the Codex re-review of the 7.4 plan (`reviews/plan-7.4-codex.md`, re-review #N1, #N4).
+
+**Context:** Design §7.4 lists an install only when the viewer can read an object Snellius attributes to it. Deciding that needs a scan over the install's (kind, namespace) buckets. A bounded scan leaks: whether an install URL answers 404 or 200 depends on how many hidden buckets exist, and on a wide install the scan may never settle, because denials expire after 4–5 min.
+
+**Decision:** In secure mode every signed-in viewer sees every install's ID (D-102) and a neutral name, whatever they can read in it. No reachability check runs. Everything else about an install stays per viewer (design §7.4): GatewayClass names, controller readiness and version, scope details, and every row, count and finding.
+
+**Consequences:** Creating or removing a controller install is visible to every signed-in viewer: a stated exception to D-085, like D-102. An install with nothing the viewer can read shows empty pages, never a 404. No permission checks are spent on reachability.
+
+## D-104 — A restricted viewer sees a check's result only with read access to everything it reads (2026-11-16, Phase 7, implements design §7.6)
+**Status:** our call (2026-11-16), after four Codex passes over the 7.4 plan (`reviews/plan-7.4-codex.md`). The user may override.
+
+**Context:** Design §7.6 shows an object-derived check result to a restricted viewer only when they can read its whole basis. The plan tried to project each result piece by piece: stable basis, held items, re-rendered text, per-note bases. Each review pass found more text, counts, timers and branches that hidden objects still decide (proxy stats, xDS, delegation grace, Events cap, extension checks).
+
+**Decision:**
+1. Every check declares, statically, the kinds it reads. A viewer without the full read sees a check's result (state, text, notes, holds, deadlines) only when they may `list` every one of those kinds cluster-wide. Otherwise the result is "Not checked", whatever its state.
+2. Collection and access failures (a watch denied, the cache not synced) stay visible to every viewer, with fixed text.
+3. A check that declares nothing, extensions included, is "Not checked" for such a viewer.
+4. Findings keep their per-finding basis (design §7.3). Anything decided by history or a threshold (grace timers, `Since`, deadlines, global caps such as the Events cap) has its whole population in the basis, as a permission, never derived from which objects exist.
+
+**Consequences:** The decision depends only on permissions, so hidden objects never change it. Restricted viewers mostly see "Not checked" in "What was checked"; full-read viewers and local mode are unchanged. The per-result projection machinery is not built.
+
+## D-105 — Two classes of finding, and reads checked by the tests (2026-11-16, Phase 7, amends D-104 item 4)
+**Status:** our call (2026-11-16), after the fifth Codex pass over the 7.4 plan. The user may override.
+
+**Context:** Five review passes found inputs missing from hand-written declarations: kinds a check reads, and the populations behind persistence windows, timers and representatives selected over many objects (listener counts, computed delegation, CRD bundles, proxy stats).
+
+**Decision:**
+1. **Own-object findings** are decided only by their resource and the objects it names (its status, spec and named refs, including their grace by first sight). They keep the per-finding basis of design §7.3.
+2. **Derived findings** are every other finding: computed views, aggregates, skew, process, probes, proxy stats, anything selected over a population or gated by a population's timer. A viewer without the full read sees one only when they may `list` every kind its analyzer declares, cluster-wide, as D-104 does for check results.
+3. Declarations are checked by the tests, not by review: every check and analyzer runs over a recording snapshot, and a test fails when one reads a kind it does not declare, or when an own-object analyzer reads anything other than its resource and the objects it names.
+
+**Consequences:** A restricted application-team viewer sees the findings about their own objects (not accepted, ref not found, conflicts on their routes) and not the platform-wide derived ones (listener-count disagreement, version skew, proxy stats). Full-read viewers and local mode are unchanged. A missing declaration fails a test instead of leaking.
+
+## D-106 — Controller settings are install context; restricted viewers see own-object findings only (2026-11-16, Phase 7, amends D-104 and D-105)
+**Status:** accepted by the user (2026-11-16), after the sixth Codex pass over the 7.4 plan.
+
+**Context:** Six review passes kept finding inputs that hidden objects decide. Two sources remain however the declarations are refined. (1) The controller's settings, read from its Deployment and Pods, decide which objects belong to an install, its version and its rule set; nearly every finding depends on them. (2) Findings that look like they concern one object scan others: policies chosen by selectors, a Backend's consumer routes, computed triggers merged into status triggers. A test that perturbs inputs cannot prove a declaration complete.
+
+**Decision:**
+1. **Install context.** The controller's settings (scope, which objects belong to the install, version, rule set) are install context, like the install ID (D-102) and the install list (D-103). A change to them may change what every viewer sees: a stated exception to D-085.
+2. **Own-object findings** are produced by analyzers that receive only the finding's resource and a reader that resolves the objects it names, given the install context. The type of that reader is the boundary: nothing else is reachable. A viewer sees such a finding when they can read its resource and every object it named.
+3. **Everything else** (every other finding and every check result other than collection failures) is shown only to a viewer with the full read (design §6.4). Others see "Not checked" for results and do not see those findings.
+4. D-104's per-check kind lists and D-105's kind probe are not built.
+
+**Consequences:** D-085 holds by construction, apart from items 1 and D-102/D-103. Application teams see findings about their own objects; platform-wide findings and "What was checked" need the full read. Full-read viewers and local mode are unchanged.
+
+## D-107 — Install membership is install context (2026-11-16, Phase 7, extends D-106 item 1)
+**Status:** accepted by the user (2026-11-16), after the seventh Codex pass over the 7.4 plan.
+
+**Context:** Which objects belong to an install is decided not only by the controller's settings but by GatewayClasses (`controllerName`), the Gateway or ListenerSet a route attaches to, and Namespace labels when the controller watches selected namespaces (`pkg/install/assign.go`). A restricted viewer may be unable to read these. Lists already depend on membership since 7.3.
+
+**Decision:** Install membership (which Gateways, ListenerSets, routes and policies belong to an install, and which namespaces are in its scope) is install context, like the controller's settings (D-106 item 1). A change to a GatewayClass, a parent Gateway or ListenerSet, or Namespace labels may move a viewer's readable objects into or out of an install, and change their rows and findings accordingly: a stated exception to D-085.
+
+**Consequences:** The UI shows the same membership the controller acts on. The D-085 rule tests treat membership changes as an explicit, named mask. Backend membership through consumer routes is not install context: Backend findings stay derived (D-106 item 3).
+
+## D-108 — Own-object inputs and basis granularity (2026-11-16, Phase 7, clarifies D-106)
+**Status:** our call, from the Task 31 review.
+
+**Context:** Keeping today's own-object findings unchanged needed inputs the plan did not list, and the review asked where they sit against D-085.
+
+**Decision:**
+1. The served and experimental kinds (from API discovery and Snellius's configuration) and the rule set's target-not-found flag are install context (D-106 item 1).
+2. Whether Snellius collected a kind in a namespace comes from Snellius's own RBAC and configured namespaces. A change to Snellius's Roles or RoleBindings may change it, and so switch a 013 explanation on a visible route. This is the same exposure already accepted for collection failures (D-106 item 3).
+3. The endpoints result for a partial read lists namespaces that routes reference, so it is a derived result (D-106 item 3), not a collection failure.
+4. The basis is recorded per resource and analyzer, not per finding. A viewer who can read parent A but not parent B does not see the 002 about A. This is stricter than D-106 item 2, never looser.
+
+**Consequences:** A restricted viewer may miss an own-object finding they could in principle read (item 4). Task 32's rule tests expect this.
+
+## D-109 — The response time may move on a hidden change (2026-11-16, Phase 7, exception to D-085)
+**Status:** accepted by the user (2026-11-16), from the Task 32 review.
+
+**Context:** A response's `collectedAt` is the time of the snapshot it was computed from. Snellius recomputes on a source change or a due timer, and a change to an object the viewer cannot read triggers both. A viewer without the full read can therefore see that something in the install changed, though never what or where. Per-result times are already set to the response's time for such viewers.
+
+**Decision:** The response's `collectedAt` (and its header) stays the real snapshot time for every viewer: a stated exception to D-085, like collection failures (D-108 item 2). Serving restricted viewers an older tick time would show their own changes as older than they are and could read as stale. Per-result times and `/installs` `computedAt` are the same confirmation time for a viewer without the full read, so the surfaces agree: the model's compute time would mark the last hidden change. This narrows the earlier rejection of redefining `computedAt` to secure mode without the full read, which no existing client uses.
+
+**Consequences:** Restricted viewers keep an accurate time. Rounding it to a confirm-tick grid stays possible later without a design change.
+
+## D-110 — A listener check shows below the full read when its population is readable (2026-11-16, Phase 7, refines D-106 item 3)
+**Status:** our call, from the Task 33 review.
+
+**Context:** The listener-count check compares a listener's whole computed route population with its `attachedRoutes`. D-106 item 3 shows such results only to the full read. A viewer who can read every route the listener admits can assess it without seeing anything hidden.
+
+**Decision:**
+1. A viewer without the full read sees the listener check when they may `list` every route kind in every namespace the listener admits: its own namespace for `Same`, cluster-wide for `All` and `Selector`. A `Selector` listener also needs cluster-wide `list` on Namespaces, since membership depends on their labels.
+2. Otherwise the listener shows its visible count with no check, and counts, sort and member state use visible members only.
+3. Process sets show counts only with `list` on Deployments and Pods in their namespace, and probe facts only with cluster-wide `list` on Events, since Events are capped across the cluster.
+
+**Consequences:** Route owners with wide read access keep the listener check. No hidden object can change it, because the check runs only when its whole input is readable.
+
+## D-111 — Path incompleteness reads only the readable objects themselves (2026-11-16, Phase 7, refines design §8.1)
+**Status:** our call, from the Task 36 review.
+
+**Context:** The plan computed a route's parent chain from the index's parent-route edges. Those edges exist only when a parent route exists and is reachable from an owned route, so a hidden parent's deletion could flip a readable child between complete and incomplete. The plan also left the Gateway behind a ListenerSet unchecked.
+
+**Decision:**
+1. Parent routes come from the readable route's own `spec.parentRefs` and `status.parents` entries of kind HTTPRoute (status entries only for the install's controller names). A parent is walked only when `get` admits it, and is read from its own object whether or not it has a row or belongs to the install.
+2. A readable ListenerSet parent, of any served ListenerSet kind, also needs `get` on the Gateway its own `spec.parentRef` names and `list` on Gateways in that namespace.
+3. Every route kind is decided, not only HTTPRoutes. RequestMirror targets are not path rows (D-082) and are not checked.
+4. With delegation off, an HTTPRoute backendRef is an ordinary target.
+
+**Consequences:** Incompleteness depends only on readable objects, install context and the viewer's permissions. `ix.ParentRoutes` must not feed it.
+
+## D-112 — Snellius's own size limits are install-wide state (2026-11-17, Phase 7, exception to D-085)
+**Status:** accepted by the user (2026-11-17), from the 7.4 Codex review (findings 3 and 5).
+
+**Context:** Snellius bounds work per install (computed delegation contexts and edges) and per request (at most 1,000 permission checks, D-100). Hidden objects count toward both. A hidden route can use up a shared compute bound, so a restricted viewer's delegation contexts are cut or read "too large". Enough hidden objects can push a cold request past the check cap, so a page answers `503` instead of `200`.
+
+**Decision:** These limits are install-wide state, like collection failures (D-108): a stated exception to D-085. Hidden objects can change a restricted viewer's responses through these limits: how many there are, which namespaces they sit in and how their delegation is configured decide whether and where a limit is hit. A response never names or counts a hidden object.
+
+**Consequences:** 7.4 closes without per-viewer bounds. Making them viewer-independent stays possible later, at the cost of per-viewer recomputes and more checks per cold page.
+
+## D-113 — D-024 holds only outside secure mode (2026-11-17, Phase 7, amends D-024)
+**Status:** our call, from the 7.4 Codex review (finding 1).
+
+**Context:** D-024 lets computed delegation facts ignore which HTTPRoutes lie on the path. In secure mode a hidden route's matcher then reaches a readable route's delegation contexts, effective matches and dropped flag.
+
+**Decision:** In secure mode, for a viewer without the full read, delegation rows, contexts, effective matches and the dropped flag are omitted when they pass through a route the viewer cannot read. Outside secure mode D-024 is unchanged.
+
+**Consequences:** A restricted viewer can miss a context that a fully readable chain also reaches. Routes on a delegation path are authorised with `list`, while path incompleteness (D-111) walks parents with `get`.
+
+## D-114 — Delegation analysis is derived (2026-11-17, Phase 7, supersedes D-113's per-viewer rule)
+**Status:** accepted by the user (2026-11-17), after five fix rounds on the 7.4 Codex review's finding 1.
+
+**Context:** The delegation traversal computes contexts, effective matches, outcomes, notes, the dropped flag, uncertainty and child-entry checks over every route in the install. Five rounds of projecting these per viewer each closed one input and Codex found the next one computed install-wide (sibling selections, scope occupancy, uncertainty seeds, the unconfirmable note, child-entry classes).
+
+**Decision:** Delegation analysis is a derived result (D-106 item 3). In secure mode, a viewer without the full read gets none of it: no delegation contexts, effective matches, outcomes, notes, dropped flag or computed child-entry checks, and no path signals derived from them. Where the UI needs a value it shows "Not checked", decided by permissions alone. Outside secure mode and for full readers nothing changes (D-024).
+
+**Consequences:** Safe by construction: nothing the traversal computes reaches a restricted viewer. Application teams lose delegation analysis in secure mode until a per-viewer computation is designed. The per-viewer delegation projection from the fix rounds is removed where it becomes unused.
+
+## D-115 — 7.4's engine cost is accepted; PR #50's timing-regression gate is waived (2026-11-17, Phase 7)
+**Status:** accepted by the user (2026-11-17): "Yes, accept and waive". Codex recommended the same (`reviews/7.4-perf-codex.md`, decision consult).
+
+**Context:** On PR #50, D-044's timing-regression gate compares the whole of Phase 7 with `main`. 7.4's own-object boundary (D-106, D-108) made warm recompute at Large 20–71 % slower, and the analyzer stage's allocations broke their budget. Most of that was the own-object registry printing each finding up to eight times; [`f6a9011`](https://github.com/DuncanDoyle/snellius/commit/f6a90118ca70395e571e42c1259c2909fddb8546) removed it and the allocation and reference budgets pass again. What remains is spread over the own-object analyzers (each walks every route's parents and status blocks once per analyzer), the registry and confine, and the explore viewer data. Local A/B against `main` (Apple M5 Max, five interleaved runs each): Compute/large +14 %, large-contradicting +22–24 %, large-contradicting-worst +26 %, large-hit +24 %; ColdCompute/large +10 %, large-contradicting +19 %. Warm recompute on the reference machine: 42.7, 60.2 and 68.9 ms for large, contradicting and worst (`main`: 35.4, 48.0, 52.8 ms), against D-044's 150 ms budget.
+
+**Decision:** Accept this cost for 7.4. The timing-regression gate is waived for PR #50 only; it stays at +15 % for every later PR, measured against `main` after the merge. Reducing the cost is a tracked follow-up: one shared route walk inside package `own` that keeps each analyzer's findings and wake times separate, then a cheaper provenance check than content hashing, only with equivalent enforcement.
+
+**Consequences:** About 10–16 ms more per warm recompute at Large on the reference machine, within the absolute budgets. Later PRs compare against the slower `main`, so this cost no longer shows in an A/B; the follow-up carries acceptance criteria instead: the four benchmarks above within +15 % of `main` before Phase 7 ([`39c47c9`](https://github.com/DuncanDoyle/snellius/commit/39c47c93e494fbf7012e4e77eeebb08d2411cbbd)) on the reference machine. The registry stays: it stops a changed or copied finding from keeping own-object visibility.
+
+**Follow-up (2026-11-18, 7.5):** done. The four own route analyzers share one walk per route, and an own-object finding carries its registry entry, so confine and rekey no longer search; confine still compares content and key (`phases/phase-7/reviews/7.5-d115-codex.md`). A/B against `39c47c9` on the reference machine (7 interleaved runs, medians): Compute/large +5.5 %, large-contradicting +10.8 %, large-contradicting-worst +12.6 %, large-hit +8.3 %, all within the +15 % target.
+
+## D-116 — Permission checks admit a few requests at a time (2026-11-17, Phase 7)
+**Status:** accepted by the user (2026-11-17): "Few loads at a time (Recommended)". Codex recommended it (`phases/phase-7/reviews/7.5-load-codex.md`).
+
+**Context:** D-100 item 6 queues permission checks (SARs) one by one, FIFO, under one global rate. Each request sends its checks from 8 workers, so concurrent cold requests share the rate about evenly and none finishes before the whole backlog drains. On the load bench (50 cold namespace-grants viewers, Large, default limits) no viewer got a 200 from `/paths` (all `503 expired`) or `/backends` (all `503 check-limit`) in 6 minutes; `/routes` survived at 97 %. Allowed answers live 60 s from the check's start (item 2), so a request's first answers expire before its last check.
+
+**Decision:**
+1. A request that needs at least one uncached check waits for admission. Requests are admitted in arrival order, at most K at a time; K is the in-flight limit divided by the per-request parallelism (32 ÷ 8 = 4 by default), so admitted requests can fill every permit. No new setting.
+2. A request whose checks are all cached is never queued. Neither is a request that joins a full-read evaluation another request is already running: it sends no checks of its own.
+3. An admitted request keeps its admission until its response is final: full read, dependency rounds and the one rebuild at commit, which admission does not reset. Writing the response to the client happens after release, so a slow client holds no place. Answers read before the wait are not relied on; validity at commit (D-100 item 4) is unchanged. A GET or HEAD is first built without admission, and that build is discarded if it needs an uncached check; any other method is admitted before its first build, so it is never built twice for admission. Its body is read first, up to 1 MiB within 10 s (larger answers `413`; unreadable or stalled answers `400` and closes the connection), so a stalled upload holds no place or buffer for long, and every build reads the same body.
+4. Waiting requests are bounded globally and per viewer; above either bound the answer is `503 authz-busy`, audited `authz-unavailable` with reason `queue-full`, and the UI says Snellius is busy and retries on its next poll (user, 2026-11-18). The 1,024-waiter check backstop stays a check failure: `503 authz-unavailable`, audited `check-failed`. A cancelled request leaves the queue at once.
+5. Unchanged: both TTLs, the 1,000-check cap per request across rebuilds, 32 in flight, the rate and burst.
+
+**Consequences:** Under a cold storm, page loads finish one after another instead of all failing: the last of 50 cold viewers waits about their total checks ÷ the rate. A poll that needs a refresh (its allows are older than 60 s) queues behind cold loads and is slower meanwhile, but answers. Sustained demand above the rate still sheds load with `503 authz-unavailable`. Items 2–4 were made precise after the implementation review (`phases/phase-7/reviews/7.5-d116-codex.md`).
+
+## D-117 — The permission cache holds 50 restricted viewers within 8 MiB (2026-11-18, Phase 7)
+**Status:** accepted by the user (2026-11-18): "Shrink entries first (Recommended)". Codex advised profiling entry cost before any budget change (`phases/phase-7/reviews/7.5-d116-codex.md`, gate decision 1).
+
+**Context:** With D-116, every one of 50 cold viewers gets a first page, but on `/paths` and `/backends` their later polls stay slow. The cache's 8 MiB budget (D-100 item 5) holds about 17,900 answers at 468 B each; 50 viewers need about 19,750 (`/paths`) and 24,850 (`/backends`). Viewers poll in a cycle, so least-recently-used eviction drops each answer just before it is needed: about 48,000 evictions per page and no hits after the first page. `/routes` (17,500 answers) fits.
+
+**Decision:**
+1. Keep the 8 MiB budget. Profile an entry's cost and make entries smaller.
+2. If that is not enough, change eviction so a cache that is slightly too small keeps most of its hits instead of almost none.
+3. Raise the budget only if both fall short, and only with the user's approval and a fresh memory measurement against D-100's 64 MiB.
+
+**Consequences:** The load bench's per-viewer assertions (`pkg/api/sar_bench_test.go`) are the acceptance test.
+
+## D-118 — The default check rate's capacity is accepted and documented (2026-11-18, Phase 7)
+**Status:** accepted by the user (2026-11-18): "Accept and document (your recommendation), but I do want to think about this some more: Do other platforms have the same capacity, and do they hit the same kind of limits? Or is this due to Snellius architecture and how we approach access control and visibility. [...] I think we can finish phase 7 first, and release v0.8.0, and after that think about this some more".
+
+**Context:** With D-116 and D-117 ([`c479b13`](https://github.com/DuncanDoyle/snellius/commit/c479b13): an answer costs about 210 B, 0 evictions in the load bench), every target confirmed for 7.5 passes on `/routes`, `/paths` and `/backends`. But 50 restricted viewers polling `/backends` every 5 s need about 95 refresh checks/s against the default 100/s (deny refreshes about 32,800, allow refreshes about 14,800 after the first pages), so their polls take about 12 s and each scores about 35 polls in 7 minutes.
+
+**Decision:** Keep the default rate (D-100 item 6). The load bench requires each viewer to be sampled at least one deny TTL after its first 200, with at least one deny refresh and at least 20 scored polls, instead of a fixed 60 polls. The README says when to raise `auth.authz.rate` (`docs/documentation-notes.md`).
+
+**Consequences:** Near the default rate, polls slow down but answer. After `v0.8.0`: compare how other Kubernetes UIs and platforms authorise per user, whether they meet the same limits, and whether Snellius's per-object visibility model (D-085) is the cause; tracked in `phase-status.md`, Carry-over.
+
+## D-119 — In secure mode a build's authoriser only narrows SAR (2026-11-18, Phase 7)
+**Status:** decided by the author to fix a P1 from Codex's review (`phases/phase-7/reviews/7.5-web-gate-codex.md`, G1); reported to the user the same day. Replaces the 7.3 plan's "a registry authoriser is kept".
+
+**Context:** Opening the gate (7.5) made secure mode serve data. A downstream build that registered its own authoriser kept it in place of SubjectAccessReview, so a viewer could see objects their Kubernetes RBAC does not allow (the bundled example authorises by namespace alone).
+
+**Decision:** Secure mode always builds the SAR authoriser. A registered authoriser becomes a policy over it (`api.Narrowed`): every decision (named, list, batch, full read) needs both to allow; admission and caching stay SAR's. A policy that cannot answer list questions denies them. Local mode is unchanged. Extension helpers (`ViewerOf`, `Visible`) deny everything when given no authoriser in secure mode, including an extension mounted on its own (`Registry.Mounts` without one). A request keeps one full-read answer per authoriser, so one authoriser's answer never stands in for another's.
+
+**Consequences:** A downstream build can restrict what users see further, never widen it. A policy without list support hides everything gated on list permission (for example Pod and Event checks); a downstream build that wants those must answer list questions.
+
+## D-120 — The full read does not cover Events or CRDs (2026-11-19, Phase 7)
+**Status:** decided by the author (user away; release approved) to fix the phase review's P1s (`phases/phase-7/reviews/phase-codex.md`, PH2, Q1–Q3).
+
+**Context:** The full-read proof (D-100 item 3) leaves out Events and CustomResourceDefinitions, so it stays cheap. But probe facts (KGWUI-020, the probe check) come from Events, and CRD bundle skew (KGWUI-022, the skew check) from CRDs. A full reader without access to them could see those facts, or see pages change when they changed, against D-085 and D-110.
+
+**Decision:** Under the full read, Snellius also asks cluster-wide `list` on Events and on CRDs (one cached check each). A reader without them gets what a restricted viewer gets for those inputs: no KGWUI-020 and no KGWUI-022 on a CRD, the probe check reads "Not checked", check text and admission do not depend on them, and timestamps follow D-109. Collection status is the exception, as for every viewer: a failing or recovered Events or CRD watch still shows in the check's availability and in `/meta`.
+
+**Consequences:** Full-read `/routes` costs 24 cold checks instead of 22. A full reader needs cluster-wide `list` on CRDs to see CRD bundle skew; the README's RBAC section says so.

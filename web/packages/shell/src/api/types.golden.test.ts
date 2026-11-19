@@ -174,8 +174,10 @@ import type {
   RefsEvidence,
   ReleaseModeCount,
   RouteAttachment,
+  RouteConfigSignal,
   RouteCounts,
   RouteDetail,
+  RoutePathSignal,
   RouteRow,
   RowReason,
   Rule,
@@ -458,6 +460,7 @@ const check = shape<CheckResult>(
     pending: "?",
     unavailable: "?",
     hold: "?",
+    notAssessed: "?",
   },
   { hold: shape<CheckHold>({ until: "!", count: "!", reason: "!" }) },
   { unavailable: { off: 1, denied: 1, failing: 1, "not-on-version": 1, "not-observed": 1 } },
@@ -497,6 +500,7 @@ const headerKeys = {
   controllerNames: "!",
   readiness: "!",
   scope: "?",
+  detailsHidden: "?",
 } as const;
 const header = shape<InstallHeader>(headerKeys, { readiness, scope });
 const summary = shape<InstallSummary>(
@@ -536,6 +540,22 @@ const rowReason: Shape = {
         { kind: "!", code: "!", message: "?", backend: "?" },
         { backend: linkedRef },
         { kind: { "backend-problem": 1 } },
+      ),
+      "path-incomplete": shape<Extract<RowReason, { kind: "path-incomplete" }>>(
+        { kind: "!" },
+        {},
+        { kind: { "path-incomplete": 1 } },
+      ),
+      "not-attached": shape<Extract<RowReason, { kind: "not-attached" }>>(
+        { kind: "!" },
+        {},
+        { kind: { "not-attached": 1 } },
+      ),
+      "no-path": shape<Extract<RowReason, { kind: "no-path" }>>({ kind: "!" }, {}, { kind: { "no-path": 1 } }),
+      "path-problem": shape<Extract<RowReason, { kind: "path-problem" }>>(
+        { kind: "!", code: "?", message: "?" },
+        {},
+        { kind: { "path-problem": 1 } },
       ),
     } satisfies Record<RowReason["kind"], Shape>,
   },
@@ -606,8 +626,11 @@ const metaShape = shape<MetaResponse>(
     filters: "?",
     packs: "?",
     capabilityStates: "?",
+    authMode: "!",
+    limitedView: "?",
   },
   { kinds: kind, views: groupKind, capabilityStates: capability },
+  { authMode: { local: 1, secure: 1 } },
 );
 const errorShape = shape<ErrorResponse>({ error: "!" });
 
@@ -619,6 +642,7 @@ const pageKeys = {
   next: "?",
   prev: "?",
   deniedInInstall: "?",
+  delegationNotChecked: "?",
   collectedAt: "!",
 } as const satisfies Spec<Page<unknown>>;
 const page = (items: Shape) => shape<Page<unknown>>(pageKeys, { items });
@@ -659,6 +683,16 @@ const parentSummary = shape<ParentSummary>(
   { ref: linkedRef, via: linkedRef, computed: computedAttachment },
   { attachment: { accepted: 1, "not-accepted": 1, pending: 1, unwatched: 1, declared: 1 } },
 );
+const routeConfigSignal = shape<RouteConfigSignal>(
+  { state: "!", reason: "?" },
+  { reason: rowReason },
+  { state: healthState },
+);
+const routePathSignal = shape<RoutePathSignal>(
+  { state: "!", reason: "?", incomplete: "!" },
+  { reason: rowReason },
+  { state: healthState },
+);
 const routeRow = shape<RouteRow>(
   {
     ref: "!",
@@ -670,8 +704,17 @@ const routeRow = shape<RouteRow>(
     health: "!",
     reason: "?",
     mirror: "?",
+    config: "!",
+    path: "!",
   },
-  { ref: linkedRef, reason: rowReason, parents: parentSummary, parentRoutes: linkedRef },
+  {
+    ref: linkedRef,
+    reason: rowReason,
+    parents: parentSummary,
+    parentRoutes: linkedRef,
+    config: routeConfigSignal,
+    path: routePathSignal,
+  },
   { health: healthState },
 );
 const gatewayListRow = shape<GatewayListRow>(
@@ -823,6 +866,7 @@ const endpoints = shape<Endpoints>(
       unavailable: 1,
       stale: 1,
       "not-applicable": 1,
+      "not-permitted": 1,
       "timed-out": 1,
       busy: 1,
     },
@@ -993,11 +1037,16 @@ const routeDetail = shape<RouteDetail>(
     ancestorsTruncated: "!",
     childCount: "!",
     declaredCount: "!",
+    delegationNotChecked: "?",
     collectedAt: "!",
+    config: "!",
+    path: "!",
   },
   {
     ref: linkedRef,
     reason: detailReason,
+    config: routeConfigSignal,
+    path: routePathSignal,
     candidate,
     annotations: shape<RouteDetail["annotations"]>({ inheritParentMatcher: "?" }),
     parentRefs: specParentRef,
@@ -1111,13 +1160,14 @@ const diagnostics = shape<Diagnostics>(
       { controller: "!", proxies: "!" },
       {
         controller: shape<Diagnostics["processes"]["controller"]>(
-          { state: "!", observed: "!", ready: "?", desired: "?", version: "?", restricted: "?" },
+          { state: "!", observed: "!", ready: "?", desired: "?", version: "?", restricted: "?", notAssessed: "?" },
           {},
           { state: healthState },
         ),
         proxies: shape<Diagnostics["processes"]["proxies"]>(
           {
             state: "!",
+            notAssessed: "?",
             gateways: "!",
             ready: "!",
             rejecting: "!",
@@ -1162,6 +1212,7 @@ const processSet = shape<ProcessSet>(
     processes: "!",
     rollout: "?",
     restricted: "?",
+    notAssessed: "?",
   },
   {
     processes: processInfo,
@@ -1177,7 +1228,7 @@ const processes = shape<ProcessesResponse>(
     controller: processSet,
     proxies: page(
       shape<GatewayProcesses>(
-        { gateway: "!", health: "!", set: "!", rejects: "?", skew: "?" },
+        { gateway: "!", health: "!", notAssessed: "?", set: "!", rejects: "?", skew: "?" },
         { gateway: linkedRef, set: processSet },
         { health: healthState },
       ),
@@ -1301,7 +1352,16 @@ const pathRow = shape<PathRow>(
   },
 );
 const pathsResponse = shape<PathsResponse>(
-  { install: "!", revision: "?", rows: "!", next: "?", prev: "?", summary: "!", collectedAt: "!" },
+  {
+    install: "!",
+    revision: "?",
+    rows: "!",
+    next: "?",
+    prev: "?",
+    summary: "!",
+    delegationNotChecked: "?",
+    collectedAt: "!",
+  },
   {
     rows: pathRow,
     summary: shape<PathSummary>(
@@ -1336,7 +1396,16 @@ const pathsResponse = shape<PathsResponse>(
 );
 // Backends (sub-phase 6.3).
 const backendsResponse = shape<BackendsResponse>(
-  { install: "!", rows: "!", next: "?", prev: "?", hidden: "?", facets: "?", collectedAt: "!" },
+  {
+    install: "!",
+    rows: "!",
+    next: "?",
+    prev: "?",
+    hidden: "?",
+    facets: "?",
+    delegationNotChecked: "?",
+    collectedAt: "!",
+  },
   {
     facets: shape<BackendFacets>(
       { gateways: "!", namespaces: "!" },
@@ -1375,6 +1444,7 @@ const backendDetail = shape<BackendDetail>(
     explanations: "!",
     service: "?",
     conditions: "?",
+    delegationNotChecked: "?",
     collectedAt: "!",
   },
   {
@@ -1716,7 +1786,11 @@ describe("types.ts matches the golden v1 wire format", () => {
     expect(hidden && !("message" in hidden) && hidden.resource.link === "none").toBe(true);
     expect(findingDetailRestrictedGolden.body.finding.restricted).toBe(true);
     expect(health.body.findings.every((f) => "id" in f && f.id)).toBe(true);
-    expect(meta.body.filters?.findings).toEqual(["severity", "code", "kind", "namespace", "group", "q"]);
+    expect(meta.body.filters?.findings).toEqual(["severity", "code", "kind", "namespace", "group", "q", "namespaces"]);
+    // The namespace scope (Task 37) is listed for every list it applies to.
+    for (const l of ["routes", "gateways", "listenersets", "paths", "backends", "findings", "processes"]) {
+      expect((meta.body.filters as Record<string, string[]>)[l]).toContain("namespaces");
+    }
   });
 
   // The trail lookup: a hidden ref and an absent one both read as none, with only the requested identity.

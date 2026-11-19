@@ -20,7 +20,7 @@ diagnostics:
   events: true       # Warning Events on controller and proxy Pods
   crds: true         # Gateway API CRD metadata
   proxyStats: true   # Envoy stats from each proxy Pod's port 9091
-  endpoints: true    # Services and EndpointSlices (no check reads them yet)
+  endpoints: true    # Services and EndpointSlices (endpoint counts, KGWUI-023)
   controllerLogs: false   # derived signals from controller logs; text is never kept
   controllerLogsNamespaces: [kgateway-system]   # a pods/log Role is created in each
 # More flags for the UI binary, appended after the chart's own args,
@@ -34,12 +34,58 @@ rbac:
 extraEnv: []            # env of the UI container
 extraVolumes: []        # pod volumes
 extraVolumeMounts: []   # mounts of the UI container
-extraContainers: []     # sidecars added to the pod
-# Trust model (D-013): the UI has no login. Anyone who reaches it sees everything
-# its ServiceAccount can read (every watched kind, Deployments included, never
-# Secrets), which can be more than their own Kubernetes RBAC allows.
+# Sidecars added to the pod. They share its network, so in local mode they
+# can reach the loopback UI and API and see everything Snellius reads.
+extraContainers: []
+auth:
+  # local: loopback only, reached with kubectl port-forward, no sign-in.
+  # secure: listens on the Pod IP for a gateway route; needs auth.oidc.issuerURL, clientID and redirectURL.
+  mode: local
+  # Host names the UI answers to. Empty uses the binary's default.
+  allowedHosts: []
+  # Secure mode only. Users sign in with OIDC; Snellius reads with its own ServiceAccount
+  # and shows each user only what their Kubernetes RBAC allows.
+  oidc:
+    issuerURL: ""       # required in secure mode, https
+    clientID: ""        # required in secure mode; the API server must accept it as an audience
+    redirectURL: ""     # required in secure mode, https://<host>/auth/callback; register it at the IdP
+    scopes: []          # empty uses the binary's default scopes
+    clientSecret:
+      existingSecret: ""   # Secret holding the client secret, mounted by the kubelet; empty is a public client
+      key: client-secret   # key inside that Secret
+    ca:
+      existingConfigMap: ""   # ConfigMap with a PEM bundle for an IdP behind a private CA
+      key: ca.pem             # key inside that ConfigMap
+  session:
+    idle: ""            # a session ends after this long without a request; empty uses 30m
+    absolute: ""        # a session ends this long after sign-in; empty uses 8h
+    max: ""             # most sessions held at once; past it the one unused longest ends; empty uses 1000
+    cookieSecure: true  # false only for plain-HTTP testing
+  authz:
+    # How long an allowed permission check is reused, 30s to 15m; empty uses 60s. It is how
+    # long a revoked permission stays visible; a longer TTL means fewer checks. Denials last 4 to 5m.
+    cacheTTL: ""
+    # Also show in lists, counts and facets the objects a viewer may only get by name
+    # (resourceNames grants). Off by default: it costs one check per hidden object.
+    namedGetScan: false
+    # Permission checks sent to the API server across all viewers: at most maxInFlight at
+    # once and rate per second (at most 10000), with burst above the rate. Empty uses 32,
+    # 100 and 500; a burst of 500 lets one cold page skip the rate. Raise rate when many
+    # restricted viewers use a large cluster.
+    maxInFlight: ""
+    rate: ""
+    burst: ""
+  # CIDRs of proxies whose X-Request-Id and X-Forwarded-For Snellius trusts (secure mode).
+  # It sets the audit source and request ID only.
+  trustedProxyCIDRs: []
+# Pod hostAliases, for an IdP name that is not in DNS. Passed through unchanged.
+hostAliases: []
+audit:
+  # Audit levels written to stdout as JSON lines: security, agent, reads, summaries,
+  # disclosure, requests. The last two are off by default.
+  levels: [security, agent, reads, summaries]
 httpRoute:
-  # Expose the UI through an existing Gateway. Only enable this with
+  # Expose the UI through an existing Gateway. Needs auth.mode: secure. Put
   # authentication and authorisation on the route, for example a kgateway
   # TrafficPolicy with OIDC or external auth that admits only operators.
   enabled: false

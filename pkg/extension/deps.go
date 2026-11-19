@@ -20,10 +20,16 @@ type Deps struct {
 	// Current returns the published model, nil before the first publication.
 	// A handler calls it once per request and serves from that value.
 	Current func() *engine.Published
-	// Authorizer is the registry's; filter objects with api.Visible.
+	// Authorizer is the core handler's; handlers filter objects through View, not with it directly.
+	// Nil means AllowAll, or DenyAll in secure mode, as for api.NewHandler.
 	Authorizer api.Authorizer
+	// View is the caller's api.Viewer, through the core handler's authoriser.
+	// A handler that serves cluster objects must use it (api.VisibleTo, Can, CanNamed,
+	// CanList, Shown), so a change to an object the caller cannot read never changes its response.
+	// Install.Owned.Backends depends on hidden consumer routes: use Viewer.Backends.
+	View func(r *http.Request) api.Viewer
 	// Capabilities returns the states every WithCapabilities source reports now,
-	// in registration order; /api/v1/meta lists the same.
+	// in registration order; /api/v1/meta lists the same to every viewer.
 	Capabilities func() []api.Capability
 	// Logger carries the extension's name.
 	Logger *slog.Logger
@@ -81,8 +87,10 @@ func WithHandlers(name string, f func(r Router, d Deps)) Option {
 // extension's name, and returns the endpoints for api.WithExtMounts. It
 // returns an error if any endpoint fails api.CheckExtMounts.
 func (r *Registry) Mounts(d Deps) ([]api.ExtMount, error) {
-	if d.Authorizer == nil {
-		d.Authorizer = api.AllowAll{}
+	// A nil Authorizer stays nil: per request it is DenyAll in secure mode and AllowAll otherwise.
+	if d.View == nil {
+		a := d.Authorizer
+		d.View = func(r *http.Request) api.Viewer { return api.ViewerOf(r, a) }
 	}
 	if d.Logger == nil {
 		d.Logger = slog.Default()

@@ -6,6 +6,7 @@ import type { BackendRef, Condition, DelegationRef, Filter, Rule, TraceAttachmen
 import { delegationCopy, routeCopy, traceCopy } from "../../../copy/explorer";
 import { ComputedBadge } from "../../../explore/ComputedBadge";
 import { ConditionList } from "../../../explore/ConditionList";
+import { DelegationNotChecked, useDelegationNotChecked } from "../../../explore/DelegationNotChecked";
 import { LinkedName } from "../../../explore/LinkedName";
 import { backendPath } from "../../../explore/objectPath";
 import { HealthBadge } from "../../../health/HealthBadge";
@@ -197,6 +198,7 @@ export function RefCounts({ d }: { d: DelegationRef }) {
 function Delegation({ b, installId }: { b: BackendRef & { delegation: DelegationRef }; installId: string }) {
   const d = b.delegation;
   const stale = useContext(StaleView);
+  const notChecked = useDelegationNotChecked();
   const known = d.state ? delegationState[d.state] : undefined;
   // A stale page shows every state unknown, words included (design §6.3).
   const s = known && stale ? { label: stateLabel("unknown"), state: "unknown" as const } : known;
@@ -218,7 +220,9 @@ function Delegation({ b, installId }: { b: BackendRef & { delegation: Delegation
           {s.label}
         </span>
       ) : null}
-      {d.computed ? (
+      {notChecked ? (
+        <DelegationNotChecked />
+      ) : d.computed ? (
         // View B's counts of visible children (2.4); absent when the UI could not compute them.
         <span className="line" data-testid="ref-counts">
           <RefCounts d={d} />

@@ -309,7 +309,8 @@ it("stale route data turns every state on the page unknown", async () => {
   mount(MID_OPEN);
   await loaded();
   await screen.findByText(/Data is stale/);
-  expect(within(screen.getByTestId("detail-header")).getByText("Unknown")).toBeInTheDocument();
+  // Both signals read Unknown.
+  expect(within(screen.getByTestId("detail-header")).getAllByText("Unknown")).toHaveLength(2);
   const states = Array.from(document.querySelectorAll('[data-testid^="health-icon-"]')).map((e) =>
     e.getAttribute("data-testid"),
   );
@@ -318,6 +319,28 @@ it("stale route data turns every state on the page unknown", async () => {
   // Delegation states follow the stale view: unknown text with the unknown icon.
   expect(backend("child")).toHaveTextContent("Unknown");
   expect(backend("child")).not.toHaveTextContent("Reported by the controller");
+});
+
+it("when Configuration decides, the strip still says the viewer cannot check the whole path", async () => {
+  const mid = detail(routeGolden);
+  mid.health = "warning";
+  mid.config = { state: "warning", reason: { kind: "unknown" } };
+  mid.path = { state: "unknown", incomplete: true, reason: { kind: "path-incomplete" } };
+  serve(api({ mid }));
+  mount(MID);
+  await loaded();
+  const strip = await screen.findByTestId("problem-strip");
+  expect(within(strip).getByTestId("problem-incomplete")).toHaveTextContent(
+    "You don't have permission to check the whole path.",
+  );
+  expect(strip).not.toHaveTextContent("Assessment incomplete with your current permissions.");
+  // A signal link is named by its own text, so the name contains what it shows (axe label-content-name-mismatch).
+  const links = within(screen.getByTestId("detail-header")).getAllByTestId("state-link");
+  expect(links.length).toBeGreaterThan(0);
+  for (const link of links) {
+    expect(link).not.toHaveAttribute("aria-label");
+    expect(link).toHaveTextContent(/go to the problem$/);
+  }
 });
 
 it("each backendRef links to its backend detail, and the route links to Traffic with route=", async () => {

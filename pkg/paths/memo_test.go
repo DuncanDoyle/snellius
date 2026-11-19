@@ -59,6 +59,14 @@ func TestMemoTopologyKey(t *testing.T) {
 	if m.Topology(paths.TopoKey{Install: "a", Source: source(1), Views: 7, Seq: 6}, build); n != before+1 {
 		t.Fatal("old generation kept")
 	}
+	// A Withhold topology has an entry of its own: neither replaces the other.
+	w := paths.TopoKey{Install: "a", Source: source(1), Views: 7, Seq: 7, Withhold: true}
+	tw, _ := m.Topology(w, build)
+	before = n
+	plain, _ := m.Topology(paths.TopoKey{Install: "a", Source: source(1), Views: 7, Seq: 8}, build)
+	if again, _ := m.Topology(w, build); again != tw || plain == tw || n != before {
+		t.Fatalf("variants: withhold kept %v, apart %v, builds %d", again == tw, plain != tw, n-before)
+	}
 }
 
 // TestMemoTopologyOlderBuildNotKept: a slow build for an older publication

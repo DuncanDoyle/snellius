@@ -210,7 +210,7 @@ func (s *xdsState) unavailable(ctx RunContext, name, why string) ([]Finding, Che
 			ctx.Retain(FindingID(ctx.Install.ID(), CodeXDSRejected, ref(gw), nil))
 		}
 	}
-	return unavailable(ctx.Input, name, why)
+	return unavailable(ctx.Input, name, why, false) // the text may name the controller's metrics endpoint
 }
 
 func (s *xdsState) keep(k ctrlmetrics.GatewayKey, g *xdsGateway) {

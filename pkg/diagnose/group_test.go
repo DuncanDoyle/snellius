@@ -599,3 +599,61 @@ func TestEmptyBackendFamily(t *testing.T) {
 		t.Fatalf("group %+v", g)
 	}
 }
+
+// A family's claim whose cause the viewer cannot read is rejected: the finding
+// falls to the next family, then "Other" on its own resource. Affected objects
+// the viewer cannot read are dropped.
+func TestBuildRejectsUnreadableCause(t *testing.T) {
+	rep := &health.Report{Findings: []health.Finding{
+		finding("hidden-cause", "KGWUI-013", health.SeverityWarning, ref("HTTPRoute", "r1"), nil),
+		finding("next-family", "KGWUI-013", health.SeverityWarning, ref("HTTPRoute", "r2"), nil),
+		finding("shown-cause", "KGWUI-013", health.SeverityWarning, ref("HTTPRoute", "r3"), nil),
+	}}
+	first := fake{name: "First", claims: map[string]string{"hidden-cause": "hidden", "next-family": "hidden", "shown-cause": "shown"},
+		affected: map[string]int{"shown": 3}}
+	second := fake{name: "Second", claims: map[string]string{"next-family": "fallback"}}
+	rd := in
+	rd.Readable = func(r objects.Ref) bool { return r.Name != "hidden" && r.Name != "a1" }
+	d := diagnose.Build(rep, rd, []diagnose.Family{first, second})
+	byMember := map[string]diagnose.Group{}
+	for _, g := range d.Groups {
+		for _, n := range names(rep.Findings, g.Members) {
+			byMember[n] = g
+		}
+	}
+	if g := byMember["hidden-cause"]; g.Family != "Other" || g.Cause == nil || g.Cause.Name != "r1" {
+		t.Errorf("hidden-cause in %s caused by %v, want Other on its route", g.Family, g.Cause)
+	}
+	if g := byMember["next-family"]; g.Family != "Second" || g.Cause == nil || g.Cause.Name != "fallback" {
+		t.Errorf("next-family in %s caused by %v, want Second", g.Family, g.Cause)
+	}
+	g := byMember["shown-cause"]
+	if want := []objects.Ref{*ref("HTTPRoute", "a0"), *ref("HTTPRoute", "a2")}; g.Family != "First" || !slices.Equal(g.Affected, want) {
+		t.Errorf("shown-cause in %s affecting %v, want First affecting %v", g.Family, g.Affected, want)
+	}
+	for _, f := range rep.Findings {
+		if f.Group != byMember[f.Message].ID {
+			t.Errorf("%s: Group %q, want its group's ID", f.Message, f.Group)
+		}
+	}
+}
+
+// A nil Readable admits every cause and affected object: Build is unchanged.
+func TestBuildNilReadableUnchanged(t *testing.T) {
+	mk := func() *health.Report {
+		return &health.Report{Findings: []health.Finding{
+			finding("a", "KGWUI-013", health.SeverityWarning, ref("HTTPRoute", "r1"), nil),
+			finding("b", "KGWUI-013", health.SeverityWarning, ref("HTTPRoute", "r2"), nil),
+		}}
+	}
+	fam := fake{name: "Fake", claims: map[string]string{"a": "c", "b": "c"}, affected: map[string]int{"c": 2}}
+	all := in
+	all.Readable = func(objects.Ref) bool { return true }
+	want, got := diagnose.Build(mk(), all, []diagnose.Family{fam}), diagnose.Build(mk(), in, []diagnose.Family{fam})
+	if !reflect.DeepEqual(got.Groups, want.Groups) || !slices.Equal(got.Rank, want.Rank) {
+		t.Fatalf("nil Readable\n got %+v\nwant %+v", got.Groups, want.Groups)
+	}
+	if len(got.Groups) != 1 || len(got.Groups[0].Affected) != 2 {
+		t.Fatalf("groups %+v, want one with both affected", got.Groups)
+	}
+}

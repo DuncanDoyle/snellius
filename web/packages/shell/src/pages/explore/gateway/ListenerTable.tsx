@@ -3,11 +3,12 @@ import styled from "@emotion/styled";
 import { ChevronDown, ChevronRight, Info } from "lucide-react";
 import { Fragment, type ReactNode, useContext, useState } from "react";
 import type { AllowedRoutes, LabelSelector, Listener } from "../../../api/types";
-import { columnCopy, detailCopy, listCopy, listenerCopy, viewACopy } from "../../../copy/explorer";
+import { columnCopy, detailCopy, diagnosticsCopy, listCopy, listenerCopy, viewACopy } from "../../../copy/explorer";
 import { ComputedBadge, ComputedChip, computedTooltip } from "../../../explore/ComputedBadge";
 import { ConditionList, conditionState } from "../../../explore/ConditionList";
 import { TableFrame, TableStyles } from "../../../explore/ObjectTable";
 import { HealthIcon } from "../../../health/HealthIcon";
+import { NotChecked } from "../../../health/NotChecked";
 import { StaleView } from "../../../health/staleView";
 import { stateLabel } from "../../../health/state";
 import { ResourceName } from "../../../resource/ResourceName";
@@ -149,14 +150,25 @@ function StateCell({ l, stale }: { l: Listener; stale: boolean }) {
   );
 }
 
-/** A number is shown only when view A knows it: never for unknown or restricted (design §8.6). */
-const knownCount = (l: Listener) =>
-  l.computed && l.computedRoutes !== undefined && l.computed.state !== "unknown" && l.computed.state !== "restricted"
-    ? l.computedRoutes
-    : undefined;
+/**
+ * A number is shown only when view A knows it: never for unknown or restricted (design §8.6). A count
+ * without a fact is secure mode's: the viewer's visible members, its check not theirs to see.
+ */
+const knownCount = (l: Listener) => {
+  if (l.computedRoutes === undefined) return undefined;
+  if (!l.computed) return l.computedRoutes;
+  return l.computed.state !== "unknown" && l.computed.state !== "restricted" ? l.computedRoutes : undefined;
+};
 
 /** The computed count with its check; the isolation note is an icon whose text is its label and tooltip. */
 function ComputedCell({ l }: { l: Listener }) {
+  if (!l.computed && l.computedRoutes !== undefined)
+    return (
+      <Counted data-testid="computed-cell">
+        <span className="count">{l.computedRoutes}</span>
+        <NotChecked label={diagnosticsCopy.notChecked} reason={diagnosticsCopy.notCheckedReason} />
+      </Counted>
+    );
   if (!l.computed) return <Muted>{columnCopy.none}</Muted>;
   const n = knownCount(l);
   return (

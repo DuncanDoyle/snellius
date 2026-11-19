@@ -1,6 +1,6 @@
 import type { SerializedStyles } from "@emotion/react";
 import styled from "@emotion/styled";
-import { ChevronDown, ChevronRight, CircleSlash, Clock } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleDashed, CircleSlash, Clock } from "lucide-react";
 import { useId, useState } from "react";
 import { useNow } from "../../api/clock";
 import type { CheckResult } from "../../api/types";
@@ -78,6 +78,20 @@ export function CheckedList({ checks, stale = false, stylesOverride }: CheckedLi
   return (
     <List aria-label="Checks" stylesOverride={stylesOverride}>
       {checks.map((c) => {
+        // A viewer without the full read gets no result: neither fine nor unknown, stale or not (D-106).
+        if (c.notAssessed) {
+          return (
+            <li key={c.name}>
+              <span className="na" data-testid="check-not-assessed" aria-hidden="true">
+                <CircleDashed size={16} />
+              </span>
+              <span>{c.name}</span>
+              <span className="detail" title={diagnosticsCopy.notCheckedReason}>
+                {diagnosticsCopy.notChecked}
+              </span>
+            </li>
+          );
+        }
         // A not-available check is neither fine nor unknown: its optional input is missing (D-034).
         const na = !c.ok && c.unavailable;
         // A held check is still deciding: neither green nor unknown, unless the data is stale (D-068).

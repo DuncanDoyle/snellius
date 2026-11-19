@@ -19,6 +19,7 @@ import type {
 import { columnCopy, computedCopy, delegationCopy, detailCopy, listCopy, routeCopy } from "../../../copy/explorer";
 import { ComputedBadge, ComputedChip, computedTooltip } from "../../../explore/ComputedBadge";
 import { ConditionList, conditionState } from "../../../explore/ConditionList";
+import { DelegationNotChecked, useDelegationNotChecked } from "../../../explore/DelegationNotChecked";
 import { LinkedName } from "../../../explore/LinkedName";
 import { ROW_H } from "../../../explore/ObjectTable";
 import { Pager } from "../../../explore/Pager";
@@ -649,6 +650,8 @@ function RefRows({
         ))}
       </div>
     );
+  // A poll that withholds delegation analysis (D-114) says so, whatever the route detail said.
+  else if (l.data.delegationNotChecked) body = <DelegationNotChecked />;
   else if (!l.data.items.length) body = <Muted>{emptyText(at, outcomes.length > 0)}</Muted>;
   else
     body = (
@@ -714,6 +717,8 @@ function RefSection({
   outcomes: string[];
 }) {
   const [open, setOpen] = useState(false);
+  // The route detail withholds delegation analysis (D-114): the section has no rows to open.
+  const checked = !useDelegationNotChecked();
   // The whole section follows the ref's own /delegation poll while it is open (§8.6).
   const [rowsStale, setRowsStale] = useState(false);
   const stale = useContext(StaleView) || rowsStale;
@@ -728,19 +733,25 @@ function RefSection({
           <Target at={at} installId={installId} />
         </h3>
         <div className="summary">
-          <Toggle
-            type="button"
-            aria-expanded={open}
-            aria-controls={open ? bodyId : undefined}
-            onClick={() => setOpen((o) => !o)}
-          >
-            {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
-            {delegationCopy.toggleRows(open)}
-          </Toggle>
-          <RefCounts d={d} />
-          {d.computed ? <ComputedBadge computed={d.computed} compact extra={delegationCopy.selectedHint} /> : null}
+          {checked ? (
+            <>
+              <Toggle
+                type="button"
+                aria-expanded={open}
+                aria-controls={open ? bodyId : undefined}
+                onClick={() => setOpen((o) => !o)}
+              >
+                {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+                {delegationCopy.toggleRows(open)}
+              </Toggle>
+              <RefCounts d={d} />
+              {d.computed ? <ComputedBadge computed={d.computed} compact extra={delegationCopy.selectedHint} /> : null}
+            </>
+          ) : (
+            <DelegationNotChecked />
+          )}
         </div>
-        {open ? (
+        {open && checked ? (
           <RefRows installId={installId} route={route} at={at} outcomes={outcomes} id={bodyId} onStale={setRowsStale} />
         ) : null}
       </RefBox>

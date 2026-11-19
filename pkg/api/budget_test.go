@@ -1505,8 +1505,8 @@ type apiHeapRun struct {
 // TestBudgetHeapAPIWarm: as TestBudgetHeap, one fresh process per run and five
 // runs. Paths and backends are warmed for every install and 24 Service details
 // read, then the engine publishes again. The median heap retained right then,
-// with no request since, as in production, stays ≤ 48 MiB over the 2.1 baseline
-// (D-057). The figure after 36 more details on the new publication is reported.
+// with no request since, as in production, stays ≤ 64 MiB over the 2.1 baseline
+// (D-057, D-100). The figure after 36 more details on the new publication is reported.
 // Extreme is reported: D-057 is a Large budget.
 func TestBudgetHeapAPIWarm(t *testing.T) {
 	cases := append(slices.Clone(pathsTiers), scale.Extreme)
@@ -1555,14 +1555,14 @@ func apiHeapBudget(t *testing.T, tier scale.Tier, gated bool) {
 	med := func(v []int64) int64 { v = slices.Clone(v); slices.Sort(v); return v[len(v)/2] }
 	// The gate is one child's settled figure; the warm figure and the engine and API medians are its breakdown.
 	em, am, fm, wm, total := med(eng), med(api), med(freed), med(warm), med(settled)
-	note := "budget ≤ 48 MiB"
+	note := "budget ≤ 64 MiB, D-057 as amended by D-100"
 	if !gated {
 		note = "reported: D-057 is a Large budget"
 	}
 	t.Logf("%s: %d paths (unmemoised %v), %d listed Services, %d Service details; settled retained median %+.1f MiB over the 2.1 baseline %d B (%s); reported: warm again %+.1f MiB, engine figure %+.1f MiB, API memos warm %+.2f MiB (freed by dropping them %.2f MiB)",
 		tier.Name, runs[0].Paths, runs[0].Unmemoised, runs[0].Backends, runs[0].Details, float64(total)/mib, heapBaseline, note, float64(wm)/mib, float64(em)/mib, float64(am)/mib, float64(fm)/mib)
-	if gated && total > 48*mib {
-		t.Errorf("%s: settled retained heap %.1f MiB above the baseline, budget ≤ 48 MiB", tier.Name, float64(total)/mib)
+	if gated && total > 64*mib {
+		t.Errorf("%s: settled retained heap %.1f MiB above the baseline, budget ≤ 64 MiB (D-057, D-100)", tier.Name, float64(total)/mib)
 	}
 }
 

@@ -59,6 +59,10 @@ type Input struct {
 	Views    objects.Decoder
 	// IDs, if set, memoises group IDs across recomputes.
 	IDs *health.IDs
+	// Readable, if set, says which objects the viewer may read: Build rejects
+	// a claim whose cause it denies and drops the affected objects it denies.
+	// Nil admits every object.
+	Readable func(objects.Ref) bool
 }
 
 // Family is one kind of shared cause, a row of the design §5.2 table. Upstream families
@@ -193,6 +197,9 @@ func Build(rep *health.Report, in Input, families []Family) *Diagnosis {
 			continue
 		}
 		for n, a := range fam.Affected(cs, rep.Findings, in) {
+			if in.Readable != nil {
+				a = slices.DeleteFunc(slices.Clone(a), func(r objects.Ref) bool { return !in.Readable(r) })
+			}
 			groups[idx[n]].Affected = a
 		}
 	}
@@ -221,10 +228,11 @@ func bindAll(fs []health.Finding, families []Family) []Family {
 }
 
 // claim returns the index in families of the family claiming f first and f's
-// cause in it; len(families) is the "Other" family.
+// cause in it; len(families) is the "Other" family. A claim whose cause
+// in.Readable denies is passed over.
 func claim(f health.Finding, in Input, families []Family) (int, *objects.Ref, []string) {
 	for j, fam := range families {
-		if cause, key, ok := fam.Claim(f, in); ok {
+		if cause, key, ok := fam.Claim(f, in); ok && (cause == nil || in.Readable == nil || in.Readable(*cause)) {
 			return j, cause, key
 		}
 	}

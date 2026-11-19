@@ -495,7 +495,9 @@ func TestBackendDetailReadContradictsCache(t *testing.T) {
 	if s.Complete != endpoints.Complete || s.Ready == nil || *s.Ready != 0 || s.CachedReady == nil || *s.CachedReady != 1 {
 		t.Fatalf("source %+v (cachedReady %v)", s, s.CachedReady)
 	}
-	waiting := func(sg SignalDTO) bool { return sg.Kind == paths.SignalWaiting && sg.Code == "KGWUI-023" && sg.State == "unknown" }
+	waiting := func(sg SignalDTO) bool {
+		return sg.Kind == paths.SignalWaiting && sg.Code == "KGWUI-023" && sg.State == "unknown"
+	}
 	if d.Problem.State == "healthy" || !slices.ContainsFunc(d.Problem.Signals, waiting) || !slices.ContainsFunc(d.Status, waiting) {
 		t.Fatalf("problem %+v status %+v", d.Problem, d.Status)
 	}
@@ -581,11 +583,11 @@ func TestBackendLinkAgreesWithBackendDetail(t *testing.T) {
 			}
 			services := 0
 			for pass := range 2 {
-				t2, _, _ := h.pathModel(p, i)
+				t2, _, _ := h.pathModel(p, i, v)
 				listed := h.listedBackends(p, i, v, t2)
 				for _, ref := range refs {
 					status, _ := raw(t, srv, listBase+backendDetailPath(ref))
-					if got := v.can(ref) && listed(ref); got != (status == 200) {
+					if got := v.canNamed(ref) && listed(ref, true); got != (status == 200) {
 						t.Errorf("pass %d: %s %s listed %v, backend page %d", pass, ref.Kind, ref, got, status)
 					} else if got && pass == 0 && ref.Group == "" && ref.Kind == "Service" {
 						services++

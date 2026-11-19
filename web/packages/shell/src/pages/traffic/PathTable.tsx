@@ -3,6 +3,7 @@ import { useCallback, useMemo } from "react";
 import type { LinkedRef, Page, PathRow } from "../../api/types";
 import { columnCopy } from "../../copy/explorer";
 import { cellCopy, endpointCopy, noteCopy, pathColumnCopy, trafficCopy } from "../../copy/traffic";
+import { DelegationNotCheckedView } from "../../explore/DelegationNotChecked";
 import type { SortState } from "../../explore/listQuery";
 import { type ObjectColumn, ObjectTable } from "../../explore/ObjectTable";
 import { Muted, OneLine } from "../explore/listParts";
@@ -76,11 +77,12 @@ function columns(installId: string): ObjectColumn<PathRow>[] {
       secondary: true,
       cell: (r) => {
         const t = endpointText(r);
-        return t ? (
-          <OneLine text={t} />
-        ) : (
-          <OneLine text={endpointCopy.notApplicable}>
-            <Muted>{endpointCopy.notApplicable}</Muted>
+        // Not permitted reads as unknown: muted, like a cell with nothing to count.
+        if (t && r.endpoints?.complete !== "not-permitted") return <OneLine text={t} />;
+        const shown = t ?? endpointCopy.notApplicable;
+        return (
+          <OneLine text={shown}>
+            <Muted data-complete={r.endpoints?.complete}>{shown}</Muted>
           </OneLine>
         );
       },
@@ -103,6 +105,8 @@ interface PathTableProps {
   page?: Page<PathRow>;
   busy: boolean;
   onClearFilters?: () => void;
+  /** The empty state's action label; ObjectTable's clearLabel. */
+  clearLabel?: string;
   sort: SortState;
   onSort: (key: string) => void;
   onPage: (cursor: string) => void;
@@ -121,6 +125,7 @@ export function PathTable({
   page,
   busy,
   onClearFilters,
+  clearLabel,
   sort,
   onSort,
   onPage,
@@ -140,26 +145,30 @@ export function PathTable({
   const keys = useMemo(() => keyRows(page?.items ?? []), [page]);
   // Stable between data changes: a new rowKey rebuilds the table's cell renderers, which remounts every cell.
   const rowKey = useCallback((r: PathRow) => keys.get(r) ?? baseKey(r), [keys]);
+  // The Why cells read the page's own delegation marker (D-114).
   return (
-    <ObjectTable
-      label={label}
-      installId={installId}
-      noun={trafficCopy.noun}
-      columns={cols}
-      rowRef={rowRef}
-      rowKey={rowKey}
-      page={page}
-      loading={!page}
-      busy={busy}
-      emptyTitle={emptyTitle}
-      onClearFilters={onClearFilters}
-      sort={sort}
-      onSort={onSort}
-      onPage={onPage}
-      showDenied={false}
-      collapseEmptyFooter={!sortable}
-      stylesOverride={stylesOverride}
-    />
+    <DelegationNotCheckedView.Provider value={!!page?.delegationNotChecked}>
+      <ObjectTable
+        label={label}
+        installId={installId}
+        noun={trafficCopy.noun}
+        columns={cols}
+        rowRef={rowRef}
+        rowKey={rowKey}
+        page={page}
+        loading={!page}
+        busy={busy}
+        emptyTitle={emptyTitle}
+        onClearFilters={onClearFilters}
+        clearLabel={clearLabel}
+        sort={sort}
+        onSort={onSort}
+        onPage={onPage}
+        showDenied={false}
+        collapseEmptyFooter={!sortable}
+        stylesOverride={stylesOverride}
+      />
+    </DelegationNotCheckedView.Provider>
   );
 }
 

@@ -1,17 +1,34 @@
-Snellius is installed. It is read-only and has no login of its own.
-
-Trust model: anyone who can reach the UI sees everything it shows, which is
-everything its ServiceAccount can read (never Secrets). That can be more than
-their own Kubernetes RBAC allows. Treat access to the UI as cluster-read access.
+Snellius is installed. It is read-only.
+{{- if eq (include "snellius.authMode" .) "local" }}
+Snellius runs in local mode: it listens on the Pod's loopback only.
+Anyone who can port-forward to it sees everything it reads (never Secrets),
+which can be more than their own Kubernetes RBAC allows.
 
 Open it with:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "snellius.fullname" . }} 8080:80
 then browse to http://localhost:8080
-{{- if .Values.httpRoute.enabled }}
+{{- else }}
+Snellius runs in secure mode.
+{{- $redirect := include "snellius.oidcValue" (dict "root" . "key" "redirectURL") }}
+{{- $u := urlParse $redirect }}
 
-It is also exposed through an HTTPRoute. Put authentication and authorisation
-on that route, for example a kgateway TrafficPolicy with OIDC or external auth
-that admits only the people who may read the cluster.
+At the identity provider, register:
+  Redirect URL:             {{ $redirect }}
+  Post-logout redirect URI: {{ $u.scheme }}://{{ $u.host }}/
+
+The Kubernetes API server must accept tokens for client ID "{{ include "snellius.oidcValue" (dict "root" . "key" "clientID") }}".
+Either use the same client ID as the cluster, or add it as an extra audience
+in the API server's structured authentication configuration.
+Check that the cluster accepts your token with:
+  kubectl auth whoami
+
+Allowed permission checks are reused for {{ include "snellius.authzValue" (dict "root" . "key" "cacheTTL") | default "60s" }} (auth.authz.cacheTTL).
+That is how long a revoked permission can stay visible in Snellius;
+a longer TTL trades that freshness for fewer checks on the API server.
+Denied checks are reused for 4 to 5 minutes, so a new grant shows within 5 minutes.
+{{- if .Values.httpRoute.enabled }}
+It is exposed through an HTTPRoute.
+{{- end }}
 {{- end }}
 
 Controller metrics are read directly from the controller pods on port 9092.

@@ -1,7 +1,9 @@
 package paths_test
 
 import (
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -569,5 +571,97 @@ func TestProjectDelegatedChildStatus(t *testing.T) {
 		if n == 0 {
 			t.Fatalf("%s: no delegated rows", tc.name)
 		}
+	}
+}
+
+// For projects again over a viewer's filter: dropped finding signals fall back
+// to what readable status and counts say, and a namespace whose EndpointSlices
+// the viewer may not list has no counts. The shared projection is untouched.
+func TestProjectionFor(t *testing.T) {
+	svcs, eps := cart([]cache.ServicePort{httpPort}, []int{0}, 2)
+	edgeRef := gwEdge.Ref()
+	reject := health.Finding{Code: health.CodeXDSRejected, Severity: health.SeverityError, Resource: &edgeRef, Message: "rejected"}
+	top, p, m := projectAt(t, endpointsSnap(t, svcs, eps, edge("http"), accepted("r", svc("cart"))), "on", matured, reject)
+	in := paths.ProjectInput{Model: &m.Installs[0], Next: m.Next, Snapshot: m.Snapshot, Now: testutil.Now, EndpointsCap: "on"}
+	if p.For(top, in, nil) != p {
+		t.Fatal("For(nil) must return the shared projection")
+	}
+	noFindings := func(s paths.Signal) bool { return s.Kind != paths.SignalFinding }
+	got := p.For(top, in, &paths.ProjectionFilter{Signal: noFindings})
+	if pr := got.Problems[0]; pr.State != health.StateUnknown || hasSignal(pr, paths.SignalFinding, health.StateError) ||
+		!slices.ContainsFunc(pr.Signals, func(s paths.Signal) bool {
+			return s.Kind == paths.SignalWaiting && s.Code == health.CodeBackendNoReadyEndpoints
+		}) {
+		t.Errorf("without findings: problem %+v, want waiting on the empty port", pr)
+	}
+	if ep := got.Endpoints[0]; ep.Complete != paths.EndpointsComplete || *ep.Ready != 0 {
+		t.Errorf("without findings: endpoints %+v, want the counts", ep)
+	}
+	if p.Problems[0].State != health.StateError {
+		t.Errorf("the shared projection changed: %+v", p.Problems[0])
+	}
+	denied := p.For(top, in, &paths.ProjectionFilter{Signal: noFindings, Endpoints: func(string) bool { return false }})
+	if ep := denied.Endpoints[0]; ep.Complete != paths.EndpointsNotPermitted || ep.Ready != nil || ep.Total != nil || ep.PortName != "http" || !ep.ReadAt.IsZero() {
+		t.Errorf("not permitted: endpoints %+v", ep)
+	}
+	if pr := denied.Problems[0]; pr.State != health.StateUnknown || len(pr.Signals) != 1 || pr.Signals[0].Code != paths.EndpointsNotPermitted {
+		t.Errorf("not permitted: problem %+v, want one not-permitted signal", pr)
+	}
+	if denied.Digest(denied.Order) == got.Digest(got.Order) {
+		t.Error("the digest does not follow the viewer's endpoints")
+	}
+}
+
+// Projecting only the picked rows leaves each picked row's problem,
+// endpoints, place in the order and digest as a full projection has them,
+// and asks nothing about the endpoints only unpicked rows reach.
+func TestProjectionForRows(t *testing.T) {
+	svcs, eps := cart([]cache.ServicePort{httpPort}, []int{0}, 2)
+	broken := testutil.Gateway("infra", "broken", "kgateway", nil, testutil.Listener{Name: "http", Conds: []metav1.Condition{
+		testutil.Cond("Accepted", metav1.ConditionTrue, "Accepted"), testutil.Cond("Programmed", metav1.ConditionFalse, "Invalid")}})
+	brokenRef := testutil.GwRef("infra", "broken")
+	on := func(name string, gw objects.ParentRef, ref map[string]any) *unstructured.Unstructured {
+		return testutil.WithRules(testutil.HTTPRoute("shop", name, []objects.ParentRef{gw}, testutil.AcceptedBy(gw, testutil.Controller)),
+			rule([]any{ref}), rule([]any{svc("cart")}))
+	}
+	vault := map[string]any{"name": "cart", "namespace": "vault", "port": int64(8080)}
+	snap := endpointsSnap(t, svcs, eps, edge("http"), broken, on("a-shown", gwEdge, svc("cart")), on("b-hidden", brokenRef, vault),
+		on("c-shown", brokenRef, svc("cart")), on("d-hidden", gwEdge, vault))
+	snap.Deployments = append(snap.Deployments, testutil.ProxyDeployment("infra", "broken", 1, 1))
+	top, _, m := projectAt(t, snap, "on", matured)
+	in := paths.ProjectInput{Model: &m.Installs[0], Next: m.Next, Snapshot: m.Snapshot, Now: testutil.Now, EndpointsCap: "on"}
+	asked := map[string]bool{}
+	ask := func(ns string) bool { asked[ns] = true; return true }
+	full := paths.Project(top, in).For(top, in, &paths.ProjectionFilter{Endpoints: ask})
+	if !asked["vault"] {
+		t.Fatal("the full projection never asks about vault: the test reaches no unpicked endpoints")
+	}
+	clear(asked)
+	shown := func(r paths.Row) bool { return !strings.HasSuffix(top.Route(r).Name, "-hidden") }
+	got := full.For(top, in, &paths.ProjectionFilter{Endpoints: ask, Rows: shown})
+	if asked["vault"] {
+		t.Error("endpoints asked about vault, which only unpicked rows reach")
+	}
+	var want, have []int32
+	for _, k := range full.Order {
+		if shown(top.Rows[k]) {
+			want = append(want, k)
+		}
+	}
+	for _, k := range got.Order {
+		if shown(top.Rows[k]) {
+			have = append(have, k)
+		}
+	}
+	if len(want) == 0 || !slices.Equal(have, want) {
+		t.Fatalf("picked rows in order %v, want %v", have, want)
+	}
+	for _, k := range want {
+		if !reflect.DeepEqual(got.Problems[k], full.Problems[k]) || !reflect.DeepEqual(got.Endpoints[k], full.Endpoints[k]) {
+			t.Errorf("row %d: %+v %+v, want %+v %+v", k, got.Problems[k], got.Endpoints[k], full.Problems[k], full.Endpoints[k])
+		}
+	}
+	if got.Digest(want) != full.Digest(want) {
+		t.Error("the picked rows' digest moved with the unpicked rows")
 	}
 }

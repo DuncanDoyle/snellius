@@ -33,7 +33,10 @@ export function endpointsCellText(r: BackendRow): { text: string; muted: boolean
     return { text: missing ? endpointCopy.unknown : noPortCopy, muted: true };
   }
   const parts = r.endpoints.map((e) => (e.port ? portEndpoints(e.port.port, endpointsText(e)) : endpointsText(e)));
-  return { text: parts.join(" · "), muted: r.endpoints.every((e) => e.complete === "not-applicable") };
+  return {
+    text: parts.join(" · "),
+    muted: r.endpoints.every((e) => e.complete === "not-applicable" || e.complete === "not-permitted"),
+  };
 }
 
 function columns(installId: string): ObjectColumn<BackendRow>[] {
@@ -101,6 +104,8 @@ interface BackendTableProps {
   page?: Page<BackendRow>;
   busy: boolean;
   onClearFilters?: () => void;
+  /** The empty state's action label; ObjectTable's clearLabel. */
+  clearLabel?: string;
   sort: SortState;
   onSort: (key: string) => void;
   onPage: (cursor: string) => void;
@@ -114,6 +119,7 @@ export function BackendTable({
   page,
   busy,
   onClearFilters,
+  clearLabel,
   sort,
   onSort,
   onPage,
@@ -135,6 +141,7 @@ export function BackendTable({
       busy={busy}
       emptyTitle={emptyTitle}
       onClearFilters={onClearFilters}
+      clearLabel={clearLabel}
       sort={sort}
       onSort={onSort}
       onPage={onPage}

@@ -34,6 +34,18 @@ const (
 	endpointsNSDetail   = "Services or EndpointSlices are not available in namespaces %s"
 )
 
+// endpointsFixed is the not-available text every viewer sees: the fixed
+// wording, never the API server's message.
+func endpointsFixed(why Availability, detail string) string {
+	switch {
+	case detail == endpointsOffDetail || detail == endpointsSyncDetail:
+		return detail
+	case why == AvailDenied:
+		return "Services or EndpointSlices: access denied"
+	}
+	return "Services or EndpointSlices: the watch is failing"
+}
+
 // endpointsCheck: KGWUI-023, one per Service port that a resolved core Service
 // backendRef names and that had no ready endpoint for EndpointsHold.
 type endpointsCheck struct{}
@@ -65,7 +77,10 @@ func (c endpointsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 	scoped := len(in.Snapshot.RequestedNamespaces) > 0
 	if why != "" && (!scoped || !slices.ContainsFunc(in.Snapshot.RequestedNamespaces, func(ns string) bool { return endpointsReadable(in.Snapshot, ns) })) {
 		ctx.State.Set(endpointsStartsKey, nil)
-		return nil, NotAvailable(c.Name(), why, detail, at)
+		r := NotAvailable(c.Name(), why, detail, at)
+		r.Collection = true // decided by the watches alone; a partial read below depends on routes
+		r.fixed = endpointsFixed(why, detail)
+		return nil, r
 	}
 	// unread are the namespaces a scoped snapshot cannot judge: requested ones not OK, and referenced ones not read.
 	unread := map[string]bool{}

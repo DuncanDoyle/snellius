@@ -4,6 +4,7 @@ import { Lock, Minus } from "lucide-react";
 import type { EffectiveContext, EffectiveEdge } from "../../../api/types";
 import { computedCopy, delegationCopy, effectiveCopy, routeCopy } from "../../../copy/explorer";
 import { ComputedBadge } from "../../../explore/ComputedBadge";
+import { DelegationNotChecked } from "../../../explore/DelegationNotChecked";
 import { LinkedName } from "../../../explore/LinkedName";
 import { HealthIcon } from "../../../health/HealthIcon";
 import { Section } from "../detailParts";
@@ -163,11 +164,20 @@ interface EffectiveMatchesProps {
   installId: string;
   edges: EffectiveEdge[];
   truncated?: boolean;
+  /** The viewer gets no delegation analysis (D-114): the section says Not checked. */
+  notChecked?: boolean;
   stylesOverride?: SerializedStyles;
 }
 
 /** View C: this route's rules under each parent route's match, one card per parent edge (design §8.5). */
-export function EffectiveMatches({ installId, edges, truncated, stylesOverride }: EffectiveMatchesProps) {
+export function EffectiveMatches({ installId, edges, truncated, notChecked, stylesOverride }: EffectiveMatchesProps) {
+  if (notChecked)
+    return (
+      <Section aria-labelledby="route-effective">
+        <h2 id="route-effective">{effectiveCopy.title}</h2>
+        <DelegationNotChecked />
+      </Section>
+    );
   return (
     <Section aria-labelledby="route-effective">
       <h2 id="route-effective">

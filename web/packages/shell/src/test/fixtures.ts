@@ -31,6 +31,7 @@ export const meta: MetaResponse = {
   synced: true,
   platform: "Kubernetes",
   capabilities: ["scope", "workloads"],
+  authMode: "secure",
   kinds: [
     kind("gateway.networking.k8s.io", "GatewayClass", "gatewayclass", "GatewayClasses"),
     kind("gateway.networking.k8s.io", "Gateway", "gateway", "Gateways"),

@@ -4,6 +4,8 @@ import { Route, Routes, useLocation } from "react-router-dom";
 import pathsGolden from "../../../../../../pkg/api/testdata/golden/paths.json";
 import restrictedGolden from "../../../../../../pkg/api/testdata/golden/paths-restricted.json";
 import type { PathRow, PathsResponse } from "../../api/types";
+import { diagnosticsCopy } from "../../copy/explorer";
+import { cellCopy } from "../../copy/traffic";
 import { renderWithTheme } from "../../test/render";
 import { matchSummary, shareText } from "./pathText";
 import { TrafficPage } from "./TrafficPage";
@@ -158,6 +160,48 @@ it("a restricted viewer's summary says some paths are hidden", async () => {
   const summary = await screen.findByRole("region", { name: "Path summary" });
   expect(await within(summary).findByText("Some paths are hidden from you.")).toBeInTheDocument();
   expect(within(summary).queryByText(/Endpoints were not read/)).toBeNull();
+});
+
+it("in secure mode the summary never says paths are hidden: the permissions note replaces it", async () => {
+  document.documentElement.dataset.authMode = "secure";
+  try {
+    serve(() => fresh(restrictedGolden.body as unknown as PathsResponse));
+    mount();
+    const summary = await screen.findByRole("region", { name: "Path summary" });
+    await within(summary).findByTestId("summary-counts");
+    expect(within(summary).queryByText("Some paths are hidden from you.")).toBeNull();
+  } finally {
+    delete document.documentElement.dataset.authMode;
+  }
+});
+
+it("endpoints the viewer may not list read as unknown, muted, with no count", async () => {
+  serve(() => {
+    const b = golden();
+    const r = b.rows[0] as PathRow;
+    b.rows = [
+      {
+        ...r,
+        endpoints: {
+          source: "kubernetes",
+          port: { port: 80 },
+          readAt: r.endpoints?.readAt ?? "",
+          complete: "not-permitted",
+        },
+        problem: {
+          state: "unknown",
+          signals: [{ kind: "coverage", code: "not-permitted", state: "unknown", ref: r.backend }],
+        },
+      },
+    ];
+    return b;
+  });
+  mount();
+  const text = "You can't read the EndpointSlices in this namespace";
+  const cell = await screen.findByText(text, { selector: "[data-complete='not-permitted']" });
+  expect(cell.textContent).not.toMatch(/\d+\/\d+/);
+  const row = cell.closest("tr") as HTMLElement;
+  expect(within(row).getByTestId("path-state")).toHaveTextContent("Unknown");
 });
 
 it("problem rows show their state as icon and text, with the signals behind it", async () => {
@@ -344,4 +388,16 @@ it("a backend cell opens its backend detail", async () => {
   const [cell] = await within(table()).findAllByLabelText("shop/cart-svc");
   const link = (cell as HTMLElement).closest("a") ?? within(cell as HTMLElement).getByRole("link");
   expect(link.getAttribute("href")?.split("?")[0]).toBe(`/i/${ID}/backends/-/Service/shop/cart-svc`);
+});
+
+it("a delegation row says Not checked when its response withholds delegation analysis (D-114)", async () => {
+  for (const delegationNotChecked of [true, false]) {
+    serve(() => ({ ...golden(), delegationNotChecked }));
+    const m = mount();
+    const target = await within(table()).findByText(cellCopy.delegateTo("shop/child"));
+    const why = (target.closest("tr") as HTMLElement).querySelector('td[data-col="why"]') as HTMLElement;
+    if (delegationNotChecked) expect(why).toHaveTextContent(diagnosticsCopy.notChecked);
+    else expect(why).not.toHaveTextContent(diagnosticsCopy.notChecked);
+    m.unmount();
+  }
 });

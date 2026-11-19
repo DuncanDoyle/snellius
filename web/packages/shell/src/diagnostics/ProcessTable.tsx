@@ -4,6 +4,7 @@ import { useNow } from "../api/clock";
 import type { ProcessInfo, ProcessSet } from "../api/types";
 import { diagnosticsCopy, findingsCopy } from "../copy/explorer";
 import { HealthBadge } from "../health/HealthBadge";
+import { NotChecked } from "../health/NotChecked";
 import { ago } from "../pages/install/HealthStrip";
 
 // region Styles
@@ -85,6 +86,8 @@ interface ProcessTableProps {
 /** One role's processes. Not observed is never failing; a restricted set shows its counts only (design §14 rule 16). */
 export function ProcessTable({ set, label, stylesOverride }: ProcessTableProps) {
   const now = useNow();
+  if (set.notAssessed)
+    return <NotChecked label={diagnosticsCopy.notChecked} reason={diagnosticsCopy.notCheckedStatus} />;
   if (!set.observed) return <HealthBadge state="unknown" label={diagnosticsCopy.notObserved} />;
   const counts =
     set.ready !== undefined && set.desired !== undefined ? diagnosticsCopy.readyOf(set.ready, set.desired) : undefined;

@@ -3,6 +3,7 @@ import { EyeOff } from "lucide-react";
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import type { BackendConsumer, LinkedRef, Page, PathRow, PathsResponse } from "../../api/types";
+import { isSecureMode } from "../../auth/mode";
 import { exposureCopy } from "../../copy/backends";
 import { summaryCopy } from "../../copy/traffic";
 import { LinkedName } from "../../explore/LinkedName";
@@ -72,6 +73,7 @@ export function ExposureSection({ installId, backend, exposure, consumers }: Exp
       total: exposure.summary.paths,
       next: exposure.next,
       prev: exposure.prev,
+      delegationNotChecked: exposure.delegationNotChecked,
       collectedAt: exposure.collectedAt,
     }),
     [exposure],
@@ -83,7 +85,7 @@ export function ExposureSection({ installId, backend, exposure, consumers }: Exp
         <span className="note">{summaryCopy.paths(exposure.summary.paths)}</span>
         <InlineLink to={traffic}>{exposureCopy.openTraffic}</InlineLink>
       </h2>
-      {exposure.summary.hidden ? (
+      {exposure.summary.hidden && !isSecureMode() ? (
         <Hidden>
           <EyeOff size={14} aria-hidden="true" />
           {summaryCopy.hidden}

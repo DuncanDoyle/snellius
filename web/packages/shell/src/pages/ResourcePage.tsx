@@ -1,12 +1,13 @@
 import type { SerializedStyles } from "@emotion/react";
 import styled from "@emotion/styled";
 import { useParams } from "react-router-dom";
+import { ApiErrorState } from "../api/errorState";
 import { useKindCategory, useResource } from "../api/hooks";
 import { detailCopy, listCopy } from "../copy/explorer";
 import { CopyNameButton } from "../resource/CopyNameButton";
 import { ResourceName } from "../resource/ResourceName";
 import { LastAppliedToggle, useYaml, YamlBlock } from "../resource/ResourceYaml";
-import { useInstallId, useVocabulary } from "../shell/extension";
+import { useInstallId } from "../shell/extension";
 import { layout } from "../shell/layout";
 import { ObjectHeader } from "../shell/ObjectHeader";
 import { installPath } from "../shell/paths";
@@ -39,7 +40,6 @@ interface ResourcePageProps {
 /** Read-only YAML view of one resource. */
 export function ResourcePage({ stylesOverride }: ResourcePageProps = {}) {
   const id = useInstallId();
-  const vocab = useVocabulary();
   const { group = "-", kind = "", rns = "-", rname = "" } = useParams();
   const ref = { group: group === "-" ? "" : group, kind, namespace: rns === "-" ? undefined : rns, name: rname };
   const { data, error, collectedAt } = useResource(id, ref);
@@ -71,10 +71,8 @@ export function ResourcePage({ stylesOverride }: ResourcePageProps = {}) {
       ) : null}
       <YamlBlock data-testid="yaml">{y.yaml}</YamlBlock>
     </>
-  ) : error?.status === 503 ? (
-    <PageState kind="connecting" title={vocab.connecting} message={error.message} />
   ) : error ? (
-    <PageState kind="error" title="Cannot load resource" message={error.message} copyText={error.message} />
+    <ApiErrorState error={error} title="Cannot load resource" />
   ) : (
     <PageState kind="loading" title="Loading resource…" />
   );

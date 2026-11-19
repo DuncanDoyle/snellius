@@ -1,0 +1,1039 @@
+package api
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"testing/fstest"
+	"time"
+
+	clocktesting "k8s.io/utils/clock/testing"
+
+	"github.com/DuncanDoyle/snellius/pkg/health"
+	"github.com/DuncanDoyle/snellius/pkg/objects"
+)
+
+const (
+	authzUnavailableBody = `{"error":"authz-unavailable"}` + "\n"
+	authzBusyBody        = `{"error":"authz-busy"}` + "\n"
+)
+
+var errOutage = errors.New("SAR unavailable")
+
+// errAuthz is an ErrAuthorizer that denies deny's refs and fails its failAt-th
+// call (1-based; 0 never). With spend set, each call spends an uncached check.
+type errAuthz struct {
+	mu     sync.Mutex
+	deny   func(objects.Ref) bool
+	failAt int
+	spend  bool
+	calls  int
+}
+
+func (a *errAuthz) AuthorizeErr(r *http.Request, ref objects.Ref) (bool, error) {
+	a.mu.Lock()
+	a.calls++
+	n := a.calls
+	a.mu.Unlock()
+	if a.spend {
+		if err := SpendCheck(r); err != nil {
+			return false, err
+		}
+	}
+	if n == a.failAt {
+		return false, errOutage
+	}
+	return a.deny == nil || !a.deny(ref), nil
+}
+
+// Authorize reports an error for the request, as the SAR authoriser does.
+func (a *errAuthz) Authorize(r *http.Request, ref objects.Ref) bool {
+	ok, err := a.AuthorizeErr(r, ref)
+	if err != nil {
+		ReportAuthzError(r, err)
+		return false
+	}
+	return ok
+}
+
+func (a *errAuthz) count() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.calls
+}
+
+// fullAuthz is errAuthz with a full-read answer.
+type fullAuthz struct {
+	*errAuthz
+	all   bool
+	err   error
+	reads int
+}
+
+func (a *fullAuthz) FullRead(*http.Request) (bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.reads++
+	return a.all, a.err
+}
+
+func (a *fullAuthz) readCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.reads
+}
+
+// listAuthz adds CanList to errAuthz, failing with err when set.
+type listAuthz struct {
+	*errAuthz
+	err error
+}
+
+func (a listAuthz) CanList(_ *http.Request, gk objects.GroupKind, ns string) (bool, error) {
+	return gk.Kind == "HTTPRoute" && ns == "shop", a.err
+}
+
+// secureServer serves src in complete secure mode with a.
+func secureServer(t *testing.T, src ModelSource, a Authorizer, opts ...HandlerOption) *httptest.Server {
+	t.Helper()
+	opts = append([]HandlerOption{WithSecureMode()}, opts...)
+	srv := httptest.NewServer(NewHandler(src, fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}, a, opts...))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// fetchRaw returns the status, headers and body of GET path.
+func fetchRaw(t *testing.T, srv *httptest.Server, path string) (int, http.Header, string) {
+	t.Helper()
+	resp, err := http.Get(srv.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, resp.Header, string(b)
+}
+
+// wantUnavailable checks that path answered exactly the authz-unavailable 503.
+func wantUnavailable(t *testing.T, srv *httptest.Server, path string) {
+	t.Helper()
+	code, h, body := fetchRaw(t, srv, path)
+	if code != http.StatusServiceUnavailable || body != authzUnavailableBody || h.Get("Cache-Control") != "no-store" ||
+		h.Get("Content-Type") != "application/json" || h.Get("Collected-At") != "" || h.Get("X-Partial") != "" {
+		t.Errorf("GET %s: %d %v %q, want only the authz-unavailable 503", path, code, h, body)
+	}
+}
+
+// commitLists are the list routes over visWorld.
+var commitLists = []string{
+	"/api/v1/installs", base + "/overview", base + "/health", base + "/findings", base + "/diagnostics", base + "/processes",
+	listBase + "/routes?limit=200", listBase + "/gateways", listBase + "/listenersets", listBase + "/paths", listBase + "/backends",
+}
+
+// An error on any ref of a list answers the 503 and nothing of the list.
+func TestCommitOutageNeverPartial(t *testing.T) {
+	e, _, _ := startWith(t, setup{}, visWorld()...)
+	for _, p := range commitLists {
+		counter := &errAuthz{deny: hiddenSome}
+		if code, _, _ := fetchRaw(t, secureServer(t, e, counter), p); code != http.StatusOK {
+			t.Fatalf("GET %s without an outage: %d", p, code)
+		}
+		m := counter.count()
+		if m == 0 {
+			t.Errorf("GET %s made no checks", p)
+			continue
+		}
+		for _, n := range slices.Compact([]int{1, (m + 1) / 2, m}) {
+			a := &errAuthz{deny: hiddenSome, failAt: n}
+			wantUnavailable(t, secureServer(t, e, a), p)
+			if a.count() != n {
+				t.Errorf("GET %s failing at %d: %d checks; later checks must not ask", p, n, a.count())
+			}
+		}
+	}
+}
+
+// A route that answers 404 on denial answers 503 when the check fails.
+func TestCommitOutageNever404(t *testing.T) {
+	e, local, _ := startWith(t, setup{}, visWorld()...)
+	cases := []string{
+		backendsURL + "/gateway.kgateway.dev/Backend/shop/be-x",
+		routeDetail + "shop/secret",
+		routeDetail + "shop/secret/delegation",
+		lsDetail + "infra/ls1",
+		base + "/resources/gateway.networking.k8s.io/HTTPRoute/shop/secret",
+	}
+	for _, p := range cases {
+		if code, _, body := fetchRaw(t, secureServer(t, e, &errAuthz{deny: hiddenSome}), p); code != http.StatusNotFound {
+			t.Errorf("GET %s denied: %d %s, want 404", p, code, body)
+		}
+		wantUnavailable(t, secureServer(t, e, &errAuthz{deny: hiddenSome, failAt: 1}), p)
+	}
+	// A derived finding needs the full read: its detail answers 404 without
+	// it and 503 when the full read fails.
+	var detail string
+	for _, f := range get[HealthResponse](t, local, base+"/health", 200).Findings {
+		if f.Resource != nil && hiddenSome(f.Resource.Ref) && f.Code == health.CodeDelegatedNotAttached {
+			detail = base + "/findings/" + f.ID
+		}
+	}
+	if detail == "" {
+		t.Fatal("visWorld has no KGWUI-011 on a denied resource")
+	}
+	if code, _, body := fetchRaw(t, secureServer(t, e, &fullAuthz{errAuthz: &errAuthz{deny: hiddenSome}}), detail); code != http.StatusNotFound {
+		t.Errorf("GET %s denied: %d %s, want 404", detail, code, body)
+	}
+	wantUnavailable(t, secureServer(t, e, &fullAuthz{errAuthz: &errAuthz{deny: hiddenSome}, err: errOutage}), detail)
+	// An own-object finding on a denied resource: 404 when the named check
+	// denies its resource, 503 when that check fails.
+	rejected := func(ref objects.Ref) bool {
+		return ref.Kind == "HTTPRoute" && ref.Namespace == "shop" && ref.Name == "rejected"
+	}
+	var own string
+	for _, f := range get[HealthResponse](t, local, base+"/health", 200).Findings {
+		if f.Resource != nil && rejected(f.Resource.Ref) && f.Code == health.CodeConditionFalse {
+			own = base + "/findings/" + f.ID
+		}
+	}
+	if own == "" {
+		t.Fatal("visWorld has no KGWUI-002 on shop/rejected")
+	}
+	if code, _, body := fetchRaw(t, secureServer(t, e, &errAuthz{deny: rejected}), own); code != http.StatusNotFound {
+		t.Errorf("GET %s denied: %d %s, want 404", own, code, body)
+	}
+	wantUnavailable(t, secureServer(t, e, &errAuthz{deny: rejected, failAt: 1}), own)
+}
+
+// refsExt asks about n distinct refs through Visible and writes how many it may see.
+func refsExt(a Authorizer, n int) ExtMount {
+	return ExtMount{Name: "refs", Pattern: "GET /n", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		items := make([]int, n)
+		for i := range items {
+			items[i] = i
+		}
+		vis, _ := Visible(r, a, items, func(i int) objects.Ref { return objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: fmt.Sprint(i)} })
+		WriteJSON(w, len(vis))
+	})}
+}
+
+// The CheckLimit-th uncached check is answered; one more fails the request.
+func TestCommitCheckLimit(t *testing.T) {
+	for _, n := range []int{CheckLimit, CheckLimit + 1} {
+		a := &errAuthz{spend: true}
+		var reasons []string
+		srv := secureServer(t, staticModel{}, a, WithExtMounts(refsExt(a, n)), WithAuthzAudit(func(_ *http.Request, why string) { reasons = append(reasons, why) }))
+		if n == CheckLimit {
+			if code, _, body := fetchRaw(t, srv, "/api/ext/refs/n"); code != http.StatusOK || body != strconv.Itoa(CheckLimit)+"\n" {
+				t.Errorf("%d checks: %d %q", n, code, body)
+			}
+			continue
+		}
+		wantUnavailable(t, srv, "/api/ext/refs/n")
+		if !slices.Equal(reasons, []string{AuditCheckLimit}) {
+			t.Errorf("audit %v, want check-limit", reasons)
+		}
+	}
+}
+
+// inputsAuthz is fullAuthz that may also list the inputs the full-read proof leaves out.
+type inputsAuthz struct{ *fullAuthz }
+
+func (inputsAuthz) CanList(_ *http.Request, gk objects.GroupKind, ns string) (bool, error) {
+	return ns == "" && (gk == eventKind || gk == crdKind), nil
+}
+
+// Under a full read with the inputs it leaves out, no object check is made
+// and every answer is AllowAll's byte for byte.
+func TestCommitFullReadSkipsChecks(t *testing.T) {
+	e, _, _ := startWith(t, setup{}, visWorld()...)
+	full := &fullAuthz{errAuthz: &errAuthz{deny: hiddenSome}, all: true}
+	srv, ref := secureServer(t, e, inputsAuthz{full}), secureServer(t, e, AllowAll{})
+	for _, p := range append(slices.Clone(visRequests), listBase+"/paths", listBase+"/backends", backendsURL+"/gateway.kgateway.dev/Backend/shop/be-x") {
+		gc, _, got := fetchRaw(t, srv, p)
+		wc, _, want := fetchRaw(t, ref, p)
+		if gc != wc || got != want {
+			t.Errorf("GET %s differs from AllowAll: %d %d\n%s\n%s", p, gc, wc, got, want)
+		}
+		if !bytes.Equal(wire(t, srv, p), wire(t, ref, p)) {
+			t.Errorf("GET %s: headers differ from AllowAll", p)
+		}
+	}
+	if n := full.count(); n != 0 {
+		t.Errorf("%d checks under a full read", n)
+	}
+	if full.reads == 0 {
+		t.Error("FullRead was never asked")
+	}
+}
+
+// A full-read error answers 503 for a route that asks a population, with no
+// check after it; a route that asks none never runs the full read (D-100).
+// /meta asks the full read for limitedView (design §7.5).
+func TestCommitFullReadError(t *testing.T) {
+	ext := ExtMount{Name: "probe", Pattern: "GET /data", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		WriteJSON(w, "data")
+	})}
+	full := &fullAuthz{errAuthz: &errAuthz{}, err: errOutage}
+	srv := secureServer(t, staticModel{}, full, WithExtMounts(ext, refsExt(full, 3)))
+	if code, _, _ := fetchRaw(t, srv, "/api/ext/probe/data"); code != http.StatusOK {
+		t.Errorf("GET /api/ext/probe/data: %d without a population", code)
+	}
+	if n := full.readCount(); n != 0 {
+		t.Errorf("%d full reads without a population", n)
+	}
+	for k, p := range []string{"/api/ext/refs/n", "/api/v1/meta"} {
+		wantUnavailable(t, srv, p)
+		if n := full.readCount(); n != k+1 || full.count() != 0 {
+			t.Errorf("GET %s: %d full reads, %d checks", p, n, full.count())
+		}
+	}
+	if code, _, body := fetchRaw(t, srv, "/"); code != http.StatusOK || !strings.Contains(body, "spa") {
+		t.Errorf("SPA: %d %q", code, body)
+	}
+}
+
+// An extension's failed check answers 503 with nothing it wrote, whether the
+// check goes through Visible or a direct Authorize after writing.
+func TestCommitExtMount(t *testing.T) {
+	for _, all := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fullRead=%v", all), func(t *testing.T) {
+			a := &fullAuthz{errAuthz: &errAuthz{failAt: 2}, all: all}
+			late := ExtMount{Name: "late", Pattern: "GET /x", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("X-Partial", "1")
+				_, _ = w.Write([]byte(`{"partial":`))
+				a.Authorize(r, objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: "a"})
+				a.Authorize(r, objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: "b"})
+				_, _ = w.Write([]byte(`true}`))
+			})}
+			srv := secureServer(t, staticModel{}, a, WithExtMounts(refsExt(a, 3), late))
+			if all {
+				// A full read answers Visible without asking.
+				if code, _, body := fetchRaw(t, srv, "/api/ext/refs/n"); code != http.StatusOK || body != "3\n" {
+					t.Errorf("Visible under a full read: %d %q", code, body)
+				}
+				a.calls = 0
+			} else {
+				wantUnavailable(t, srv, "/api/ext/refs/n")
+				a.calls = 0
+			}
+			wantUnavailable(t, srv, "/api/ext/late/x")
+		})
+	}
+}
+
+// A commit check answering nil replaces the handler's response, also over a
+// recorded authorisation error; answering the request lets the response through.
+func TestCommitCheckReplacesBody(t *testing.T) {
+	var a Authorizer
+	// The handler asks a population, so a failing full read records its error.
+	ext := ExtMount{Name: "probe", Pattern: "GET /data", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		Visible(r, a, []int{1}, func(int) objects.Ref { return objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: "a"} })
+		w.Header().Set("X-Partial", "1")
+		w.WriteHeader(http.StatusTeapot)
+		_, _ = w.Write([]byte("handler body"))
+	})}
+	signedIn := true
+	check := func(w http.ResponseWriter, r *http.Request) (*http.Request, error) {
+		if !signedIn {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"session-ended"}`))
+			return nil, nil
+		}
+		return r, nil
+	}
+	for _, a = range []Authorizer{&errAuthz{}, &fullAuthz{errAuthz: &errAuthz{}, err: errOutage}} {
+		srv := secureServer(t, staticModel{}, a, WithExtMounts(ext), WithCommitCheck(check))
+		signedIn = false
+		if code, h, body := fetchRaw(t, srv, "/api/ext/probe/data"); code != http.StatusUnauthorized || body != `{"error":"session-ended"}` || h.Get("X-Partial") != "" {
+			t.Errorf("%T ended: %d %v %q", a, code, h, body)
+		}
+		signedIn = true
+		code, h, body := fetchRaw(t, srv, "/api/ext/probe/data")
+		if _, failing := a.(*fullAuthz); failing {
+			if code != http.StatusServiceUnavailable || body != authzUnavailableBody {
+				t.Errorf("%T signed in: %d %q", a, code, body)
+			}
+		} else if code != http.StatusTeapot || body != "handler body" || h.Get("X-Partial") != "1" {
+			t.Errorf("%T signed in: %d %v %q", a, code, h, body)
+		}
+	}
+}
+
+// The audit hook hears why each 503 was answered, and nothing else.
+func TestCommitAuditReasons(t *testing.T) {
+	var reasons []string
+	audit := WithAuthzAudit(func(_ *http.Request, why string) { reasons = append(reasons, why) })
+	cases := []struct {
+		a    Authorizer
+		n    int
+		want []string
+	}{
+		{&errAuthz{}, 3, nil},
+		{&errAuthz{failAt: 2}, 3, []string{AuditCheckFailed}},
+		{&errAuthz{spend: true}, CheckLimit + 1, []string{AuditCheckLimit}},
+		{&fullAuthz{errAuthz: &errAuthz{}, err: errOutage}, 3, []string{AuditFullReadFailed}},
+	}
+	for _, c := range cases {
+		reasons = nil
+		srv := secureServer(t, staticModel{}, c.a, WithExtMounts(refsExt(c.a, c.n)), audit)
+		_, _, _ = fetchRaw(t, srv, "/api/ext/refs/n")
+		if !slices.Equal(reasons, c.want) {
+			t.Errorf("%T: audit %v, want %v", c.a, reasons, c.want)
+		}
+	}
+	// An ended session is not an authorisation outage.
+	reasons = nil
+	srv := secureServer(t, staticModel{}, &errAuthz{failAt: 1}, WithExtMounts(refsExt(&errAuthz{failAt: 1}, 1)), audit,
+		WithCommitCheck(func(w http.ResponseWriter, _ *http.Request) (*http.Request, error) {
+			w.WriteHeader(http.StatusUnauthorized)
+			return nil, nil
+		}))
+	if code, _, _ := fetchRaw(t, srv, "/api/ext/refs/n"); code != http.StatusUnauthorized || reasons != nil {
+		t.Errorf("ended session: %d, audit %v", code, reasons)
+	}
+}
+
+// A commit check that answers a stale identity, or replaces the identity on
+// every build, ends in 503 authz-unavailable after at most two builds.
+func TestCommitIdentityChecks(t *testing.T) {
+	type key struct{}
+	cases := map[string]struct {
+		check  func(http.ResponseWriter, *http.Request) (*http.Request, error)
+		builds int
+	}{
+		"stale": {func(_ http.ResponseWriter, r *http.Request) (*http.Request, error) { return r, errors.New("stale") }, 1},
+		"replaced": {func(_ http.ResponseWriter, r *http.Request) (*http.Request, error) {
+			return r.WithContext(context.WithValue(r.Context(), key{}, 1)), nil
+		}, 2},
+	}
+	for name, c := range cases {
+		var reasons []string
+		builds := 0
+		ext := ExtMount{Name: "probe", Pattern: "GET /data", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			builds++
+			WriteJSON(w, "data")
+		})}
+		srv := secureServer(t, staticModel{}, &errAuthz{}, WithExtMounts(ext), WithCommitCheck(c.check),
+			WithAuthzAudit(func(_ *http.Request, why string) { reasons = append(reasons, why) }))
+		if code, _, body := fetchRaw(t, srv, "/api/ext/probe/data"); code != http.StatusServiceUnavailable || body != authzUnavailableBody ||
+			builds != c.builds || !slices.Equal(reasons, []string{AuditIdentity}) {
+			t.Errorf("%s: %d %q after %d builds, audit %v", name, code, body, builds, reasons)
+		}
+	}
+}
+
+// canList is allow-all under a full read, false without a ListAuthorizer, and
+// records an error like can.
+func TestViewCanList(t *testing.T) {
+	routes := objects.GroupKind{Group: objects.GatewayAPIGroup, Kind: "HTTPRoute"}
+	r, st := withAuthzState(httptest.NewRequest("GET", "/api/x", nil))
+	h := &handler{authz: &errAuthz{}}
+	if h.view(r).canList(routes, "shop") {
+		t.Error("an Authorizer without CanList allowed a list")
+	}
+	h.authz = listAuthz{errAuthz: &errAuthz{}}
+	if v := h.view(r); !v.canList(routes, "shop") || v.canList(routes, "blog") {
+		t.Error("CanList answers not followed")
+	}
+	full, _ := withAuthzState(httptest.NewRequest("GET", "/api/x", nil))
+	if !(&handler{authz: &fullAuthz{errAuthz: &errAuthz{}, all: true}}).view(full).canList(routes, "blog") {
+		t.Error("a full read must allow every list")
+	}
+	h.authz = listAuthz{errAuthz: &errAuthz{}, err: errOutage}
+	if h.view(r).canList(routes, "shop") || st.failed() != errOutage {
+		t.Errorf("error not recorded: %v", st.failed())
+	}
+}
+
+// commitT0 is the fake clock's start in the validity-at-commit tests.
+var commitT0 = time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+
+// expiringAuthz allows every ref but deny's, noting each allow as valid for a
+// minute from the clock's now. step runs inside the n-th call, counted over
+// every build; full, when set, answers the n-th FullRead. With spend, calls
+// after the spendFrom-th spend an uncached check.
+type expiringAuthz struct {
+	clock     *clocktesting.FakeClock
+	deny      func(objects.Ref) bool
+	spend     bool
+	spendFrom int
+	step      func(n int)
+	full      []bool
+
+	mu           sync.Mutex
+	calls, reads int
+}
+
+func (a *expiringAuthz) Authorize(r *http.Request, ref objects.Ref) bool {
+	ok, err := a.AuthorizeErr(r, ref)
+	if err != nil {
+		ReportAuthzError(r, err)
+	}
+	return ok
+}
+
+func (a *expiringAuthz) AuthorizeErr(r *http.Request, ref objects.Ref) (bool, error) {
+	a.mu.Lock()
+	a.calls++
+	n := a.calls
+	a.mu.Unlock()
+	if a.spend && n > a.spendFrom {
+		if err := SpendCheck(r); err != nil {
+			return false, err
+		}
+	}
+	if a.step != nil {
+		a.step(n)
+	}
+	if a.deny != nil && a.deny(ref) {
+		return false, nil
+	}
+	NoteAllow(r, a.clock.Now().Add(time.Minute))
+	return true, nil
+}
+
+// expiringFull is expiringAuthz with a full read; each answer steps the clock
+// a minute after noting a "true", which then expires during the build.
+type expiringFull struct{ *expiringAuthz }
+
+func (a expiringFull) FullRead(r *http.Request) (bool, error) {
+	a.mu.Lock()
+	a.reads++
+	all := a.full[a.reads-1]
+	a.mu.Unlock()
+	if all {
+		NoteAllow(r, a.clock.Now().Add(time.Minute))
+		a.clock.Step(time.Minute)
+	}
+	return all, nil
+}
+
+func (a *expiringAuthz) counts() (calls, reads int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.calls, a.reads
+}
+
+// builds counts handler runs; its mount writes the run and how many of n refs it may see.
+type builds struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (b *builds) count() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.n
+}
+
+func (b *builds) mount(a Authorizer, n int) ExtMount {
+	return ExtMount{Name: "b", Pattern: "GET /n", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b.mu.Lock()
+		b.n++
+		run := b.n
+		b.mu.Unlock()
+		items := make([]int, n)
+		for i := range items {
+			items[i] = i
+		}
+		vis, _ := Visible(r, a, items, func(i int) objects.Ref { return objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: fmt.Sprint(i)} })
+		WriteJSON(w, map[string]int{"build": run, "visible": len(vis)})
+	})}
+}
+
+// auditLog collects the audit reasons of a server.
+type auditLog struct {
+	mu      sync.Mutex
+	reasons []string
+}
+
+func (l *auditLog) option() HandlerOption {
+	return WithAuthzAudit(func(_ *http.Request, why string) {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.reasons = append(l.reasons, why)
+	})
+}
+
+func (l *auditLog) got() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.reasons)
+}
+
+// expiringServer serves a builds mount over n refs with a, commit reading clk.
+func expiringServer(t *testing.T, a Authorizer, clk *clocktesting.FakeClock, n int, opts ...HandlerOption) (*httptest.Server, *builds, *auditLog) {
+	t.Helper()
+	b, l := &builds{}, &auditLog{}
+	opts = append([]HandlerOption{WithExtMounts(b.mount(a, n)), WithCommitClock(clk.Now), l.option()}, opts...)
+	return secureServer(t, staticModel{}, a, opts...), b, l
+}
+
+// A response whose allows outlive the commit is written after one build.
+func TestCommitValidResponseWritten(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &expiringAuthz{clock: clk}
+	srv, b, l := expiringServer(t, a, clk, 3)
+	if code, _, body := fetchRaw(t, srv, "/api/ext/b/n"); code != http.StatusOK || body != `{"build":1,"visible":3}`+"\n" {
+		t.Errorf("%d %q", code, body)
+	}
+	if b.count() != 1 || l.got() != nil {
+		t.Errorf("%d builds, audit %v", b.count(), l.got())
+	}
+}
+
+// admitAuthz is expiringAuthz with admission: Admit answers err, else a
+// release; admits and releases count them. After admission every check fails
+// with fail, when set.
+type admitAuthz struct {
+	*expiringAuthz
+	err, fail        error
+	admits, releases atomic.Int32
+}
+
+func (a *admitAuthz) Admit(*http.Request) (func(), error) {
+	a.admits.Add(1)
+	if a.err != nil {
+		return nil, a.err
+	}
+	return sync.OnceFunc(func() { a.releases.Add(1) }), nil
+}
+
+func (a *admitAuthz) AuthorizeErr(r *http.Request, ref objects.Ref) (bool, error) {
+	if a.fail != nil && a.admits.Load() > 0 {
+		return false, a.fail
+	}
+	return a.expiringAuthz.AuthorizeErr(r, ref)
+}
+
+// A build that needs no uncached check is written without admission. One
+// that does is discarded; the request is admitted and built afresh, its place
+// given back once it is answered. A failed admission answers 503, authz-busy
+// when the queue is full, and so does
+// ErrNotAdmitted in an admitted build; an ended session answers 401 without
+// waiting (D-116).
+func TestCommitAdmission(t *testing.T) {
+	ended := WithCommitCheck(func(w http.ResponseWriter, _ *http.Request) (*http.Request, error) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return nil, nil
+	})
+	cases := []struct {
+		name             string
+		spend            bool
+		err, fail        error
+		opts             []HandlerOption
+		code             int
+		body             string
+		builds, checks   int
+		admits, releases int32
+		audit            []string
+	}{
+		{"cached", false, nil, nil, nil, http.StatusOK, `{"build":1,"visible":3}` + "\n", 1, 3, 0, 0, nil},
+		{"uncached", true, nil, nil, nil, http.StatusOK, `{"build":2,"visible":3}` + "\n", 2, 4, 1, 1, nil},
+		{"overloaded", true, errOutage, nil, nil, http.StatusServiceUnavailable, authzUnavailableBody, 1, 1, 1, 0, []string{AuditCheckFailed}},
+		{"queue full", true, fmt.Errorf("check: %w", ErrBusy), nil, nil, http.StatusServiceUnavailable, authzBusyBody, 1, 1, 1, 0, []string{AuditQueueFull}},
+		{"not admitted after admission", true, nil, ErrNotAdmitted, nil, http.StatusServiceUnavailable, authzUnavailableBody, 2, 1, 1, 1, []string{AuditCheckFailed}},
+		{"ended", true, nil, nil, []HandlerOption{ended}, http.StatusUnauthorized, "", 1, 1, 0, 0, nil},
+	}
+	for _, c := range cases {
+		clk := clocktesting.NewFakeClock(commitT0)
+		a := &admitAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: c.spend}, err: c.err, fail: c.fail}
+		srv, b, l := expiringServer(t, a, clk, 3, c.opts...)
+		code, _, body := fetchRaw(t, srv, "/api/ext/b/n")
+		calls, _ := a.counts()
+		if code != c.code || body != c.body || b.count() != c.builds || calls != c.checks {
+			t.Errorf("%s: %d %q after %d builds and %d checks, want %d %q, %d, %d", c.name, code, body, b.count(), calls, c.code, c.body, c.builds, c.checks)
+		}
+		if a.admits.Load() != c.admits || a.releases.Load() != c.releases || !slices.Equal(l.got(), c.audit) {
+			t.Errorf("%s: %d admits, %d releases, audit %v; want %d, %d, %v", c.name, a.admits.Load(), a.releases.Load(), l.got(), c.admits, c.releases, c.audit)
+		}
+	}
+}
+
+// A cache-only build that expires spends the one rebuild. When that rebuild
+// meets a miss and waits for admission, the admitted build is still the last:
+// its own expiry answers 503 (D-100 item 4, D-116 item 3).
+func TestCommitAdmissionKeepsRebuild(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	// Calls 1–3 are the first build, 4 is refused in the rebuild, 5–7 are the admitted build.
+	a := &admitAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: true, spendFrom: 3, step: func(n int) {
+		if n == 2 || n == 6 {
+			clk.Step(time.Minute)
+		}
+	}}}
+	srv, b, l := expiringServer(t, a, clk, 3)
+	wantUnavailable(t, srv, "/api/ext/b/n")
+	if b.count() != 3 || a.admits.Load() != 1 || a.releases.Load() != 1 || !slices.Equal(l.got(), []string{AuditExpired}) {
+		t.Errorf("%d builds, %d admits, %d releases, audit %v; want 3, 1, 1, [expired]", b.count(), a.admits.Load(), a.releases.Load(), l.got())
+	}
+}
+
+// placeAuthz is expiringAuthz with one admission place, waited for under the request's context.
+type placeAuthz struct {
+	*expiringAuthz
+	place chan struct{}
+}
+
+func (a *placeAuthz) Admit(r *http.Request) (func(), error) {
+	select {
+	case a.place <- struct{}{}:
+		return sync.OnceFunc(func() { <-a.place }), nil
+	case <-r.Context().Done():
+		return nil, r.Context().Err()
+	}
+}
+
+// stallReader is a request body that closes reading on its first Read, then blocks until resume closes.
+type stallReader struct {
+	reading, resume chan struct{}
+	once            sync.Once
+}
+
+func (s *stallReader) Read([]byte) (int, error) {
+	s.once.Do(func() { close(s.reading) })
+	<-s.resume
+	return 0, io.EOF
+}
+
+// readBody mounts POST /api/ext/u/n: it reads the body, checks n refs and writes both.
+func readBody(a Authorizer, b *builds, n int) ExtMount {
+	return ExtMount{Name: "u", Pattern: "POST /n", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b.mu.Lock()
+		b.n++
+		run := b.n
+		b.mu.Unlock()
+		body, _ := io.ReadAll(r.Body)
+		items := make([]int, n)
+		for i := range items {
+			items[i] = i
+		}
+		vis, _ := Visible(r, a, items, func(i int) objects.Ref { return objects.Ref{Kind: "HTTPRoute", Namespace: "shop", Name: fmt.Sprint(i)} })
+		WriteJSON(w, map[string]any{"build": run, "body": string(body), "visible": len(vis)})
+	})}
+}
+
+// An upload whose body stalls holds no admission place: its body is read
+// before it waits, so a cold request takes the only place meanwhile (D-116).
+func TestCommitStalledBodyHoldsNoPlace(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &placeAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: true}, place: make(chan struct{}, 1)}
+	b := &builds{}
+	h := NewHandler(staticModel{}, fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}, a,
+		WithSecureMode(), WithExtMounts(b.mount(a, 3), readBody(a, &builds{}, 3)), WithCommitClock(clk.Now))
+	body := &stallReader{reading: make(chan struct{}), resume: make(chan struct{})}
+	posted := make(chan struct{})
+	go func() {
+		defer close(posted)
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/ext/u/n", body))
+	}()
+	<-body.reading
+	got := httptest.NewRecorder()
+	answered := make(chan struct{})
+	go func() {
+		defer close(answered)
+		h.ServeHTTP(got, httptest.NewRequest(http.MethodGet, "/api/ext/b/n", nil))
+	}()
+	select {
+	case <-answered:
+	case <-time.After(10 * time.Second):
+		t.Error("a cold request is still waiting behind the stalled upload")
+	}
+	close(body.resume)
+	<-posted
+	<-answered
+	if got.Code != http.StatusOK || got.Body.String() != `{"build":2,"visible":3}`+"\n" {
+		t.Errorf("cold GET: %d %q", got.Code, got.Body.String())
+	}
+}
+
+// An upload that stalls past bodyReadTimeout answers 400, so its buffer is not held for long.
+func TestCommitStalledBodyTimesOut(t *testing.T) {
+	defer func(d time.Duration) { bodyReadTimeout = d }(bodyReadTimeout)
+	bodyReadTimeout = 200 * time.Millisecond
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &placeAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: true}, place: make(chan struct{}, 1)}
+	h := NewHandler(staticModel{}, fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}, a,
+		WithSecureMode(), WithExtMounts(readBody(a, &builds{}, 3)), WithCommitClock(clk.Now))
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	// Ten of the hundred promised bytes, then nothing.
+	if _, err := fmt.Fprintf(conn, "POST /api/ext/u/n HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n0123456789"); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("no answer to a stalled upload: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("stalled upload: %d, want 400", resp.StatusCode)
+	}
+}
+
+// Every build of a request reads its whole body, a rebuild after an expired allow too.
+// A body over MaxRequestBody answers 413 before any build.
+func TestCommitRebuildRereadsBody(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &expiringAuthz{clock: clk, step: func(n int) {
+		if n == 3 {
+			clk.Step(time.Minute)
+		}
+	}}
+	b := &builds{}
+	srv := secureServer(t, staticModel{}, a, WithExtMounts(readBody(a, b, 3)), WithCommitClock(clk.Now))
+	post := func(body string) (int, string) {
+		resp, err := http.Post(srv.URL+"/api/ext/u/n", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		got, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(got)
+	}
+	if code, got := post(`{"x":1}`); code != http.StatusOK || got != `{"body":"{\"x\":1}","build":2,"visible":3}`+"\n" {
+		t.Errorf("rebuilt POST: %d %q", code, got)
+	}
+	if code, _ := post(strings.Repeat("x", MaxRequestBody+1)); code != http.StatusRequestEntityTooLarge || b.count() != 2 {
+		t.Errorf("oversized POST: %d after %d builds, want 413 and no build", code, b.count())
+	}
+}
+
+// watchWriter calls at before its first status or byte.
+type watchWriter struct {
+	*httptest.ResponseRecorder
+	at func()
+}
+
+func (w watchWriter) WriteHeader(code int) { w.at(); w.ResponseRecorder.WriteHeader(code) }
+
+func (w watchWriter) Write(p []byte) (int, error) { w.at(); return w.ResponseRecorder.Write(p) }
+
+// A session that ends during the admitted build answers 401 after giving its place back.
+func TestCommitEndedSessionReleasesFirst(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &admitAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: true}}
+	checks := 0
+	ended := WithCommitCheck(func(w http.ResponseWriter, r *http.Request) (*http.Request, error) {
+		if checks++; checks == 1 {
+			return r, nil
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		return nil, nil
+	})
+	h := NewHandler(staticModel{}, fstest.MapFS{"index.html": {Data: []byte("<html>spa</html>")}}, a,
+		WithSecureMode(), WithExtMounts((&builds{}).mount(a, 3)), WithCommitClock(clk.Now), ended)
+	var held int32 = -1
+	w := watchWriter{httptest.NewRecorder(), func() {
+		if held < 0 {
+			held = a.admits.Load() - a.releases.Load()
+		}
+	}}
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/ext/b/n", nil))
+	if w.Code != http.StatusUnauthorized || a.admits.Load() != 1 || held != 0 {
+		t.Errorf("%d after %d admits; %d places held when the 401 was written, want 401, 1, 0", w.Code, a.admits.Load(), held)
+	}
+}
+
+// Methods other than GET and HEAD are admitted before their first build, so
+// admission never builds them twice; their place is given back (D-116 item 3).
+func TestCommitAdmitsOtherMethodsFirst(t *testing.T) {
+	for _, spend := range []bool{false, true} {
+		clk := clocktesting.NewFakeClock(commitT0)
+		a := &admitAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: spend}}
+		b := &builds{}
+		post := b.mount(a, 3)
+		post.Pattern = "POST /n"
+		srv := secureServer(t, staticModel{}, a, WithExtMounts(post), WithCommitClock(clk.Now))
+		resp, err := http.Post(srv.URL+"/api/ext/b/n", "application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || string(body) != `{"build":1,"visible":3}`+"\n" || b.count() != 1 {
+			t.Errorf("spend %v: %d %q after %d builds, want one build", spend, resp.StatusCode, body, b.count())
+		}
+		if a.admits.Load() != 1 || a.releases.Load() != 1 {
+			t.Errorf("spend %v: %d admits, %d releases; want 1, 1", spend, a.admits.Load(), a.releases.Load())
+		}
+	}
+}
+
+// The check trace hears each counted check with its build: none from the
+// discarded build, three from the admitted one, which is the second.
+func TestCommitCheckTrace(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &admitAuthz{expiringAuthz: &expiringAuthz{clock: clk, spend: true}}
+	var mu sync.Mutex
+	var got []int
+	trace := WithCheckTrace(func(_ *http.Request, build int, _ string, _ any) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, build)
+	})
+	srv, _, _ := expiringServer(t, a, clk, 3, trace)
+	if code, _, _ := fetchRaw(t, srv, "/api/ext/b/n"); code != http.StatusOK {
+		t.Fatalf("%d", code)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(got, []int{2, 2, 2}) {
+		t.Errorf("traced builds %v, want [2 2 2]", got)
+	}
+}
+
+// An allow that expires during the build is rebuilt once; the second body is written.
+func TestCommitExpiredRebuilt(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &expiringAuthz{clock: clk, step: func(n int) {
+		if n == 2 {
+			clk.Step(time.Minute)
+		}
+	}}
+	srv, b, l := expiringServer(t, a, clk, 3)
+	if code, _, body := fetchRaw(t, srv, "/api/ext/b/n"); code != http.StatusOK || body != `{"build":2,"visible":3}`+"\n" {
+		t.Errorf("%d %q", code, body)
+	}
+	if calls, _ := a.counts(); b.count() != 2 || calls != 6 || l.got() != nil {
+		t.Errorf("%d builds, %d checks, audit %v", b.count(), calls, l.got())
+	}
+}
+
+// Expiry during both builds answers 503 authz-unavailable, audited as expired.
+func TestCommitExpiredTwice503(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := &expiringAuthz{clock: clk, step: func(n int) {
+		if n%3 == 0 {
+			clk.Step(time.Minute)
+		}
+	}}
+	srv, b, l := expiringServer(t, a, clk, 3)
+	wantUnavailable(t, srv, "/api/ext/b/n")
+	if b.count() != 2 || !slices.Equal(l.got(), []string{AuditExpired}) {
+		t.Errorf("%d builds, audit %v", b.count(), l.got())
+	}
+}
+
+// A rebuild keeps the request's check count: four fifths of the limit twice pass it.
+func TestCommitRebuildSharesCap(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	per := CheckLimit * 4 / 5
+	a := &expiringAuthz{clock: clk, spend: true, step: func(n int) {
+		if n == per {
+			clk.Step(time.Minute)
+		}
+	}}
+	var hits atomic.Int32
+	srv, b, l := expiringServer(t, a, clk, per, WithCheckCapHit(func(*http.Request) { hits.Add(1) }))
+	wantUnavailable(t, srv, "/api/ext/b/n")
+	if b.count() != 2 || !slices.Equal(l.got(), []string{AuditCheckLimit}) || hits.Load() != 1 {
+		t.Errorf("%d builds, audit %v, %d cap hits", b.count(), l.got(), hits.Load())
+	}
+}
+
+// Passing the cap is reported once per request, whatever is answered: the
+// 503, or the 401 of a session that ended during the request.
+func TestCommitCheckCapHitOnce(t *testing.T) {
+	ended := WithCommitCheck(func(w http.ResponseWriter, _ *http.Request) (*http.Request, error) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return nil, nil
+	})
+	cases := []struct {
+		n     int
+		ended bool
+		code  int
+		hits  int32
+	}{
+		{CheckLimit, false, http.StatusOK, 0},
+		{CheckLimit + 1, false, http.StatusServiceUnavailable, 1},
+		{CheckLimit + 50, false, http.StatusServiceUnavailable, 1},
+		{CheckLimit + 1, true, http.StatusUnauthorized, 1},
+	}
+	for _, c := range cases {
+		a := &errAuthz{spend: true}
+		var hits atomic.Int32
+		opts := []HandlerOption{WithExtMounts(refsExt(a, c.n)), WithCheckCapHit(func(*http.Request) { hits.Add(1) })}
+		if c.ended {
+			opts = append(opts, ended)
+		}
+		srv := secureServer(t, staticModel{}, a, opts...)
+		if code, _, _ := fetchRaw(t, srv, "/api/ext/refs/n"); code != c.code || hits.Load() != c.hits {
+			t.Errorf("%d checks, ended %v: %d with %d cap hits, want %d with %d", c.n, c.ended, code, hits.Load(), c.code, c.hits)
+		}
+	}
+}
+
+// The first build expires and the session ends during the second: the
+// session's 401 is answered, with nothing of either build.
+func TestLogoutDuringRebuild(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	var mu sync.Mutex
+	signedIn, checked := true, 0
+	a := &expiringAuthz{clock: clk, step: func(n int) {
+		switch n {
+		case 3:
+			clk.Step(time.Minute)
+		case 4:
+			mu.Lock()
+			signedIn = false
+			mu.Unlock()
+		}
+	}}
+	check := WithCommitCheck(func(w http.ResponseWriter, r *http.Request) (*http.Request, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		checked++
+		if !signedIn {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"sign-in-required"}`))
+			return nil, nil
+		}
+		return r, nil
+	})
+	srv, b, l := expiringServer(t, a, clk, 3, check)
+	if code, _, body := fetchRaw(t, srv, "/api/ext/b/n"); code != http.StatusUnauthorized || body != `{"error":"sign-in-required"}` {
+		t.Errorf("%d %q", code, body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if b.count() != 2 || checked != 2 || l.got() != nil {
+		t.Errorf("%d builds, %d session checks, audit %v", b.count(), checked, l.got())
+	}
+}
+
+// A full-read "true" that expires during the first build is asked again by
+// the second, whose new answer (false) decides, not the first build's memo.
+func TestExpiredFullReadRebuild(t *testing.T) {
+	clk := clocktesting.NewFakeClock(commitT0)
+	a := expiringFull{&expiringAuthz{clock: clk, full: []bool{true, false}, deny: func(r objects.Ref) bool { return r.Name == "1" }}}
+	srv, b, _ := expiringServer(t, a, clk, 3)
+	if code, _, body := fetchRaw(t, srv, "/api/ext/b/n"); code != http.StatusOK || body != `{"build":2,"visible":2}`+"\n" {
+		t.Errorf("%d %q", code, body)
+	}
+	if calls, reads := a.counts(); b.count() != 2 || reads != 2 || calls != 3 {
+		t.Errorf("%d builds, %d full reads, %d checks", b.count(), reads, calls)
+	}
+}

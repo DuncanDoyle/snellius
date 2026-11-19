@@ -13,6 +13,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
 
@@ -45,6 +46,97 @@ func RollUp(fs []Finding, cs []CheckResult) State {
 		}
 	}
 	return StateHealthy
+}
+
+// ShownTo reports whether a viewer without the full read sees f (D-106): an
+// own-object finding when its resource and every object it named are
+// readable, a collection finding when its resource, if any, is. A named
+// object also counts when a NamedReadable may read it by name. A derived
+// finding needs the full read, under which Project is not called.
+func (f *Finding) ShownTo(rd Readable) bool {
+	switch {
+	case f.class == ClassOwn:
+		if f.Resource == nil || !rd.Ref(*f.Resource) {
+			return false
+		}
+		nr, named := rd.(NamedReadable)
+		for _, r := range f.Basis.refs() {
+			if !rd.Ref(r) && (!named || !nr.Named(r)) {
+				return false
+			}
+		}
+		return true
+	case f.Basis.collection():
+		return f.Resource == nil || rd.Ref(*f.Resource)
+	}
+	return false
+}
+
+// Project is rep as a viewer without the full read sees it: the findings
+// ShownTo them, in order and without Group, counted again; each check result
+// whole when it is a collection failure, else "Not checked"; and the state
+// rolled up from those. So install-wide unknown comes only from collection
+// failures. A nil rd is the full read and returns rep unchanged.
+func Project(rep Report, rd Readable) Report {
+	if rd == nil {
+		return rep
+	}
+	out := rep
+	out.Findings = make([]Finding, 0, len(rep.Findings))
+	out.Counts = map[Severity]int{}
+	for i := range rep.Findings {
+		if f := rep.Findings[i]; f.ShownTo(rd) {
+			f.Group = "" // the viewer's grouping is set per viewer
+			if f.class != ClassOwn {
+				f.Detail = f.Basis.fixedText() // the API server's text may name objects or namespaces
+			}
+			out.Findings = append(out.Findings, f)
+			out.Counts[f.Severity]++
+		}
+	}
+	out.Checks = make([]CheckResult, len(rep.Checks))
+	for i, c := range rep.Checks {
+		if c.Collection {
+			c.Error, c.Detail = c.fixed, ""
+		} else {
+			c = CheckResult{Name: c.Name, Required: c.Required, CollectedAt: c.CollectedAt, OK: true, NotAssessed: true}
+		}
+		out.Checks[i] = c
+	}
+	out.State = RollUp(out.Findings, out.Checks)
+	return out
+}
+
+// FromEvents reports whether f comes from Kubernetes Events: KGWUI-020's probe failures.
+func (f *Finding) FromEvents() bool { return f.Code == CodeProbeFailing }
+
+// OnCRD reports whether f is on a CustomResourceDefinition: KGWUI-022's bundle skew quotes its annotations.
+func (f *Finding) OnCRD() bool {
+	return f.Resource != nil && f.Resource.Group == cache.CRDsKind.Group && f.Resource.Kind == cache.CRDsKind.Kind
+}
+
+// Withhold is rep for a full reader who may not list Events or CRDs, as
+// events and crds say (D-110): without findings from them and, for Events,
+// the probe check "Not checked" unless a collection failure, as Project shows
+// them, and for CRDs no CRD comparison note; counted and rolled up again.
+func Withhold(rep Report, events, crds bool) Report {
+	out := rep
+	out.Findings = slices.DeleteFunc(slices.Clone(rep.Findings), func(f Finding) bool { return events && f.FromEvents() || crds && f.OnCRD() })
+	out.Counts = map[Severity]int{}
+	for _, f := range out.Findings {
+		out.Counts[f.Severity]++
+	}
+	out.Checks = slices.Clone(rep.Checks)
+	for i, c := range out.Checks {
+		if events && c.Name == probesCheckName && !c.Collection {
+			out.Checks[i] = CheckResult{Name: c.Name, Required: c.Required, CollectedAt: c.CollectedAt, OK: true, NotAssessed: true}
+		}
+		if crds && c.crdNoted {
+			out.Checks[i].Detail, out.Checks[i].crdNoted = c.noCRDNote, false
+		}
+	}
+	out.State = RollUp(out.Findings, out.Checks)
+	return out
 }
 
 // Evaluate runs checks and assembles a Report. Findings are in a fixed
@@ -185,6 +277,7 @@ func evaluateOne(in Input, c Check, set InputSet, rt Runtime, memoize bool, outp
 	}
 	ctx := runContext(in, c, set, rt, outputs)
 	fs, cr = c.Run(ctx)
+	fs, cr = confine(c, fs, cr, ctx.sink.owned)
 	if ctx.sink.hold != nil {
 		cr.Hold = ctx.sink.hold
 	}

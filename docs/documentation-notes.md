@@ -58,3 +58,72 @@ Topics the user-facing documentation must cover when it is written. Each entry s
 - **Large Gateways.** More than 60 routes or backends opens on problems only, with a prompt to narrow.
 - **Keyboard and accessibility.** One tab stop; arrow keys along the paths, Enter for details, Escape to close. The Table button is the accessible equivalent.
 - **Export.** SVG or PNG of the whole drawn graph (filters, focus and collapse applied), with a title line and legend; not the visible viewport.
+
+## Local and secure mode (2026-11-14, Phase 7 sub-phase 7.1)
+
+- **Two modes.** Flag `--auth-mode`, chart value `auth.mode`, default `local`. Explain what each means for who sees what.
+- **Local mode.** No sign-in. Snellius listens on `127.0.0.1:8080` in the pod, so only `kubectl port-forward` reaches it. Whoever can port-forward (needs `pods/portforward` in its namespace) sees everything Snellius reads. A banner on every page says so.
+- **Refusals.** A Host that is not localhost (or in `auth.allowedHosts`) gets 421; a cross-origin request gets 403. Explain both, and that the binary refuses a non-loopback `--listen` or host networking, and the chart refuses `httpRoute.enabled`.
+- **Secure mode.** OIDC sign-in with visibility that follows Kubernetes RBAC, from `v0.8.0`. Since 7.5 (cd667e0) it serves each signed-in user only what their RBAC allows; a custom policy can only narrow it. 
+- **Upgrade break.** An install with `httpRoute.enabled` needs `auth.mode: secure`. Explain why (an HTTPRoute exposed an unauthenticated view up to `v0.7.x`; local mode is loopback-only), give the two choices (secure mode from `v0.8.0`, or port-forward), and say not to upgrade it to a development build.
+- **Written (7.6).** README "Security and trust model", "Secure mode" and "Upgrade notes"; chart README.
+
+## Audit stream (2026-11-14, Phase 7 sub-phase 7.1)
+
+- **Format.** JSON lines on stdout, each with `"log":"snellius.audit"`. Document the record fields once more than the startup record exists.
+- **Levels.** `--audit-levels` (chart `audit.levels`), default `security,agent,reads,summaries`. Explain what each level records.
+- **Request ID.** Every response from the UI and API listener carries `X-Request-Id` (the probe listener does not); say how to match it to audit lines.
+- **Written (7.6).** README "Audit stream": levels, collapsing, fields, what is never recorded, request ID.
+
+## Probe port and metrics (2026-11-14, Phase 7 sub-phase 7.1)
+
+- **Probe listener.** `--probe-listen`, chart container port `probe` (8081). It serves `/healthz`, `/readyz` and `/metrics`, and the probes use it.
+- **Readiness body.** `/readyz` lists no install IDs; they go to the log.
+- **Metrics.** `snellius_auth_mode{mode}`, `snellius_audit_records_total{level}`, `snellius_audit_dropped_total{level}`. Say how to scrape them and that a NetworkPolicy must allow it.
+- **Written (7.6).** README "Probe port and metrics" and chart README "Probes and metrics".
+
+## Secure-mode sign-in (2026-11-14, Phase 7 sub-phase 7.2)
+
+- **IdP setup per provider.** Later, add one short walkthrough per common IdP: the client, the redirect and post-logout URIs, the scopes and the groups claim. The README has the provider-neutral steps.
+- **Audience configuration.** Explain the two options in depth: reuse the client ID the cluster trusts, or add Snellius's client ID to `audiences` in the structured authentication configuration. Say why Snellius needs it: the API server validates the ID token through TokenReview. Cover how the claim mappings and prefixes set the username and groups that RBAC sees.
+- **Troubleshooting `/signin-failed`.** One entry per reason. `unauthenticated`: the IdP or the API server rejects the user, including when the API server does not accept Snellius's client ID as an audience (D-097). `invalid`: a missing or expired login attempt, a failed code exchange or ID token check, or a failed token review. Say which log lines to read and that the browser never sees more than the reason.
+- **Sessions.** What a session is (one signed-in browser), and the three settings: `auth.session.idle` (30m), `auth.session.absolute` (8h) and `auth.session.max` (1,000; past it, the session unused for longest ends). Say that the IdP's refresh-token lifetime also ends a session, whichever comes first. Cover the identity check at least every 15 minutes, and that a restart signs everyone out. Explain why one replica.
+- **Sign-out.** RP-initiated logout: `client_id` and the app root as `post_logout_redirect_uri`, no ID token hint. Say what happens when the IdP has no end-session endpoint (the browser returns to the app root).
+- **HTTPS and cookies.** `cookieSecure=false` only for a localhost redirect. Behind a gateway, the route must carry TLS and operator authentication.
+- **Written (7.6).** README "Secure mode": the steps, both audience options, `kubectl auth whoami`, sessions, sign-out, sign-in errors, the trusted proxy setting. Still open: the per-provider IdP walkthroughs, and a fuller `/signin-failed` troubleshooting entry per reason with the log lines to read.
+
+## Permission checks (2026-11-15, Phase 7 sub-phase 7.3)
+
+- **How access is checked.** Lists, counts and summaries include an object only when the user may `list` its resource in its namespace (cluster-wide for a cluster-scoped kind). A detail page, and an object named in a readable object, checks `list` and then `get` on that object, which honours `resourceNames` grants. Answers are cached per identity. A user who may list every served kind cluster-wide takes the full-read path and needs no per-object checks (D-100).
+- **Cache TTL.** `--authz-cache-ttl` (chart `auth.authz.cacheTTL`), `30s` to `15m`, default `60s`, for allowed answers. Denied ones last 4 to 5 min (D-100). It is the only bound on how long a revoked permission stays visible. There is no RBAC watch (D-099). Document both directions: tighten with `30s` and shorter session lifetimes (idle expiry does not end a polling session), relax up to `15m` (a removed RoleBinding stays effective that long).
+- **Named-get scan.** `--authz-named-get-scan` (chart `auth.authz.namedGetScan`, default off) shows objects granted only by `resourceNames` in lists again, at one check per hidden object. Explain it for clusters that rely on named read grants, and that it is an upgrade-notes behavior change.
+- **Load and rate settings.** `--authz-max-in-flight` (32), `--authz-rate` (100/s, `1` to `10000`) and `--authz-burst` (500), chart `auth.authz.maxInFlight`, `rate` and `burst`, across all users. Checks use their own client with no client-side throttle, so these are the only limits. Say when to raise them (large clusters, many users) and that the API server must take the load. Measured at the default 100/s: 50 viewers opening cold pages at once wait up to about 3 min for the last first answer, and about 3% of polls see `authz-unavailable` (`expired`) meanwhile. That first answer lands about 70 s before the 4 min deny cache floor; past it, retries re-ask every denial and most polls fail, so raise the rate before adding many cold users. The permission cache has an 8 MiB memory budget inside the 64 MiB retained-heap budget over the 2.1 baseline (D-057, D-100).
+- **Failing closed.** A failed check answers `503 authz-unavailable`, never a partial page or a 404, and writes a `security` audit record `authz-unavailable` with the reason (`check-failed`, `check-limit`, `full-read-failed`, `expired`, `identity-stale`). Explain the 1,000-check limit per request. A full admission queue (D-116) answers `503 authz-busy` instead, audited with reason `queue-full`; the page says Snellius is busy and retries by itself.
+- **RBAC.** Secure mode adds `create` on `subjectaccessreviews`. Say which kinds a user needs `list` on for the full-read path.
+- **Metrics.** `snellius_authz_checks_total{verb,outcome}`, `snellius_authz_check_seconds_total`, `snellius_authz_cache_total{result}`, `snellius_authz_identities`.
+- **Written (7.6).** README "Secure mode" notes (permission checks, what lists show, faster revocation, fewer checks) and "Capacity and tuning". Not folded in: the 3 min first-answer wait and 3% `expired` figure for 50 cold viewers.
+
+## Visibility for restricted viewers (2026-11-17, Phase 7 sub-phase 7.4)
+
+- **The basis rule.** A finding about one object shows to a viewer without the full read only when they can read that object and every object it names (D-106). Findings decided by many objects (listener counts, skew, proxy stats, processes, probes, extension checks) need the full read. Give one example per class, so an application team knows why a platform-wide finding is missing for them. Say that the basis is decided per resource and analyzer, so a route rejected by a readable and a hidden parent shows no finding to that viewer (D-108 item 4).
+- **"Not checked".** What it means in "What was checked", and that it is never a pass. Collection failures still show to everyone, with fixed text.
+- **Below-full-read exceptions.** The listener check with a readable route population, process counts with `list` on Deployments and Pods, probe facts with cluster-wide `list` on Events, and endpoint counts with `list` on EndpointSlices (D-110). Give the RBAC rules a team needs for each.
+- **The permissions note.** The header note "You see what your Kubernetes permissions allow." shows to a viewer without the full read (`/api/v1/meta` `limitedView`). Say which permissions make up the full read, so a platform team can grant it.
+- **Install context.** List what every viewer sees regardless of RBAC: the install list and IDs (D-102, D-103), controller settings (D-106), membership (D-107), collection failures and Snellius's own RBAC (D-108), the response time (D-109). Say plainly that these are accepted exceptions.
+- **Times.** For a viewer without the full read, per-result times and `/installs` `computedAt` are the confirmation time (D-109).
+- **Backend detail read time.** Endpoint reads are kept for 5 s, so a backend detail page can show that someone opened the same Service just before. Document it as a known side channel that reveals no hidden object.
+- **Written (7.6).** README "What each user sees". Not folded in: the RBAC rules a team needs for each below-full-read exception, as ready-to-copy Roles.
+
+## Namespace scope (2026-11-17, Phase 7 sub-phase 7.4)
+
+- **What it does.** The header selector limits rows, counts, facets and summaries to the chosen namespaces, for every viewer. Findings with no namespace fall outside every scope. Cross-namespace dependencies are still checked.
+- **Where it lives.** One browser setting for every install, kept across reloads. Explain the marker on the header and the scoped empty state with "Show all namespaces".
+- **Why use it.** A scoped page asks about a tenth of the permission checks on a large cluster. Give the measured numbers from the 7.4 bench.
+- **API.** `namespaces=` on the seven lists (at most 100 names, `400` on a bad value) and `GET /api/v1/installs/{id}/namespaces`.
+- **Written (7.6).** README "Namespace scope". The README states the "about tenfold" cut; the 7.4 bench numbers are not in it.
+
+## Many viewers at once (2026-11-18, Phase 7 sub-phase 7.5, D-116 to D-118)
+- When many restricted viewers open pages at the same moment (for example after a Snellius restart), page loads are answered in turn, oldest first; the last can wait minutes. Viewers with full read access and polls with cached answers don't wait.
+- Capacity at the default 100 checks/s: on a cluster of about 100 namespaces, 50 restricted viewers polling `/backends` every 5 s need about 95 checks/s, so their polls slow to about 12 s. Raise `auth.authz.rate` if the API server can take it; scoping a page to a namespace cuts its checks sharply.
+- The permission cache stays at 8 MiB and holds about 40,000 answers (about 210 B each).
+- **Written (7.6).** README "Capacity and tuning".

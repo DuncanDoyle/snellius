@@ -5,6 +5,14 @@
     "items": [
       {
         "children": 0,
+        "config": {
+          "reason": {
+            "code": "KGWUI-004",
+            "kind": "finding",
+            "message": "Namespace not watched by the controller"
+          },
+          "state": "warning"
+        },
         "flags": [],
         "health": "warning",
         "hostnames": [],
@@ -21,6 +29,13 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "reason": {
+            "kind": "not-attached"
+          },
+          "state": "unknown"
+        },
         "reason": {
           "code": "KGWUI-004",
           "kind": "finding",
@@ -36,6 +51,14 @@
       },
       {
         "children": 0,
+        "config": {
+          "reason": {
+            "code": "KGWUI-004",
+            "kind": "finding",
+            "message": "Namespace not watched by the controller"
+          },
+          "state": "warning"
+        },
         "flags": [],
         "health": "warning",
         "hostnames": [],
@@ -52,6 +75,13 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "reason": {
+            "kind": "not-attached"
+          },
+          "state": "unknown"
+        },
         "reason": {
           "code": "KGWUI-004",
           "kind": "finding",
@@ -67,6 +97,9 @@
       },
       {
         "children": 1,
+        "config": {
+          "state": "healthy"
+        },
         "flags": [
           "accepted"
         ],
@@ -121,6 +154,10 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "state": "healthy"
+        },
         "ref": {
           "group": "gateway.networking.k8s.io",
           "kind": "HTTPRoute",
@@ -131,6 +168,9 @@
       },
       {
         "children": 0,
+        "config": {
+          "state": "healthy"
+        },
         "flags": [
           "accepted"
         ],
@@ -185,6 +225,14 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "reason": {
+            "code": "off",
+            "kind": "backend-problem"
+          },
+          "state": "unknown"
+        },
         "ref": {
           "group": "gateway.networking.k8s.io",
           "kind": "HTTPRoute",
@@ -195,6 +243,9 @@
       },
       {
         "children": 0,
+        "config": {
+          "state": "healthy"
+        },
         "flags": [
           "accepted"
         ],
@@ -249,6 +300,10 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "state": "healthy"
+        },
         "ref": {
           "group": "gateway.networking.k8s.io",
           "kind": "HTTPRoute",
@@ -259,6 +314,9 @@
       },
       {
         "children": 0,
+        "config": {
+          "state": "healthy"
+        },
         "flags": [
           "accepted"
         ],
@@ -285,6 +343,10 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "state": "healthy"
+        },
         "ref": {
           "group": "gateway.networking.k8s.io",
           "kind": "HTTPRoute",
@@ -295,6 +357,14 @@
       },
       {
         "children": 0,
+        "config": {
+          "reason": {
+            "code": "KGWUI-011",
+            "kind": "finding",
+            "message": "No status for the named parent route"
+          },
+          "state": "warning"
+        },
         "flags": [
           "declared"
         ],
@@ -313,6 +383,13 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "reason": {
+            "kind": "not-attached"
+          },
+          "state": "unknown"
+        },
         "reason": {
           "code": "KGWUI-011",
           "kind": "finding",
@@ -328,6 +405,9 @@
       },
       {
         "children": 0,
+        "config": {
+          "state": "healthy"
+        },
         "flags": [
           "accepted"
         ],
@@ -382,6 +462,14 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "reason": {
+            "code": "off",
+            "kind": "backend-problem"
+          },
+          "state": "unknown"
+        },
         "ref": {
           "group": "gateway.networking.k8s.io",
           "kind": "HTTPRoute",
@@ -392,6 +480,14 @@
       },
       {
         "children": 0,
+        "config": {
+          "reason": {
+            "code": "KGWUI-003",
+            "kind": "finding",
+            "message": "Not yet processed by the controller"
+          },
+          "state": "warning"
+        },
         "flags": [
           "pending"
         ],
@@ -443,6 +539,13 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "reason": {
+            "kind": "not-attached"
+          },
+          "state": "unknown"
+        },
         "reason": {
           "code": "KGWUI-003",
           "kind": "finding",
@@ -458,6 +561,14 @@
       },
       {
         "children": 0,
+        "config": {
+          "reason": {
+            "code": "KGWUI-002",
+            "kind": "finding",
+            "message": "Unsupported value in the route"
+          },
+          "state": "error"
+        },
         "flags": [
           "not-accepted"
         ],
@@ -515,6 +626,13 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "reason": {
+            "kind": "not-attached"
+          },
+          "state": "unknown"
+        },
         "reason": {
           "code": "KGWUI-002",
           "kind": "finding",
@@ -530,6 +648,9 @@
       },
       {
         "children": 0,
+        "config": {
+          "state": "healthy"
+        },
         "flags": [
           "accepted"
         ],
@@ -596,6 +717,10 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "state": "healthy"
+        },
         "ref": {
           "group": "gateway.networking.k8s.io",
           "kind": "HTTPRoute",

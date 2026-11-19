@@ -270,6 +270,16 @@ type runSink struct {
 	retained map[string]bool
 	hold     *Hold
 	reasons  []string // hold's distinct reasons, in declaration order
+	own      *ownBase // what runOwn indexes once per run
+	owned    *ownedSet
+}
+
+// ownedSet is the run's own-object registry; nil without a sink or before runOwn.
+func (s *runSink) ownedSet() *ownedSet {
+	if s == nil {
+		return nil
+	}
+	return s.owned
 }
 
 // WakeAt says the check's output may change at at; the engine recomputes by

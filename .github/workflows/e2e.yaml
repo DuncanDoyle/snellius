@@ -77,6 +77,57 @@ jobs:
           kubectl logs -n snellius deploy/ui-snellius --tail=200 || true
           for ns in kgw-a kgw-b; do kubectl logs -n "$ns" deploy/kgateway --tail=200 || true; done
           kubectl get gateways,httproutes -A -o wide || true
+  # Secure mode against test/oidc-issuer: two users sign in, the API server reviews their tokens.
+  # The sign-in tests and the audit records test run; the audit test waits up to one 5-minute summary window.
+  kind-secure:
+    runs-on: ubuntu-latest
+    env:
+      KGW_VERSION: v2.5.0
+      GWAPI_VERSION: v1.7.0
+      EXPLORER: "0"
+      SECURE: "1"
+      E2E_DIR: ${{ github.workspace }}/.e2e
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version-file: go.mod }
+      - uses: actions/setup-node@v7
+        with: { node-version: 22, cache: npm, cache-dependency-path: web/package-lock.json }
+      - uses: helm/kind-action@v1
+        with: { install_only: true }
+      - uses: azure/setup-helm@v5
+      - name: setup
+        run: bash test/e2e/setup.sh
+      - name: api
+        run: go test -tags e2e ./test/e2e/... -run 'TestSignIn|TestAuditRecords' -v -count=1 -timeout 20m
+      - name: playwright
+        working-directory: web
+        env: { SIGNED_IN_USER: "oidc:alice", ISSUER_USER: alice }
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test -c e2e/playwright.config.ts signin.spec.ts restricted.spec.ts
+      # upload-artifact skips hidden paths, and .e2e holds the kubeconfig: copy only the logs out.
+      - name: collect logs
+        if: always()
+        run: |
+          mkdir -p e2e-logs
+          cp .e2e/oidc/issuer.log .e2e/oidc/auth.yaml .e2e/port-forward.log e2e-logs/ 2>/dev/null || true
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-secure
+          path: |
+            web/test-results
+            web/playwright-report
+            e2e-logs
+          if-no-files-found: ignore
+      - name: diagnostics
+        if: failure()
+        env: { KUBECONFIG: "${{ github.workspace }}/.e2e/kubeconfig" }
+        run: |
+          kubectl logs -n snellius deploy/ui-snellius --tail=200 || true
+          kubectl logs -n kube-system -l component=kube-apiserver --tail=100 | grep -i -E 'jwt|oidc|authenticat' || true
   # Optional and manual: a kgateway main build, ahead of the tagged rows (2.5 covers TargetNotFound now).
   # The main-build chart source is unverified, and GWAPI_VERSION v1.6.2 may lag main's go.mod pin.
   kind-main:

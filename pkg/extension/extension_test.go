@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/pkg/api"
@@ -18,10 +20,12 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/computed/kgw23"
 	"github.com/DuncanDoyle/snellius/pkg/computed/rulesets"
 	"github.com/DuncanDoyle/snellius/pkg/diagnose"
+	"github.com/DuncanDoyle/snellius/pkg/engine"
 	"github.com/DuncanDoyle/snellius/pkg/health"
 	"github.com/DuncanDoyle/snellius/pkg/install"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
+	"github.com/DuncanDoyle/snellius/pkg/platform"
 	"github.com/DuncanDoyle/snellius/pkg/scopeverify"
 	"github.com/DuncanDoyle/snellius/pkg/trigger"
 )
@@ -181,8 +185,8 @@ func TestRegistryMounts(t *testing.T) {
 	if want := []string{"acme GET /a", "acme POST /b/{id}", "other /"}; strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("mounts %v, want %v", names, want)
 	}
-	// Unset Deps fields get the defaults: AllowAll and a logger.
-	if _, ok := got["acme"].Authorizer.(api.AllowAll); !ok || got["acme"].Logger == nil || got["other"].Logger == nil {
+	// An unset Authorizer stays nil, decided per request; an unset Logger gets the default.
+	if got["acme"].Authorizer != nil || got["acme"].View == nil || got["acme"].Logger == nil || got["other"].Logger == nil {
 		t.Fatalf("deps defaults: %+v", got["acme"])
 	}
 	deny := api.AuthorizerFunc(func(*http.Request, objects.Ref) bool { return false })
@@ -195,6 +199,40 @@ func TestRegistryMounts(t *testing.T) {
 	for _, p := range []string{"GET /../v1/meta", "hello", "GET /a//b"} {
 		if _, err := New(reg("acme", p)).Mounts(Deps{}); err == nil {
 			t.Errorf("pattern %q: want an error", p)
+		}
+	}
+}
+
+// noModel is a ModelSource with nothing published.
+type noModel struct{}
+
+func (noModel) Current() *engine.Published { return nil }
+func (noModel) Platform() platform.Info    { return platform.Info{} }
+
+// An extension mounted without an Authorizer exposes nothing in secure mode and everything in local mode.
+func TestMountsWithoutAuthorizerFailClosedInSecureMode(t *testing.T) {
+	ref := objects.Ref{Group: "gateway.networking.k8s.io", Kind: "HTTPRoute", Namespace: "shop", Name: "good"}
+	m, err := New(WithHandlers("probe", func(r Router, d Deps) {
+		r.Handle("GET /see", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			visible, _ := api.Visible(req, d.Authorizer, []objects.Ref{ref}, func(x objects.Ref) objects.Ref { return x })
+			_, _ = fmt.Fprintf(w, "%t %t %d", d.View(req).Can(ref), d.View(req).ReadsAll(), len(visible))
+		}))
+	})).Mounts(Deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		opts []api.HandlerOption
+		want string
+	}{
+		{[]api.HandlerOption{api.WithSecureMode()}, "false false 0"},
+		{nil, "true true 1"},
+	} {
+		h := api.NewHandler(noModel{}, fstest.MapFS{}, nil, append(c.opts, api.WithExtMounts(m...))...)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/ext/probe/see", nil))
+		if got := rec.Body.String(); rec.Code != http.StatusOK || got != c.want {
+			t.Errorf("secure=%t: %d %q, want %q", c.opts != nil, rec.Code, got, c.want)
 		}
 	}
 }

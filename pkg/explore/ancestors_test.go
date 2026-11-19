@@ -123,7 +123,7 @@ func lattice(layers int, withGateway bool) (*Index, objects.Ref) {
 
 func TestAncestorsLatticeTruncates(t *testing.T) {
 	ix, child := lattice(8, true)
-	got, trunc, visits := ix.walkUp(child, all)
+	got, trunc, visits := ix.walkUp(child, all, false)
 	if len(got) != MaxPaths || !trunc {
 		t.Fatalf("%d paths truncated %v, want %d and true", len(got), trunc, MaxPaths)
 	}
@@ -137,7 +137,7 @@ func TestAncestorsLatticeTruncates(t *testing.T) {
 func TestAncestorsNodeBound(t *testing.T) {
 	// No root anywhere, so no path completes and only the node bound ends the walk.
 	ix, child := lattice(8, false)
-	got, trunc, visits := ix.walkUp(child, all)
+	got, trunc, visits := ix.walkUp(child, all, false)
 	if len(got) != 0 || !trunc || visits != MaxNodes {
 		t.Fatalf("paths %d truncated %v visits %d, want 0, true, %d", len(got), trunc, visits, MaxNodes)
 	}
@@ -146,7 +146,7 @@ func TestAncestorsNodeBound(t *testing.T) {
 	for i := range 300 {
 		p["c"] = append(p["c"], fmt.Sprintf("p%03d", i))
 	}
-	_, trunc, visits = upIx(p).walkUp(routeRef("shop", "c"), all)
+	_, trunc, visits = upIx(p).walkUp(routeRef("shop", "c"), all, false)
 	if !trunc || visits != MaxNodes {
 		t.Fatalf("fan: truncated %v visits %d, want true, %d", trunc, visits, MaxNodes)
 	}
@@ -254,5 +254,44 @@ func TestAncestorsOrderPutsHiddenLast(t *testing.T) {
 	got, _ := ix.Ancestors(routeRef("shop", "c"), func(r objects.Ref) bool { return !strings.HasPrefix(r.Name, "a") })
 	if want := []string{"edge>m>c", "edge>v>c", "~a2>m>c", "~a>c"}; !reflect.DeepEqual(renders(got), want) {
 		t.Fatalf("paths %v, want %v", renders(got), want)
+	}
+}
+
+func TestVisibleAncestorsOmitHidden(t *testing.T) {
+	// Six hidden parents fill MaxPaths for Ancestors; VisibleAncestors keeps the one visible path, untruncated.
+	parents := map[string][]string{"child": {"vis", "h1", "h2", "h3", "h4", "h5", "h6"}}
+	ix := upIx(parents, "vis", "h1", "h2", "h3", "h4", "h5", "h6")
+	visible := func(r objects.Ref) bool { return !strings.HasPrefix(r.Name, "h") }
+	if _, trunc := ix.Ancestors(routeRef("shop", "child"), visible); !trunc {
+		t.Fatal("Ancestors: want truncated with hidden paths")
+	}
+	got, trunc := ix.VisibleAncestors(routeRef("shop", "child"), visible)
+	if want := []string{"edge>vis>child"}; !reflect.DeepEqual(renders(got), want) || trunc {
+		t.Fatalf("paths %v truncated %v, want %v", renders(got), trunc, want)
+	}
+	// A hidden Gateway root is a Restricted step: its path is left out too.
+	got, _ = ix.VisibleAncestors(routeRef("shop", "child"), func(r objects.Ref) bool { return r != edgeGW && visible(r) })
+	if len(got) != 0 {
+		t.Fatalf("paths %v, want none", renders(got))
+	}
+}
+
+// At the depth limit, only a visible parent truncates VisibleAncestors: a
+// hidden one above the deepest visible route leaves it complete.
+func TestVisibleAncestorsDepthCountsVisibleOnly(t *testing.T) {
+	parents := map[string][]string{}
+	name := func(i int) string { return fmt.Sprintf("c%02d", i) }
+	for i := range MaxDepth {
+		parents[name(i)] = []string{name(i + 1)}
+	}
+	parents[name(MaxDepth)] = []string{"h"}
+	ix := upIx(parents, name(0), "h")
+	visible := func(r objects.Ref) bool { return r.Name != "h" }
+	if _, trunc := ix.Ancestors(routeRef("shop", name(0)), visible); !trunc {
+		t.Fatal("Ancestors: want truncated at the depth limit")
+	}
+	got, trunc := ix.VisibleAncestors(routeRef("shop", name(0)), visible)
+	if want := []string{"edge>" + name(0)}; !reflect.DeepEqual(renders(got), want) || trunc {
+		t.Errorf("paths %v truncated %v, want %v untruncated", renders(got), trunc, want)
 	}
 }

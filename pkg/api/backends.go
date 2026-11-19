@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/endpoints"
@@ -27,24 +28,105 @@ func WithBackendConsumers(f func(install.Install, *install.Owned) []objects.Cons
 
 // backendsInput is what the backends of install i read for the caller of v, over t.
 func (h *handler) backendsInput(p *engine.Published, i *engine.InstallModel, v *view, t *paths.Topology) paths.BackendsInput {
-	in := paths.BackendsInput{ProjectInput: projectInput(p, i), Served: p.Model.Served}
+	in := paths.BackendsInput{ProjectInput: v.projectInput(p, i), Served: p.Model.Served}
 	if h.consumersFor != nil {
 		in.Consumers = h.consumersFor(i.Resolved.Install, i.Owned)
 	}
-	if !v.all {
+	if !v.readsAll() {
 		in.Visible = func(d explore.DepSet) bool { return v.allowTable(t, d) }
 		in.Can = v.can
 	}
 	return in
 }
 
+// withSubject returns in with ref as its named subject, already admitted by
+// canNamed: path rows to ref check it by name, every other dependency stays a population check.
+func withSubject(in paths.BackendsInput, v *view, t *paths.Topology, ref objects.Ref) paths.BackendsInput {
+	in.Subject = &ref
+	if !v.readsAll() {
+		in.Visible = func(d explore.DepSet) bool { return v.allowTableNamed(t, d, &ref) }
+	}
+	return in
+}
+
 // listedBackends reports the backends backendDetail serves the caller of v:
 // the ones Backends lists over the same input, so links and the endpoint
-// agree. The membership is memoised with t; only viewer checks run per request.
-func (h *handler) listedBackends(p *engine.Published, i *engine.InstallModel, v *view, t *paths.Topology) func(objects.Ref) bool {
+// agree. named asks about ref as backendDetail's subject, else as a list row.
+// The membership is memoised with t; only viewer checks run per request.
+func (h *handler) listedBackends(p *engine.Published, i *engine.InstallModel, v *view, t *paths.Topology) func(ref objects.Ref, named bool) bool {
 	in := h.backendsInput(p, i, v, t)
 	ms := h.pathMemo.Membership(p, i.Resolved.ID(), t, func() *paths.Membership { return paths.NewMembership(t, in) })
-	return func(ref objects.Ref) bool { return ms.Listed(t, in, ref) }
+	return func(ref objects.Ref, named bool) bool {
+		if named {
+			return ms.Listed(t, withSubject(in, v, t, ref), ref)
+		}
+		return ms.Listed(t, in, ref)
+	}
+}
+
+// prefetchBackends resolves the roots Backends lists from: the routes, the
+// in-scope Backends and the consumers. Then the targets that admitted routes
+// and consumers name, and last the path rows to targets not denied (D-085).
+// Under a namespace scope only what the backends in it read is asked.
+func (h *handler) prefetchBackends(p *engine.Published, i *engine.InstallModel, v *view, t *paths.Topology, in paths.BackendsInput) {
+	if !v.batching() {
+		return
+	}
+	ix := i.Index
+	scoped := func(ref objects.Ref) bool { return explore.InScope(in.Scope, ref.Namespace) }
+	v.prefetch(func(add func(objects.Ref)) {
+		if ix != nil && in.Scope == nil {
+			for j := range ix.Routes {
+				add(ix.Routes[j].Ref)
+			}
+		} else if ix != nil {
+			// Only the routes that write a backend in scope: they are its dependencies.
+			for ref, uses := range ix.ByBackend {
+				if !scoped(ref) {
+					continue
+				}
+				for _, u := range uses {
+					add(ix.Routes[u.Row].Ref)
+				}
+			}
+		}
+		for _, ref := range h.pathMemo.Membership(p, i.Resolved.ID(), t, func() *paths.Membership { return paths.NewMembership(t, in) }).InScope() {
+			if scoped(ref) {
+				add(ref)
+			}
+		}
+		for _, c := range in.Consumers {
+			if scoped(c.BackendRef) {
+				add(c.Consumer)
+			}
+		}
+	})
+	rowDenied := func(r paths.Row) bool {
+		return slices.ContainsFunc(t.Deps(r), func(k int32) bool { return v.denied(t.Refs[k]) })
+	}
+	v.prefetch(func(add func(objects.Ref)) {
+		for _, r := range t.Rows {
+			if ref, ok := t.Target(r); ok && scoped(ref) && !rowDenied(r) {
+				add(ref)
+			}
+		}
+		if ix != nil {
+			for ref, uses := range ix.ByBackend {
+				if scoped(ref) && slices.ContainsFunc(uses, func(u explore.BackendUse) bool { row := &ix.Routes[u.Row]; return row.Owned && !v.denied(row.Ref) }) {
+					add(ref)
+				}
+			}
+		}
+		for _, c := range in.Consumers {
+			if scoped(c.BackendRef) && !v.denied(c.Consumer) {
+				add(c.BackendRef)
+			}
+		}
+	})
+	prefetchRows(v, t, func(r paths.Row) bool {
+		ref, ok := t.Target(r)
+		return ok && scoped(ref) && !v.denied(ref) && !rowDenied(r)
+	})
 }
 
 // backendList is GET …/backends (design §8.1): the install's backends as the
@@ -60,8 +142,11 @@ func (h *handler) backendList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := h.view(r)
-	t, proj, _ := h.pathModel(p, i)
-	set := paths.Backends(t, proj, h.backendsInput(p, i, v, t))
+	t, proj, _ := h.pathModel(p, i, v)
+	in := h.backendsInput(p, i, v, t)
+	in.Scope = q.Scope
+	h.prefetchBackends(p, i, v, t, in)
+	set := paths.Backends(t, proj.For(t, in.ProjectInput, v.scopedFilter(i, t, func(r paths.Row) bool { return in.ShowsRow(t, r) })), in)
 	pg, err := paths.RunBackends(set, q)
 	if err != nil {
 		fail(w, err)
@@ -72,7 +157,7 @@ func (h *handler) backendList(w http.ResponseWriter, r *http.Request) {
 	for _, k := range pg.Items {
 		sets = append(sets, set.Items[k].Problem.Signals)
 	}
-	titles := signalTitles(i, sets...)
+	titles := signalTitles(v, i, sets...)
 	rows := make([]BackendRowDTO, 0, len(pg.Items))
 	for _, k := range pg.Items {
 		b := &set.Items[k]
@@ -83,8 +168,9 @@ func (h *handler) backendList(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, row)
 	}
-	writeJSON(w, BackendsResponse{Install: i.Resolved.ID(), Rows: rows, Next: pg.Next, Prev: pg.Prev, Hidden: set.Hidden,
-		Facets: backendFacetsDTO(l, pg.Facets), CollectedAt: wireTime(p.ConfirmedAt)})
+	// Secure mode says nothing of what was left out (design §7.5).
+	writeJSON(w, BackendsResponse{Install: i.Resolved.ID(), Rows: rows, Next: pg.Next, Prev: pg.Prev, Hidden: set.Hidden && !v.omits(),
+		Facets: backendFacetsDTO(l, pg.Facets), DelegationNotChecked: v.noDelegation(), CollectedAt: wireTime(p.ConfirmedAt)})
 }
 
 // backendFacetsDTO is f on the wire; every facet's Gateway carries a visible path.
@@ -130,13 +216,20 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 		group = ""
 	}
 	ref := objects.Ref{Group: group, Kind: r.PathValue("kind"), Namespace: r.PathValue("ns"), Name: r.PathValue("name")}
+	noteSubject(r, ref)
 	v := h.view(r)
-	if !v.can(ref) {
+	if !v.canNamed(ref) {
 		writeErr(w, http.StatusNotFound, notFoundInScope)
 		return
 	}
-	t, proj, kept := h.pathModel(p, i)
-	in := h.backendsInput(p, i, v, t)
+	t, proj, kept := h.pathModel(p, i, v)
+	// Backends and the exposure read only those of ref's rows the caller may see.
+	f := v.scopedFilter(i, t, func(r paths.Row) bool {
+		target, ok := t.Target(r)
+		return ok && target == ref && v.allowTableNamed(t, t.Deps(r), &ref)
+	})
+	proj = proj.For(t, v.projectInput(p, i), f)
+	in := withSubject(h.backendsInput(p, i, v, t), v, t, ref)
 	in.Only = &ref
 	set := paths.Backends(t, proj, in)
 	if len(set.Items) == 0 {
@@ -150,10 +243,10 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	titles := signalTitles(i, b.Problem.Signals)
-	out := BackendDetail{Install: i.Resolved.ID(), Ref: l.linked(ref), Kind: backendKind(b), Type: b.Type, Problem: problemDTO(l, titles, b.Problem),
+	titles := signalTitles(v, i, b.Problem.Signals)
+	out := BackendDetail{Install: i.Resolved.ID(), Ref: l.linkedNamed(ref), Kind: backendKind(b), Type: b.Type, Problem: problemDTO(l, titles, b.Problem),
 		Status: problemDTO(l, titles, paths.Problem{Signals: b.Own}).Signals, Exposure: exposure, Consumers: make([]ConsumerDTO, 0, len(b.Consumers)),
-		Sources: []EndpointsDTO{}, PortChain: []PortChainDTO{}, Explanations: []RefExplanationDTO{}, CollectedAt: wireTime(p.ConfirmedAt)}
+		Sources: []EndpointsDTO{}, PortChain: []PortChainDTO{}, Explanations: []RefExplanationDTO{}, DelegationNotChecked: v.noDelegation(), CollectedAt: wireTime(p.ConfirmedAt)}
 	for _, c := range b.Consumers {
 		out.Consumers = append(out.Consumers, ConsumerDTO{Consumer: l.linked(c.Consumer), Role: c.Role, Field: c.Field, Port: c.Port})
 	}
@@ -164,7 +257,7 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case ref.Group == "" && ref.Kind == "Service":
-		if h.serviceDetail(r.Context(), &out, p.Model, i.Resolved.ID(), b) {
+		if h.serviceDetail(r.Context(), &out, p.Model, i.Resolved.ID(), b, f == nil || f.Endpoints(ref.Namespace), v.projectInput(p, i).ReadAt) {
 			// The read contradicts the cache the problem comes from: unknown at best, never its green.
 			w := paths.Signal{Kind: paths.SignalWaiting, Code: health.CodeBackendNoReadyEndpoints, Ref: ref, State: health.StateUnknown}
 			pr := paths.Problem{State: b.Problem.State, Signals: append(slices.Clip(b.Problem.Signals), w)}
@@ -187,9 +280,19 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 
 // serviceDetail fills a Service's facts, its endpoints per referenced port
 // and its port chain (design §9). The caller has authorised the Service. It
-// reports whether a complete read found no ready endpoint on a port the cache counts ready.
-func (h *handler) serviceDetail(ctx context.Context, out *BackendDetail, m *engine.Model, install string, b *paths.Backend) (disagree bool) {
+// reports whether a complete read found no ready endpoint on a port the cache
+// // counts ready. A caller who may not list EndpointSlices (listSlices false)
+// gets not-permitted sources with no read time and no slice ports; the scoped
+// reader is not called. readAt, when set, replaces the snapshot's time (D-109).
+func (h *handler) serviceDetail(ctx context.Context, out *BackendDetail, m *engine.Model, install string, b *paths.Backend, listSlices bool,
+	readAt time.Time) (disagree bool) {
+	if readAt.IsZero() {
+		readAt = m.Snapshot.TakenAt
+	}
 	svc, ss := serviceFacts(m.Snapshot, b.Ref)
+	if !listSlices {
+		ss = nil
+	}
 	if svc != nil {
 		out.Service = &ServiceFactDTO{Type: svc.Type, Ports: make([]PortDTO, 0, len(svc.Ports))}
 		for _, sp := range svc.Ports {
@@ -198,7 +301,10 @@ func (h *handler) serviceDetail(ctx context.Context, out *BackendDetail, m *engi
 	}
 	external := svc != nil && svc.Type == "ExternalName"
 	var res endpoints.Result
-	if !external && len(b.Ports) > 0 {
+	switch {
+	case !listSlices:
+		res = endpoints.Result{Complete: paths.EndpointsNotPermitted}
+	case !external && len(b.Ports) > 0:
 		var err error
 		if res, err = h.scoped.Endpoints(ctx, install, b.Ref); err != nil || res.Complete == "" {
 			res.Complete = cmp.Or(res.Complete, endpoints.Failed)
@@ -219,7 +325,7 @@ func (h *handler) serviceDetail(ctx context.Context, out *BackendDetail, m *engi
 		c := cached[port]
 		switch {
 		case external:
-			src.Complete, src.ReadAt = paths.EndpointsNotApplicable, wireTime(m.Snapshot.TakenAt)
+			src.Complete, src.ReadAt = paths.EndpointsNotApplicable, wireTime(readAt)
 		case read && sp == nil:
 			// Without the Service port's name the read cannot be split, so this port has no endpoints to show.
 			src.Complete = endpoints.Unavailable

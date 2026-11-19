@@ -116,7 +116,9 @@ type PathCountsDTO struct {
 
 // PathSummaryDTO summarises the whole filtered result the caller may see
 // (design §5, §13). Hidden says some paths were left out for the caller;
-// Unmemoised says the topology was over the memo cap and derived per request.
+// secure mode never sets it, since the permissions note replaces it (design §7.5).
+// Unmemoised says the topology was over the memo cap and derived per request;
+// a viewer without the full read in secure mode is never told.
 // NotComputed says why there are no paths to compute, such as no computed views.
 type PathSummaryDTO struct {
 	PathCountsDTO
@@ -152,13 +154,15 @@ type NamespaceFacetDTO struct {
 // result the page was cut from, visible rows only: pages of one walk agree on
 // it while the result holds, and a walk whose pages differ must restart.
 type PathsResponse struct {
-	Install     string         `json:"install"`
-	Revision    string         `json:"revision,omitempty"`
-	Rows        []PathRowDTO   `json:"rows"`
-	Next        string         `json:"next,omitempty"`
-	Prev        string         `json:"prev,omitempty"`
-	Summary     PathSummaryDTO `json:"summary"`
-	CollectedAt time.Time      `json:"collectedAt"`
+	Install  string         `json:"install"`
+	Revision string         `json:"revision,omitempty"`
+	Rows     []PathRowDTO   `json:"rows"`
+	Next     string         `json:"next,omitempty"`
+	Prev     string         `json:"prev,omitempty"`
+	Summary  PathSummaryDTO `json:"summary"`
+	// DelegationNotChecked says the caller gets no paths through parent routes (D-114).
+	DelegationNotChecked bool      `json:"delegationNotChecked,omitempty"`
+	CollectedAt          time.Time `json:"collectedAt"`
 }
 
 // EndpointsDTO is one backend port's endpoints from one source (design §9.5).
@@ -166,9 +170,10 @@ type EndpointsDTO struct {
 	Source  string      `json:"source"`
 	Port    *PortDTO    `json:"port,omitempty"`
 	Runtime *RuntimeDTO `json:"runtime,omitempty"`
-	// ReadAt is meaningless when Complete is not-applicable: nothing was read.
+	// ReadAt is meaningless when Complete is not-applicable or not-permitted: nothing was read.
 	ReadAt time.Time `json:"readAt"`
-	// Complete is complete, partial, failed, unavailable, stale or not-applicable;
+	// Complete is complete, partial, failed, unavailable, stale, not-applicable
+	// or not-permitted (the caller may not list the Service's EndpointSlices);
 	// a backend detail's scoped read may also be timed-out or busy.
 	Complete string `json:"complete"`
 	// Ready and Total are absent unless the read establishes a count.

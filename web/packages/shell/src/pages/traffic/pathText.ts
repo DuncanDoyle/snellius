@@ -110,6 +110,8 @@ export function endpointsText(e: Endpoints): string {
       return endpointCopy.timedOut;
     case "busy":
       return endpointCopy.busy;
+    case "not-permitted":
+      return endpointCopy.notPermitted;
     default:
       return endpointCopy.notApplicable;
   }

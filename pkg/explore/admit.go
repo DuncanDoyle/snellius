@@ -28,11 +28,20 @@ type Admission struct {
 	// By is the first owned object that names a referenced candidate, or
 	// the first owned parent route that selects a selected one; Referrers
 	// are all of them, in row order, then ListenerSet order. Under a
-	// restricting Authorizer the handler shows the first visible one.
+	// restricting Authorizer the handler shows the first visible one. A
+	// finding candidate keeps the owned objects that name it and the owned
+	// parents that select it as Referrers, for a caller who is not shown its
+	// findings, and no By.
 	By        *objects.Ref
 	Referrers []objects.Ref
 	// NoParent marks a no-parent row; alone it admits the YAML view only.
 	NoParent bool
+	// Consumed marks an owned Backend: a member through the owned routes in
+	// Referrers, which are not install context (D-107).
+	Consumed bool
+	// Else is a finding candidate's reason without its findings, referenced
+	// or selected, when it has Referrers; "" otherwise.
+	Else CandidateReason
 }
 
 // Admission returns why ref is admitted, or false when it is not. Admitted
@@ -67,10 +76,13 @@ func (b *builder) admit(ix *Index) map[objects.Ref]Admission {
 	m := map[objects.Ref]Admission{}
 	o := b.in.Owned
 	if o != nil {
-		for _, l := range [][]*unstructured.Unstructured{o.GatewayClasses, o.Gateways, o.ListenerSets, o.Backends} {
+		for _, l := range [][]*unstructured.Unstructured{o.GatewayClasses, o.Gateways, o.ListenerSets} {
 			for _, u := range l {
 				m[objects.RefOf(u)] = Admission{Owned: true}
 			}
+		}
+		for _, u := range o.Backends {
+			m[objects.RefOf(u)] = Admission{Owned: true, Consumed: true}
 		}
 		for _, ps := range [][]install.OwnedObject{o.Policies, o.Listed} {
 			for _, p := range ps {
@@ -99,12 +111,15 @@ func (b *builder) admit(ix *Index) map[objects.Ref]Admission {
 		switch {
 		case !ok:
 			a = Admission{Reason: ReasonReferenced}
-		case a.Reason != ReasonReferenced:
-			return // owned or a finding
-		case a.Referrers[len(a.Referrers)-1] == by:
+		case a.Owned && !a.Consumed || a.Reason == ReasonSelected:
+			return
+		case len(a.Referrers) > 0 && a.Referrers[len(a.Referrers)-1] == by:
 			return
 		}
 		a.Referrers = append(a.Referrers, by)
+		if a.Reason == ReasonFinding && a.Else == "" {
+			a.Else = ReasonReferenced
+		}
 		m[ref] = a
 	}
 	for i := range ix.Routes {
@@ -147,10 +162,15 @@ func (b *builder) admit(ix *Index) map[objects.Ref]Admission {
 		switch {
 		case !ok:
 			a = Admission{Reason: ReasonSelected}
-		case a.Reason != ReasonSelected || a.Referrers[len(a.Referrers)-1] == k.Parent:
+		case a.Reason != ReasonSelected && a.Reason != ReasonFinding,
+			len(a.Referrers) > 0 && a.Referrers[len(a.Referrers)-1] == k.Parent:
 			continue
 		}
+		// A finding candidate keeps its selecting parents too, for a caller its findings are not shown to.
 		a.Referrers = append(a.Referrers, k.Parent)
+		if a.Reason == ReasonFinding && a.Else == "" {
+			a.Else = ReasonSelected
+		}
 		m[k.Child] = a
 	}
 	for ref, a := range m {

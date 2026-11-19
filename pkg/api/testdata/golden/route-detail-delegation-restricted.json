@@ -95,6 +95,9 @@
     "annotations": {},
     "childCount": 2,
     "collectedAt": "2026-10-17T12:00:00Z",
+    "config": {
+      "state": "healthy"
+    },
     "declaredCount": 0,
     "effective": [
       {
@@ -268,6 +271,13 @@
         }
       }
     ],
+    "path": {
+      "incomplete": false,
+      "reason": {
+        "kind": "no-path"
+      },
+      "state": "unknown"
+    },
     "ref": {
       "group": "gateway.networking.k8s.io",
       "kind": "HTTPRoute",

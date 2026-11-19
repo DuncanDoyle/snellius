@@ -3,148 +3,33 @@ package health
 import (
 	"fmt"
 	"slices"
-	"strconv"
-	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/DuncanDoyle/snellius/pkg/cache"
+	"github.com/DuncanDoyle/snellius/pkg/health/own"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
 
-// Wording for KGWUI-013 and 014 (design §7.3).
-const (
-	// refKindNotServedMessage is explanation 1 for one ref kind: kind, group.
-	refKindNotServedMessage = "No kind `%s` in group `%s`. Check the group."
-	// refKindsNotServedMessage is explanation 1 when the refs name several kinds.
-	refKindsNotServedMessage = "Some refs name a kind their group does not serve. Check the groups."
-	// coreGroup names the core API group in messages.
-	coreGroup = "core"
-	// refServiceMissingMessage is explanation 2: namespace/name.
-	refServiceMissingMessage = "Service `%s` does not exist."
-	// refServicePortMessage is explanation 3: namespace/name, the port, the Service's ports.
-	refServicePortMessage = "Service `%s` has no port %d (ports: %s)."
-)
-
-// refRule is how a ResolvedRefs=False condition maps to 013 or 014.
-type refRule struct {
-	code, slug string
-}
-
-var (
-	refUnresolved   = refRule{CodeRefUnresolved, "ref-unresolved"}
-	refNotPermitted = refRule{CodeRefNotPermitted, "ref-not-permitted"}
-)
-
-// refRuleFor returns the specific code for cond on a route parent or a
-// listener; false leaves the condition to KGWUI-002 (D-030).
-func refRuleFor(cond metav1.Condition, listener bool) (refRule, bool) {
-	if cond.Type != "ResolvedRefs" || cond.Status != metav1.ConditionFalse {
-		return refRule{}, false
-	}
-	switch {
-	case cond.Reason == "RefNotPermitted":
-		return refNotPermitted, true
-	case !listener, cond.Reason == "InvalidCertificateRef":
-		return refUnresolved, true
-	}
-	return refRule{}, false
-}
-
-// writtenRef is one ref of a failing field, with defaults applied.
+// writtenRef is one ref of a failing listener field, with defaults applied.
 type writtenRef struct {
 	RefLocation
-	// delegation marks a backendRef that delegates to child routes: it has no
-	// served kind of its own.
-	delegation bool
-	// port is the written port, set when hasPort.
-	port    int32
-	hasPort bool
-}
-
-// objRef decodes a written ref map with defKind and namespace ns as defaults.
-func objRef(m map[string]any, defKind, ns string) (objects.Ref, bool) {
-	group, hasGroup := m["group"].(string)
-	kind, hasKind := m["kind"].(string)
-	r := objects.Ref{Group: group, Kind: kind, Namespace: ns}
-	r.Name, _ = m["name"].(string)
-	if !hasKind || kind == "" {
-		r.Kind = defKind
-	}
-	if n, _ := m["namespace"].(string); n != "" {
-		r.Namespace = n
-	}
-	// As objects.DecodeHTTPRoute classifies delegation: group and kind both written.
-	del := hasGroup && hasKind && (group == objects.GatewayAPIGroup && kind == "HTTPRoute" || group == "delegation.kgateway.dev" && kind == "label")
-	return r, del
-}
-
-// routeBackendRefs returns every spec.rules[].backendRefs[] entry of route u and
-// every RequestMirror backendRef in their filters and the rules'. Group defaults
-// to core, kind to Service and namespace to u's.
-func routeBackendRefs(u *unstructured.Unstructured) []writtenRef {
-	rules, _, _ := unstructured.NestedSlice(u.Object, "spec", "rules")
-	var out []writtenRef
-	add := func(m map[string]any, path string) {
-		r, del := objRef(m, "Service", u.GetNamespace())
-		p, hasPort := m["port"].(int64)
-		out = append(out, writtenRef{RefLocation{Path: path, Ref: r}, del, int32(p), hasPort}) //nolint:gosec // a port fits in int32
-	}
-	mirrors := func(fs any, rule, ref int) {
-		for k, f := range asList(fs) {
-			if m, ok := asMap(asMap(f)["requestMirror"])["backendRef"].(map[string]any); ok {
-				add(m, RouteRefPath(rule, ref, k))
-			}
-		}
-	}
-	for i, r := range rules {
-		rm := asMap(r)
-		for j, b := range asList(rm["backendRefs"]) {
-			add(asMap(b), RouteRefPath(i, j, -1))
-			mirrors(asMap(b)["filters"], i, j)
-		}
-		mirrors(rm["filters"], i, -1)
-	}
-	return out
 }
 
 // RouteRefPath is where a route writes a ref, as KGWUI-013/014 candidates
 // name it: backendRefs[ref] of rule, or with filter >= 0 that filter's
 // mirror, on the rule itself when ref is -1.
-func RouteRefPath(rule, ref, filter int) string {
-	path := fmt.Sprintf("spec.rules[%d]", rule)
-	if ref >= 0 {
-		path += fmt.Sprintf(".backendRefs[%d]", ref)
-	}
-	if filter >= 0 {
-		path += fmt.Sprintf(".filters[%d].requestMirror.backendRef", filter)
-	}
-	return path
+func RouteRefPath(rule, ref, filter int) string { return own.RouteRefPath(rule, ref, filter) }
+
+// RefServiceSentence is explanation 2 or 3 in plain words for Service name
+// ("namespace/name"): it does not exist, or has no port among ports.
+func RefServiceSentence(explanation, name string, port int32, ports []int32) string {
+	return own.RefServiceSentence(explanation, name, port, ports)
 }
 
 func asMap(v any) map[string]any { m, _ := v.(map[string]any); return m }
 
 func asList(v any) []any { l, _ := v.([]any); return l }
-
-// delegationRoute reports whether route u delegates or is a delegation child:
-// a delegation cycle is RefNotPermitted too, so no ref can be singled out.
-// Without delegation no route is either.
-func (in Input) delegationRoute(u *unstructured.Unstructured, refs []writtenRef) bool {
-	if in.Install.NoDelegation {
-		return false
-	}
-	if slices.ContainsFunc(refs, func(r writtenRef) bool { return r.delegation }) {
-		return true
-	}
-	route := func(group, kind string) bool { return group == objects.GatewayAPIGroup && kind == "HTTPRoute" }
-	for _, p := range asList(asMap(u.Object["spec"])["parentRefs"]) {
-		if g, _ := asMap(p)["group"].(string); route(g, fmt.Sprint(asMap(p)["kind"])) {
-			return true
-		}
-	}
-	return slices.ContainsFunc(in.routeParents(u), func(s objects.RouteParentStatus) bool { return route(s.ParentRef.Group, s.ParentRef.Kind) })
-}
 
 // listenerRefs returns the certificateRefs of the listener named name of
 // Gateway or ListenerSet u (kind Secret, u's namespace by default), and the
@@ -179,7 +64,7 @@ func (in Input) listenerRefs(u *unstructured.Unstructured, name string) (out []w
 			continue
 		}
 		for j, r := range l.TLS.CertificateRefs {
-			out = append(out, writtenRef{RefLocation: RefLocation{Path: fmt.Sprintf("spec.listeners[%d].tls.certificateRefs[%d]", i, j), Ref: r}})
+			out = append(out, writtenRef{RefLocation{Path: fmt.Sprintf("spec.listeners[%d].tls.certificateRefs[%d]", i, j), Ref: r}})
 		}
 	}
 	if parent == nil {
@@ -248,8 +133,8 @@ func gatewayCARefs(g *unstructured.Unstructured, port int32, known bool) []writt
 	var out []writtenRef
 	refs := func(tls any, path string) {
 		for k, r := range asList(asMap(asMap(tls)["validation"])["caCertificateRefs"]) {
-			ref, _ := objRef(asMap(r), "", g.GetNamespace())
-			out = append(out, writtenRef{RefLocation: RefLocation{Path: fmt.Sprintf("%s.validation.caCertificateRefs[%d]", path, k), Ref: ref}})
+			ref, _ := own.ObjRef(asMap(r), "", g.GetNamespace())
+			out = append(out, writtenRef{RefLocation{Path: fmt.Sprintf("%s.validation.caCertificateRefs[%d]", path, k), Ref: ref}})
 		}
 	}
 	perPort := false
@@ -272,66 +157,44 @@ func (in Input) notServed(r objects.Ref) bool {
 	return in.Catalog.Known(r.Group) && !in.Catalog.Served(r.Group, r.Kind)
 }
 
-// refsFinding returns the 013 or 014 finding for cond on u, or false for a
-// condition KGWUI-002 keeps. listener is the listener name, "" for a route
-// parent. Explanation 1 (kind not served) wins over the controller's message.
-func (in Input) refsFinding(u *unstructured.Unstructured, cond metav1.Condition, listener, extra string, owner []string) (Finding, bool) {
-	rule, ok := refRuleFor(cond, listener != "")
+// listenerRefsFinding returns the 013 or 014 finding for cond on a listener
+// of Gateway or ListenerSet u, or false for a condition KGWUI-002 keeps. A
+// route's 013 and 014 come from package own. Explanation 1 (kind not served)
+// wins over the controller's message.
+func (in Input) listenerRefsFinding(u *unstructured.Unstructured, cond metav1.Condition, extra string, owner []string) (Finding, bool) {
+	code, slug, ok := own.RefRuleFor(cond, true)
 	if !ok {
 		return Finding{}, false
 	}
-	var refs []writtenRef
 	// attributable is false when the condition may concern a ref outside refs.
-	var attributable bool
-	if listener != "" {
-		refs, attributable = in.listenerRefs(u, listener)
-		attributable = attributable && !in.listenerPolicyCARefs(u)
-	} else {
-		refs = routeBackendRefs(u)
-		if in.Install.NoDelegation {
-			// Without delegation a backendRef to an HTTPRoute is an ordinary ref.
-			for i := range refs {
-				refs[i].delegation = false
-			}
-		}
-		attributable = !in.delegationRoute(u, refs)
-	}
-	// field holds the refs the condition can be about: 014 every cross-namespace
-	// ref, delegating ones included; 013 every ref.
+	refs, attributable := in.listenerRefs(u, owner[1])
+	attributable = attributable && !in.listenerPolicyCARefs(u)
+	// field holds the refs the condition can be about: 014 every cross-namespace ref; 013 every ref.
 	field := refs
-	if rule == refNotPermitted {
+	var bad []RefLocation
+	if code == CodeRefNotPermitted {
 		field = nil
 		for _, r := range refs {
 			if r.Ref.Namespace != u.GetNamespace() {
 				field = append(field, r)
 			}
 		}
-	}
-	// Rule 1 runs on every ref first, so a local wrong group is never a missing grant.
-	var bad []RefLocation
-	if rule == refNotPermitted || listener == "" {
+		// Rule 1 runs on every ref first, so a local wrong group is never a missing grant.
 		for _, r := range refs {
-			if !r.delegation && in.notServed(r.Ref) {
+			if in.notServed(r.Ref) {
 				bad = append(bad, r.RefLocation)
 			}
 		}
 	}
-	f := Finding{Code: rule.code, Slug: rule.slug, Severity: SeverityError, Install: in.Install.ID(), Resource: ref(u),
+	f := Finding{Code: code, Slug: slug, Severity: SeverityError, Install: in.Install.ID(), Resource: ref(u),
 		Message: message(cond), Detail: detail(cond, extra), Since: since(cond), Key: slices.Clone(owner)}
 	ev := &RefsEvidence{Explanation: RefExplainController}
 	if len(bad) > 0 {
-		ev.Explanation, ev.Candidates, f.Message = RefExplainKindNotServed, bad, kindNotServedMessage(bad)
+		ev.Explanation, ev.Candidates, f.Message = RefExplainKindNotServed, bad, own.KindNotServedMessage(bad)
 	} else {
 		for _, r := range field {
 			ev.Candidates = append(ev.Candidates, r.RefLocation)
 		}
-		if listener == "" {
-			in.delegationCondition(&f, u, cond)
-		}
-	}
-	// Explanations 2 and 3 are 013's: a 014 keeps the grant diagnosis (§7.3).
-	if len(bad) == 0 && listener == "" && attributable && rule == refUnresolved {
-		in.serviceExplanation(&f, ev, field)
 	}
 	ev.Attributed = attributable && len(ev.Candidates) == 1
 	ev.Unknown = slices.ContainsFunc(ev.Candidates, func(c RefLocation) bool { return !in.Catalog.Known(c.Ref.Group) })
@@ -342,90 +205,4 @@ func (in Input) refsFinding(u *unstructured.Unstructured, cond metav1.Condition,
 	}
 	f.Facts = ev
 	return f, true
-}
-
-// kindNotServedMessage is explanation 1's message for the refs in bad.
-func kindNotServedMessage(bad []RefLocation) string {
-	first := bad[0].Ref
-	for _, b := range bad[1:] {
-		if b.Ref.Group != first.Group || b.Ref.Kind != first.Kind {
-			return refKindsNotServedMessage
-		}
-	}
-	group := first.Group
-	if group == "" {
-		group = coreGroup
-	}
-	return fmt.Sprintf(refKindNotServedMessage, first.Kind, group)
-}
-
-// serviceExplanation applies explanations 2 and 3 to f when exactly one ref of
-// field is a core Service ref with a Service the cache lacks or a port it
-// lacks, and every other ref is a core Service ref the cache shows resolving.
-// A ref the UI cannot check may be the cause, so it leaves the finding as is.
-// It needs the Services watch OK, and in a scoped snapshot each ref's namespace
-// read: absence from a cache that did not read it says nothing.
-func (in Input) serviceExplanation(f *Finding, ev *RefsEvidence, field []writtenRef) {
-	if in.Snapshot == nil || !in.Snapshot.Access[cache.ServicesGVR].OK {
-		return
-	}
-	scoped := len(in.Snapshot.RequestedNamespaces) > 0
-	var hit *writtenRef
-	var hitSvc *cache.ServiceFact
-	for i, r := range field {
-		if r.delegation || r.Ref.Group != "" || r.Ref.Kind != "Service" {
-			return
-		}
-		if scoped && !in.Snapshot.NamespaceAccess[cache.ServicesGVR][r.Ref.Namespace].OK {
-			return
-		}
-		svc := in.service(r.Ref)
-		// A ref with no port has no port to explain.
-		if svc != nil && (!r.hasPort || servicePortIndex(svc.Ports, r.port) >= 0) {
-			continue
-		}
-		if hit != nil {
-			return // two refs may fail: leave it to the controller's reason
-		}
-		hit, hitSvc = &field[i], svc
-	}
-	if hit == nil {
-		return
-	}
-	name := hit.Ref.Namespace + "/" + hit.Ref.Name
-	ev.Candidates = []RefLocation{hit.RefLocation}
-	// Every Service inspected attributes the failure, so each is evidence (§14 rule 12).
-	for _, r := range field {
-		f.Evidence = append(f.Evidence, r.Ref)
-	}
-	if hitSvc == nil {
-		ev.Explanation, f.Detail = RefExplainServiceMissing, RefServiceSentence(RefExplainServiceMissing, name, 0, nil)+" "+f.Detail
-		return
-	}
-	for _, p := range hitSvc.Ports {
-		ev.Ports = append(ev.Ports, p.Port)
-	}
-	ev.Explanation, f.Detail = RefExplainServicePort, RefServiceSentence(RefExplainServicePort, name, hit.port, ev.Ports)+" "+f.Detail
-}
-
-// RefServiceSentence is explanation 2 or 3 in plain words for Service name
-// ("namespace/name"): it does not exist, or has no port among ports.
-func RefServiceSentence(explanation, name string, port int32, ports []int32) string {
-	if explanation == RefExplainServiceMissing {
-		return fmt.Sprintf(refServiceMissingMessage, name)
-	}
-	ps := make([]string, len(ports))
-	for i, p := range ports {
-		ps[i] = strconv.Itoa(int(p))
-	}
-	return fmt.Sprintf(refServicePortMessage, name, port, strings.Join(ps, ", "))
-}
-
-// service returns the cached Service r names, or nil.
-func (in Input) service(r objects.Ref) *cache.ServiceFact {
-	i := slices.IndexFunc(in.Snapshot.Services, func(s cache.ServiceFact) bool { return s.Namespace == r.Namespace && s.Name == r.Name })
-	if i < 0 {
-		return nil
-	}
-	return &in.Snapshot.Services[i]
 }

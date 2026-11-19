@@ -2,6 +2,7 @@ import { css, type SerializedStyles } from "@emotion/react";
 import styled from "@emotion/styled";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useRoutes } from "../../api/exploreHooks";
 import type { LinkedRef, Page, PathRow, PathSummary } from "../../api/types";
 import { listCopy } from "../../copy/explorer";
 import { mapCopy } from "../../copy/map";
@@ -12,8 +13,10 @@ import { QuietButton } from "../../states/controls";
 import { PageState } from "../../states/PageState";
 import { Shimmer } from "../../states/Shimmer";
 import { PROBLEM_STATES } from "../backends/BackendsPage";
+import { refParam } from "../explore/detailParts";
 import { PathTable } from "../traffic/PathTable";
 import { StaleGate } from "../traffic/StaleGate";
+import { delegatingRoutes, useChildRouteHealth } from "./childRouteHealth";
 import { focusSubgraph } from "./focus";
 import type { MapExporter } from "./GatewayMap";
 import { gatewayGraph, kindLabel, type MapNode } from "./graph";
@@ -146,14 +149,24 @@ export function MapTab({ installId, gateway, stylesOverride }: MapTabProps) {
   // Under a state filter the healthy rows are not loaded, so no edge can be known to be broken. The rows answer
   // paths.query, which lags the URL until a new filter's rows arrive.
   const stateFiltered = new URLSearchParams(paths.query?.split("?")[1] ?? "").has("state");
+  // The Gateway's routes' summary health, so a route node reads as its page does; a route beyond the page keeps the rows' state.
+  const routeQuery = useMemo(() => new URLSearchParams({ parent: refParam(gateway), limit: "200" }), [gateway]);
+  const routes = useRoutes(installId, routeQuery).data;
+  // Routes linked only through delegation are listed under their parent route, so each delegating route is asked too.
+  const delegating = useMemo(() => delegatingRoutes(paths.rows), [paths.rows]);
+  const childHealth = useChildRouteHealth(installId, delegating);
+  const routeHealth = useMemo(
+    () => new Map([...childHealth, ...(routes?.items.map((r) => [refParam(r.ref), r.health] as const) ?? [])]),
+    [routes, childHealth],
+  );
   const full = useMemo(
-    () => gatewayGraph(gateway, paths.rows, expanded, { stateFiltered, collapsed }),
-    [gateway, paths.rows, expanded, stateFiltered, collapsed],
+    () => gatewayGraph(gateway, paths.rows, expanded, { stateFiltered, collapsed, routeHealth }),
+    [gateway, paths.rows, expanded, stateFiltered, collapsed, routeHealth],
   );
   // Every route, none collapsed: what find searches, and what expand and collapse ids are checked against.
   const open = useMemo(
-    () => gatewayGraph(gateway, paths.rows, expanded, { stateFiltered }),
-    [gateway, paths.rows, expanded, stateFiltered],
+    () => gatewayGraph(gateway, paths.rows, expanded, { stateFiltered, routeHealth }),
+    [gateway, paths.rows, expanded, stateFiltered, routeHealth],
   );
   const graph = useMemo(() => (focusId ? focusSubgraph(full, focusId) : full), [full, focusId]);
   const focusNode = focusId ? graph.nodes.find((n) => n.id === focusId) : undefined;
@@ -228,9 +241,15 @@ export function MapTab({ installId, gateway, stylesOverride }: MapTabProps) {
   const page = useMemo<Page<PathRow> | undefined>(
     () =>
       paths.collectedAt
-        ? { install: installId, items: paths.rows, total: paths.rows.length, collectedAt: paths.collectedAt }
+        ? {
+            install: installId,
+            items: paths.rows,
+            total: paths.rows.length,
+            delegationNotChecked: paths.delegationNotChecked,
+            collectedAt: paths.collectedAt,
+          }
         : undefined,
-    [installId, paths.rows, paths.collectedAt],
+    [installId, paths.rows, paths.delegationNotChecked, paths.collectedAt],
   );
   const filtered = ["state", "kind", "namespace", "q"].some((k) => params.has(k));
   const [selected, setSelected] = useState<string>();

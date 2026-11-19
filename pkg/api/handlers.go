@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"io/fs"
 	"net/http"
@@ -34,20 +36,23 @@ type ModelSource interface {
 
 // NewHandler returns the HTTP handler for the API, the probes and the SPA in ui.
 // Every response with resources, findings or counts goes through authz; a nil
-// authz means AllowAll (D-013). Options add extension endpoints.
+// authz means AllowAll (D-013), except in secure mode, where it means DenyAll.
+// Options add extension endpoints. In secure mode every /api/ response goes through the commit wrapper (commit.go).
 func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOption) http.Handler {
 	var cfg handlerConfig
 	for _, o := range opts {
 		o(&cfg)
 	}
-	if authz == nil {
+	if authz == nil && cfg.secure {
+		authz = DenyAll{}
+	} else if authz == nil {
 		authz = AllowAll{}
 	}
 	if cfg.commands == nil {
 		cfg.commands = diagnose.Kubectl{}
 	}
 	h := &handler{src: src, authz: authz, capSources: cfg.capSources, coreSource: cfg.coreSource, commands: cfg.commands, commandsFor: cfg.commandsFor,
-		featuresFor: cfg.featuresFor, packs: cfg.packs, kindFor: cfg.kindFor, pathMemo: cfg.pathMemo, scoped: cfg.scoped, consumersFor: cfg.consumersFor}
+		featuresFor: cfg.featuresFor, packs: cfg.packs, kindFor: cfg.kindFor, pathMemo: cfg.pathMemo, scoped: cfg.scoped, consumersFor: cfg.consumersFor, secure: cfg.secure, bypass: cfg.bypass, off: cfg.off}
 	if h.pathMemo == nil {
 		h.pathMemo = paths.NewMemo(nil)
 	}
@@ -55,8 +60,8 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 		h.scoped = endpoints.NoReader
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux.HandleFunc("GET /readyz", h.readyz)
+	mux.HandleFunc("GET /healthz", healthz)
+	mux.HandleFunc("GET /readyz", readyzHandler(ModelReady(src)))
 	mux.HandleFunc("GET /api/v1/meta", h.meta)
 	mux.HandleFunc("GET /api/v1/installs", h.installs)
 	mux.HandleFunc("GET /api/v1/installs/{id}/overview", h.overview)
@@ -68,6 +73,7 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 	mux.HandleFunc("GET /api/v1/installs/{id}/routes", h.routes)
 	mux.HandleFunc("GET /api/v1/installs/{id}/gateways", h.gateways)
 	mux.HandleFunc("GET /api/v1/installs/{id}/listenersets", h.listenerSets)
+	mux.HandleFunc("GET /api/v1/installs/{id}/namespaces", h.namespaces)
 	mux.HandleFunc("GET /api/v1/installs/{id}/gateways/{ns}/{name}", h.gatewayDetail)
 	mux.HandleFunc("GET /api/v1/installs/{id}/listenersets/{group}/{kind}/{ns}/{name}", h.listenerSetDetail)
 	mux.HandleFunc("GET /api/v1/installs/{id}/routes/{group}/{kind}/{ns}/{name}", h.routeDetail)
@@ -80,8 +86,36 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 	mountExts(mux, cfg.ext)
 	// Unknown /api/ paths, extension ones included, get a JSON 404, never the SPA.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { writeErr(w, http.StatusNotFound, "not found") })
-	mux.Handle("/", spa(ui))
-	return mux
+	mux.Handle("/", spa(ui, authMode(cfg.secure)))
+	var next http.Handler = mux
+	if cfg.audit != nil {
+		// Innermost, so the note's request is the one the mux gives its route template.
+		next = noteBuilds(mux)
+	}
+	if cfg.bypass {
+		// Extension Viewers see the bypass through the request.
+		inner := next
+		next = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			inner.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), bypassKey{}, true)))
+		})
+	}
+	if cfg.secure {
+		base, _ := unnarrow(authz)
+		admit, _ := base.(Admitter)
+		authzAudit := cfg.authzAudit
+		if authzAudit != nil {
+			// A request refused before any build has no route template yet; the hook never sees its path.
+			authzAudit = func(r *http.Request, reason string) { cfg.authzAudit(withRoute(mux, r), reason) }
+		}
+		next = commit(next, admit, cfg.commitCheck, authzAudit, cfg.capHit, cfg.checkTrace, cfg.commitClock)
+	}
+	if cfg.gate != nil {
+		next = cfg.gate(passGate(next))
+	}
+	if cfg.audit != nil {
+		next = auditing(next, mux, cfg.audit, cfg.disclosure)
+	}
+	return next
 }
 
 type handler struct {
@@ -103,6 +137,11 @@ type handler struct {
 	scoped endpoints.ScopedReader
 	// consumersFor, if set, gives an install's non-route backend consumers.
 	consumersFor func(install.Install, *install.Owned) []objects.Consumer
+	// secure is true when the handler was built with WithSecureMode.
+	secure bool
+	// bypass turns the secure-mode projection off, and off some of its steps (rule tests only).
+	bypass bool
+	off    projStep
 }
 
 // WithScopedReader reads one Service's endpoints for backend detail (design
@@ -124,6 +163,7 @@ func (h *handler) commandsOf(i install.Install) diagnose.Commands {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	noteReturned(w, v)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
@@ -155,24 +195,10 @@ func (h *handler) load(w http.ResponseWriter) *engine.Published {
 // synced reports whether m exists and was computed over a synced cache.
 func synced(m *engine.Model) bool { return m != nil && m.Snapshot != nil && m.Snapshot.Synced }
 
-func (h *handler) readyz(w http.ResponseWriter, _ *http.Request) {
-	m := h.current()
-	if !synced(m) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		return
-	}
-	// An install with an invalid ID is a detector bug; it must not pass silently (D-016).
-	if len(m.Rejected) > 0 {
-		writeErr(w, http.StatusServiceUnavailable, "install rejected: "+strings.Join(m.Rejected, "; "))
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-}
-
-func (h *handler) meta(w http.ResponseWriter, _ *http.Request) {
+func (h *handler) meta(w http.ResponseWriter, r *http.Request) {
 	m, plat := h.current(), h.src.Platform()
 	resp := MetaResponse{Version: version.Version, Platform: plat.Name, Capabilities: append([]string{}, plat.Capabilities...), Kinds: []kinds.Served{},
-		Packs: append([]string{}, h.packs...)}
+		Packs: append([]string{}, h.packs...), AuthMode: authMode(h.secure)}
 	if m != nil {
 		resp.Pinned, resp.Synced = m.Pinned, synced(m)
 		for _, k := range m.Served {
@@ -195,17 +221,36 @@ func (h *handler) meta(w http.ResponseWriter, _ *http.Request) {
 	}
 	resp.Filters = addedFilters
 	addCapabilities(&resp, plat.Capabilities, h.coreSource, h.capSources)
+	if h.secure {
+		v := h.view(r)
+		resp.LimitedView = !v.readsAll()
+		if v.projects() {
+			dropControllerLogs(&resp)
+		}
+	}
 	writeJSON(w, resp)
 }
 
-// visibleHealth returns the install's report as the caller of v may see it
-// (D-013). A finding on a denied resource keeps its code, severity and ref but
-// is restricted: message, detail, since and evidence are emptied. State and counts still
+// dropControllerLogs removes the controller log state unless it is off: its
+// other states come from the controller Pods' log content (design §7.2).
+func dropControllerLogs(resp *MetaResponse) {
+	const name = "controllerLogs"
+	if j := slices.IndexFunc(resp.CapabilityStates, func(c Capability) bool { return c.Name == name }); j < 0 || resp.CapabilityStates[j].State == CapOff {
+		return
+	}
+	resp.CapabilityStates = slices.DeleteFunc(resp.CapabilityStates, func(c Capability) bool { return c.Name == name })
+	resp.Capabilities = slices.DeleteFunc(resp.Capabilities, func(c string) bool { return c == name })
+}
+
+// visibleHealth returns the install's report as the caller of v may see it:
+// v.report, with D-013's restricted rows outside secure mode. There a finding
+// on a denied resource keeps its code, severity and ref but is restricted:
+// message, detail, since and evidence are emptied. State and counts still
 // cover every finding, so partial visibility never makes an install look
 // healthier, and the findings keep the order health returned.
 func visibleHealth(v *view, i *engine.InstallModel) health.Report {
-	if v.all {
-		return i.Health
+	if v.readsAll() || v.secure {
+		return v.report(i)
 	}
 	rep := i.Health
 	rep.Findings = make([]health.Finding, 0, len(i.Health.Findings))
@@ -219,9 +264,10 @@ func visibleHealth(v *view, i *engine.InstallModel) health.Report {
 }
 
 // visibleOverview rebuilds the overview over the owned objects the caller of v
-// may see: denied objects leave the count tiles and the gateway rows.
+// may see: denied objects leave the count tiles and the gateway rows, and
+// findings from Events their states when the caller may not list Events.
 func (h *handler) visibleOverview(v *view, m *engine.Model, i *engine.InstallModel, rep health.Report) overview.Overview {
-	if v.all {
+	if v.readsAll() && !v.withholds() {
 		return i.Overview
 	}
 	can := func(u *unstructured.Unstructured) bool { return v.can(objects.RefOf(u)) }
@@ -244,9 +290,46 @@ func (h *handler) visibleOverview(v *view, m *engine.Model, i *engine.InstallMod
 		return out
 	}
 	o := i.Owned
+	unattached := []install.UnattachedRoute{}
+	for _, u := range o.Unattached {
+		if can(u.Route.Obj) {
+			unattached = append(unattached, u)
+		}
+	}
 	owned := &install.Owned{GatewayClasses: keep(o.GatewayClasses), Gateways: keep(o.Gateways), ListenerSets: keep(o.ListenerSets),
-		Routes: keepObjs(o.Routes), Policies: keepObjs(o.Policies), Listed: keepObjs(o.Listed), Unattached: o.Unattached, Backends: keep(o.Backends)}
+		Routes: keepObjs(o.Routes), Policies: keepObjs(o.Policies), Listed: keepObjs(o.Listed), Unattached: unattached, Backends: v.backends(i)}
 	return overview.Build(i.Resolved, owned, m.Snapshot, m.Served, rep, h.src.Platform())
+}
+
+// backends are install i's Backends the caller of v may see. In secure mode
+// without the full read, only those a readable owned route names: a Backend
+// joins an install through its consumer routes, which are not install context (D-107).
+func (v *view) backends(i *engine.InstallModel) []*unstructured.Unstructured {
+	out := []*unstructured.Unstructured{}
+	if i.Owned == nil {
+		return out
+	}
+	for _, b := range i.Owned.Backends {
+		if v.can(objects.RefOf(b)) {
+			out = append(out, b)
+		}
+	}
+	if !v.omits() || v.readsAll() {
+		return out
+	}
+	var dec objects.Decoder = objects.Direct{}
+	if i.Index != nil {
+		dec = indexViews{ix: i.Index}
+	}
+	named := map[objects.Ref]bool{}
+	for _, r := range i.Owned.Routes {
+		if v.can(objects.RefOf(r.Obj)) {
+			for _, t := range dec.Route(r.Obj).Targets {
+				named[t.Ref] = true
+			}
+		}
+	}
+	return slices.DeleteFunc(out, func(b *unstructured.Unstructured) bool { return !named[objects.RefOf(b)] })
 }
 
 func (h *handler) installs(w http.ResponseWriter, r *http.Request) {
@@ -262,15 +345,56 @@ func (h *handler) installs(w http.ResponseWriter, r *http.Request) {
 		confirmed = &at
 	}
 	out, v := []InstallSummary{}, h.view(r)
+	computed := wireTime(m.ComputedAt)
+	if (v.projects() || v.withholds()) && confirmed != nil {
+		// When the model was computed is when the cluster last changed, hidden objects and inputs included (D-085).
+		computed = *confirmed
+	}
 	for k := range m.Installs {
 		i := &m.Installs[k]
-		hd, rep := i.Overview.Header, visibleHealth(v, i)
+		hd, rep := v.installHeader(i), visibleHealth(v, i)
 		out = append(out, InstallSummary{ID: hd.ID, DisplayName: hd.DisplayName, Namespace: hd.Namespace, Name: hd.Name, Version: hd.Version,
-			Edition: hd.Edition, ControllerNames: hd.ControllerNames, Readiness: hd.Readiness, Scope: hd.Scope,
-			Health: HealthSummary{State: rep.State, Counts: rep.Counts}, GroupRows: min(groupTotal(diagnosis(i)), maxGroups),
-			ComputedAt: wireTime(m.ComputedAt), ConfirmedAt: confirmed, Features: h.features(i)})
+			Edition: hd.Edition, ControllerNames: hd.ControllerNames, Readiness: hd.Readiness, Scope: hd.Scope, DetailsHidden: hd.DetailsHidden,
+			Health: HealthSummary{State: rep.State, Counts: rep.Counts}, GroupRows: min(groupTotal(v.diagnosis(i)), maxGroups),
+			ComputedAt: computed, ConfirmedAt: confirmed, Features: h.features(i)})
 	}
 	writeJSON(w, out)
+}
+
+// Kinds the install header reads besides the controller Deployment (design §7.4).
+var (
+	gatewayClassKind = objects.GroupKind{Group: objects.GatewayAPIGroup, Kind: "GatewayClass"}
+	namespaceKind    = objects.GroupKind{Kind: "Namespace"}
+)
+
+// installHeader is i's header as the caller of v may see it (design §7.4,
+// D-102): the model's unless v projects; else the ID, and each other field
+// only when the caller may read its source. Each check is a permission, so
+// hidden objects never change the answer.
+func (v *view) installHeader(i *engine.InstallModel) overview.Header {
+	hd := i.Overview.Header
+	if !v.projects() {
+		return hd
+	}
+	classes := v.canList(gatewayClassKind, "")
+	// A class-only install has no Deployment: its name comes from its classes.
+	ctrl := classes
+	if d := i.Resolved.Deployment; d != nil {
+		ctrl = v.can(objects.Ref{Group: "apps", Kind: "Deployment", Namespace: d.Namespace, Name: d.Name})
+	}
+	out := overview.Header{ID: hd.ID, ControllerNames: []string{}, Readiness: overview.Readiness{State: overview.ReadinessUnknown}}
+	if ctrl {
+		out.DisplayName, out.Namespace, out.Name, out.Version, out.Edition, out.Readiness = hd.DisplayName, hd.Namespace, hd.Name, hd.Version, hd.Edition, hd.Readiness
+	}
+	if classes {
+		out.ControllerNames = hd.ControllerNames
+	}
+	// The scope's settings come from the Deployment, its counts from the Namespaces.
+	if hd.Scope != nil && ctrl && v.canList(namespaceKind, "") {
+		out.Scope = hd.Scope
+	}
+	out.DetailsHidden = !ctrl || !classes || hd.Scope != nil && out.Scope == nil
+	return out
 }
 
 // find loads the publication and the install named by the request, or writes 503 or 404.
@@ -293,10 +417,12 @@ func (h *handler) overview(w http.ResponseWriter, r *http.Request) {
 	if p, i := h.find(w, r); i != nil {
 		v := h.view(r)
 		ov := h.visibleOverview(v, p.Model, i, visibleHealth(v, i))
-		ov.Counts = h.applicableCounts(i, ov.Counts)
+		ov.Header, ov.Counts = v.installHeader(i), h.applicableCounts(i, ov.Counts)
 		rows, l := make([]OverviewGatewayRow, 0, len(ov.Gateways)), h.linker(v, p, i, nil, nil)
-		rejecting, withheld := rejectingGateways(i), withheldGateways(i)
-		checked := slices.ContainsFunc(i.Health.Checks, func(c health.CheckResult) bool { return c.Name == xdsCheckName && c.OK })
+		// Over the findings and checks the caller is shown: a Not checked result proves nothing.
+		rejecting := gatewaysWith(i, health.CodeXDSRejected, "", v.shown)
+		withheld := gatewaysWith(i, health.CodeConfigWithheld, health.SeverityError, v.shown)
+		checked := slices.ContainsFunc(v.report(i).Checks, func(c health.CheckResult) bool { return c.Name == xdsCheckName && c.OK && !c.NotAssessed })
 		for _, g := range ov.Gateways {
 			// A reject, then withheld config, shows even while the check is not OK; otherwise only an OK check proves "ok".
 			dp := DataPlaneUnknown
@@ -350,6 +476,7 @@ func (h *handler) health(w http.ResponseWriter, r *http.Request) {
 // Typed evidence is in wire form (§14 rule 14). State, counts and severities stay.
 func healthResponse(v *view, l linker, i *engine.InstallModel, confirmedAt time.Time) HealthResponse {
 	rep := wireHealth(visibleHealth(v, i), confirmedAt)
+	v.stampChecks(rep.Checks, confirmedAt)
 	out := HealthResponse{Report: rep, Findings: make([]FindingDTO, 0, len(rep.Findings))}
 	out.Report.Findings = nil // shadowed by out.Findings
 	for k, f := range rep.Findings {
@@ -392,7 +519,8 @@ func (h *handler) resource(w http.ResponseWriter, r *http.Request) {
 		return s
 	}
 	want := objects.Ref{Group: dash(r.PathValue("group")), Kind: r.PathValue("kind"), Namespace: dash(r.PathValue("rns")), Name: r.PathValue("rname")}
-	if linkerFor(h.view(r), p.Model, i).admit(want) != LinkNone {
+	noteSubject(r, want)
+	if linkerFor(h.view(r), p.Model, i).admitNamed(want) != LinkNone {
 		if obj := object(p.Model, want); obj != nil {
 			// The body is the raw object, so the collection time travels in a header (D-017 §6).
 			w.Header().Set("Collected-At", wireTime(p.ConfirmedAt).Format(time.RFC3339Nano))
@@ -459,9 +587,18 @@ func deploymentObject(d *appsv1.Deployment) map[string]any {
 	return clean(obj)
 }
 
+// authMode is the /meta authMode for a handler built with or without WithSecureMode.
+func authMode(secure bool) string {
+	if secure {
+		return "secure"
+	}
+	return "local"
+}
+
 // spa serves static files and falls back to index.html for client-side
-// routes; directories are never listed.
-func spa(ui fs.FS) http.Handler {
+// routes; directories are never listed. The fallback stamps the auth mode on <html>,
+// so the UI can show the mode on first paint without waiting for /meta.
+func spa(ui fs.FS, mode string) http.Handler {
 	files := http.FileServerFS(ui)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/")
@@ -476,6 +613,7 @@ func spa(ui fs.FS) http.Handler {
 			http.Error(w, "UI not built", http.StatusNotFound)
 			return
 		}
+		b = bytes.Replace(b, []byte("<html "), []byte(`<html data-auth-mode="`+mode+`" `), 1)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(b)
 	})

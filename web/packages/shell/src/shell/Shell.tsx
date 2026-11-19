@@ -1,8 +1,11 @@
 import type { SerializedStyles } from "@emotion/react";
 import styled from "@emotion/styled";
-import { type ComponentType, useMemo } from "react";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { type ComponentType, type ReactNode, useMemo } from "react";
+import { BrowserRouter, Route, Routes, useMatch } from "react-router-dom";
 import { useMeta } from "../api/hooks";
+import { useSignInBlock } from "../auth/AuthGate";
+import { SIGNIN_FAILED_PATH } from "../auth/authState";
+import { SignInFailedPage } from "../auth/SignInPages";
 import { AboutPage } from "../pages/AboutPage";
 import { defaultPages } from "../pages/defaultPages";
 import { PageState } from "../states/PageState";
@@ -20,6 +23,7 @@ import {
   ShellExtensionContext,
 } from "./extension";
 import { Header } from "./Header";
+import { ModeBanner } from "./ModeBanner";
 import { ABOUT_PATH } from "./paths";
 import { RootRedirect } from "./RootRedirect";
 import { kubernetesVocabulary } from "./vocabulary";
@@ -31,6 +35,13 @@ const Root = styled.div<{ stylesOverride?: SerializedStyles }>`
 `;
 
 // region Helpers
+/** Pages, or the sign-in page that blocks them; the failure route always shows its own page. */
+function Gated({ children }: { children: ReactNode }) {
+  const block = useSignInBlock();
+  const onFailurePage = useMatch(SIGNIN_FAILED_PATH);
+  return <>{block && !onFailurePage ? block : children}</>;
+}
+
 const noExtension: ShellExtension = {};
 
 // The explorer's install-scoped paths (design §8.2); the CorePages slots replace their pages.
@@ -126,22 +137,26 @@ export function Shell({ extension = noExtension, pages, stylesOverride }: ShellP
             <Root data-testid="shell-root" stylesOverride={stylesOverride}>
               <DocumentTitle />
               <Header installPaths={installRoutes.map(([path]) => path)} />
+              <ModeBanner />
               <main>
-                <Routes>
-                  <Route path="/" element={<RootRedirect ClusterLanding={ClusterLanding} />} />
-                  <Route path={ABOUT_PATH} element={<AboutPage />} />
-                  {installRoutes.map(([path, Page]) => (
-                    <Route key={path} path={path ? `/i/:id/${path}` : "/i/:id"} element={<Page />} />
-                  ))}
-                  {contributed.map((r) => (
-                    <Route
-                      key={`${r.scope}:${r.path}`}
-                      path={r.scope === "install" ? `/i/:id/${r.path}` : `/${r.path}`}
-                      element={r.element}
-                    />
-                  ))}
-                  <Route path="*" element={<PageState kind="empty" title="Page not found" />} />
-                </Routes>
+                <Gated>
+                  <Routes>
+                    <Route path={SIGNIN_FAILED_PATH} element={<SignInFailedPage />} />
+                    <Route path="/" element={<RootRedirect ClusterLanding={ClusterLanding} />} />
+                    <Route path={ABOUT_PATH} element={<AboutPage />} />
+                    {installRoutes.map(([path, Page]) => (
+                      <Route key={path} path={path ? `/i/:id/${path}` : "/i/:id"} element={<Page />} />
+                    ))}
+                    {contributed.map((r) => (
+                      <Route
+                        key={`${r.scope}:${r.path}`}
+                        path={r.scope === "install" ? `/i/:id/${r.path}` : `/${r.path}`}
+                        element={r.element}
+                      />
+                    ))}
+                    <Route path="*" element={<PageState kind="empty" title="Page not found" />} />
+                  </Routes>
+                </Gated>
               </main>
             </Root>
           </BrowserRouter>

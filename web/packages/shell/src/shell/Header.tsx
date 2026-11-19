@@ -7,6 +7,10 @@ import { useNow } from "../api/clock";
 import { confirmedOrComputed } from "../api/freshness";
 import { isStale, useInstalls } from "../api/hooks";
 import type { Readiness } from "../api/types";
+import { SIGNIN_FAILED_PATH } from "../auth/authState";
+import { isSecureMode } from "../auth/mode";
+import { UserMenu } from "../auth/UserMenu";
+import { useSignInStatus } from "../auth/useAuth";
 import { versionText } from "../format";
 import { HealthIcon } from "../health/HealthIcon";
 import { Shimmer } from "../states/Shimmer";
@@ -18,6 +22,8 @@ import { InstallName } from "./InstallName";
 import { InstallNav } from "./InstallNav";
 import { InstallSwitcher } from "./InstallSwitcher";
 import { MenuButton } from "./menu";
+import { NamespaceScope } from "./NamespaceScope";
+import { PermissionsNote } from "./PermissionsNote";
 import { ABOUT_PATH, installPath } from "./paths";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { Tooltip } from "./Tooltip";
@@ -68,7 +74,17 @@ const Identity = styled.div`
   border-left: 1px solid ${(p) => p.theme.color.borderStrong};
   white-space: nowrap;
   /* The install nav gives way first on narrow windows (it scrolls). */
-  @media (max-width: 899px) { flex: none; }
+  @media (max-width: 1099px) { flex: none; }
+  /* Below this width the hidden-details note stays for screen readers only; the permissions note still shows. */
+  @media (max-width: 1399px) {
+    [data-part="details-hidden"] {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
+  }
 `;
 const Chip = styled.span`
   padding: 2px 8px;
@@ -161,7 +177,10 @@ function ReadyTip({
 }
 
 // region Component
-/** Header: brand, install identity, version, edition and controller readiness, install and extension navigation, theme switcher. */
+/**
+ * Header: brand, install identity, version, edition and controller readiness, the namespace scope, install and
+ * extension navigation, theme switcher.
+ */
 export function Header({ installPaths }: { installPaths: readonly string[] }) {
   const { brand, navEntries } = useShellExtension();
   const match = useMatch("/i/:id/*");
@@ -173,6 +192,9 @@ export function Header({ installPaths }: { installPaths: readonly string[] }) {
   const theme = useTheme();
   const compact = useMedia(COMPACT);
   const nav = navEntries.filter((n) => n.scope === "top" || id);
+  const secure = isSecureMode();
+  const { data: status } = useSignInStatus(secure);
+  const onFailurePage = useMatch(SIGNIN_FAILED_PATH);
   return (
     <Bar>
       <Brand to="/">
@@ -202,8 +224,9 @@ export function Header({ installPaths }: { installPaths: readonly string[] }) {
           {current.edition && current.edition !== brand.productName ? (
             <Tag data-testid="edition">{current.edition}</Tag>
           ) : null}
-          {/* A platform that cannot observe readiness shows none; that is not a failure (D-016). */}
-          {current.readiness.state !== "not-observed" ? (
+          {/* A platform that cannot observe readiness shows none (D-016); readiness the viewer may not read is the details note's. */}
+          {current.readiness.state !== "not-observed" &&
+          !(current.detailsHidden && current.readiness.state === "unknown") ? (
             <ReadyTip label={readinessText(current.readiness)} compact={compact}>
               <Ready data-testid="controller-readiness" tabIndex={compact ? 0 : undefined}>
                 <HealthIcon
@@ -219,6 +242,10 @@ export function Header({ installPaths }: { installPaths: readonly string[] }) {
       ) : null}
       {/* The navs sit right of the spacer, so the identity loading in never moves them sideways. */}
       <Spacer />
+      {/* Right of the spacer, so the note appearing only narrows the spacer. */}
+      <PermissionsNote compact={compact} />
+      {/* Fixed width from the first paint on install pages; it scopes the list pages only. */}
+      {id ? <NamespaceScope installId={id} /> : null}
       {id ? <InstallNav installId={id} paths={installPaths} /> : null}
       {nav.length > 0 ? (
         <Nav aria-label="Extensions">
@@ -236,6 +263,8 @@ export function Header({ installPaths }: { installPaths: readonly string[] }) {
         </AboutLink>
       </Tooltip>
       <ThemeSwitcher />
+      {/* The slot is reserved in secure mode from the first paint, so the name loading in shifts nothing. */}
+      {secure ? <UserMenu signedIn={onFailurePage ? false : status && status.signIn === "ready"} /> : null}
     </Bar>
   );
 }

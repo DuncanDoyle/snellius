@@ -6,6 +6,9 @@
     "items": [
       {
         "children": 0,
+        "config": {
+          "state": "healthy"
+        },
         "flags": [
           "accepted"
         ],
@@ -33,6 +36,13 @@
             }
           }
         ],
+        "path": {
+          "incomplete": false,
+          "reason": {
+            "kind": "no-path"
+          },
+          "state": "unknown"
+        },
         "ref": {
           "group": "gateway.networking.k8s.io",
           "kind": "HTTPRoute",

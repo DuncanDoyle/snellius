@@ -57,6 +57,8 @@ export interface CheckResult {
   unavailable?: "off" | "denied" | "failing" | "not-on-version" | "not-observed";
   /** The check is still deciding on count items, first at until; reason names no object (D-068). */
   hold?: CheckHold;
+  /** Shown as "Not checked" to a viewer without the full read; neutral in rollups (D-106). */
+  notAssessed?: boolean;
 }
 export interface CheckHold {
   until: string;
@@ -110,6 +112,8 @@ export interface InstallHeader {
   readiness: Readiness;
   /** Absent where the platform has no namespace scope. */
   scope?: ScopeSummary;
+  /** Secure mode: the viewer cannot read every metadata source, so those fields are empty (design §7.4). */
+  detailsHidden?: boolean;
 }
 /**
  * computedAt: when the backend computed this health. confirmedAt: when the backend last
@@ -146,7 +150,11 @@ export type RowReason =
   | { kind: "finding"; code: string; message: string; more?: number }
   | { kind: "unknown" }
   | { kind: "gateway-rejecting" }
-  | { kind: "backend-problem"; code: string; message?: string; backend?: LinkedRef };
+  | { kind: "backend-problem"; code: string; message?: string; backend?: LinkedRef }
+  | { kind: "path-incomplete" }
+  | { kind: "not-attached" }
+  | { kind: "no-path" }
+  | { kind: "path-problem"; code?: string; message?: string };
 export interface GatewayRow {
   ref: Ref;
   class: string;
@@ -191,6 +199,16 @@ export interface MetaResponse {
   filters?: Record<string, string[]>;
   /** Extension capabilities with their state, by name; omitted when there are none. */
   capabilityStates?: Capability[];
+  /** "local" runs without sign-in; "secure" requires it. */
+  authMode: "local" | "secure";
+  /** Secure mode: the viewer cannot list every served kind everywhere; absent otherwise (design §7.5). */
+  limitedView?: boolean;
+}
+/** GET …/namespaces: the sorted namespaces of the install's route, Gateway and ListenerSet rows the viewer can see. */
+export interface NamespacesResponse {
+  install: string;
+  namespaces: string[];
+  collectedAt: string;
 }
 /** One extension capability; reason says why it is not on. Only "on" ones are also in MetaResponse.capabilities. */
 export interface Capability {

@@ -3,7 +3,7 @@ import styled from "@emotion/styled";
 import { Box, Layers, Network, Route, Server } from "lucide-react";
 import type { ReactNode } from "react";
 import { useKindCategory } from "../api/hooks";
-import type { Category, LinkedRef } from "../api/types";
+import type { Category, LinkedRef, RowReason } from "../api/types";
 import { problemCopy } from "../copy/explorer";
 import { objectHeaderCopy } from "../copy/navigation";
 import { HealthBadge } from "../health/HealthBadge";
@@ -82,6 +82,19 @@ const Header = styled.header<{ stylesOverride?: SerializedStyles }>`
     align-items: center;
     min-height: 20px;
   }
+  .state {
+    gap: ${(p) => p.theme.space(3)};
+  }
+  .signal {
+    display: inline-flex;
+    align-items: center;
+    gap: ${(p) => p.theme.space(1.5)};
+    white-space: nowrap;
+  }
+  .signal-label {
+    color: ${(p) => p.theme.color.textMuted};
+    font-size: ${(p) => p.theme.font.size.sm};
+  }
   .state a {
     display: inline-flex;
     padding: 2px 4px;
@@ -124,6 +137,33 @@ function defaultIcon({ group, kind }: { group: string; kind: string }, category?
   return <Icon size={14} aria-hidden="true" />;
 }
 
+/** A named signal; its reason and note explain a state that is not healthy in the badge's tooltip. */
+export interface HeaderSignal {
+  id: string;
+  label: string;
+  state: HealthState;
+  reason?: RowReason;
+  note?: string;
+}
+
+/** One named signal: its label and badge, linked to the problem strip when href is set. */
+function SignalBadge({ signal, href }: { signal: HeaderSignal; href?: string }) {
+  const badge = (
+    <span className="signal" data-testid={`signal-${signal.id}`}>
+      <span className="signal-label">{signal.label}</span>
+      <HealthBadge state={signal.state} reason={signal.reason} note={signal.note} />
+    </span>
+  );
+  return href ? (
+    <a href={href} data-testid="state-link">
+      {badge}
+      <VisuallyHidden>{problemCopy.signalLinkHint}</VisuallyHidden>
+    </a>
+  ) : (
+    badge
+  );
+}
+
 // region Component
 /** Props of {@link ObjectHeader}. */
 export interface ObjectHeaderProps {
@@ -134,6 +174,8 @@ export interface ObjectHeaderProps {
   namespace?: string;
   /** Absent while loading, or for an object without a health state. */
   state?: HealthState;
+  /** Named signals shown instead of the one state, e.g. a route's Configuration and Traffic path. */
+  signals?: ReadonlyArray<HeaderSignal>;
   /** Where the state badge jumps, e.g. the page's problem strip; absent leaves it plain. */
   stateHref?: string;
   /** When the shown data was collected; absent while loading. */
@@ -156,6 +198,7 @@ export function ObjectHeader({
   name,
   namespace,
   state,
+  signals,
   stateHref,
   collectedAt,
   actions,
@@ -174,7 +217,9 @@ export function ObjectHeader({
           {kind.label}
         </span>
         <span className="state">
-          {state && stateHref ? (
+          {signals ? (
+            signals.map((s) => <SignalBadge key={s.id} signal={s} href={stateHref} />)
+          ) : state && stateHref ? (
             <a href={stateHref} aria-label={problemCopy.badgeLink(stateLabel(state))} data-testid="state-link">
               <HealthBadge state={state} />
             </a>

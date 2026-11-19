@@ -644,6 +644,7 @@ func TestBuildIsDeterministic(t *testing.T) {
 // stripObjects returns a copy of ix without object pointers.
 func stripObjects(ix *Index) Index {
 	c := *ix
+	c.parentObjs = nil
 	c.Routes = slices.Clone(ix.Routes)
 	for i := range c.Routes {
 		c.Routes[i].Obj = nil
@@ -1190,6 +1191,16 @@ func TestFlagDropped(t *testing.T) {
 			t.Errorf("state=dropped: %v total %d, want %v", names(ix, p), p.Total, tc.want)
 		}
 	}
+	// Without delegation analysis the flag never shows and state=dropped matches nothing (D-114).
+	for _, vw := range []Viewer{{NoDelegation: true}, {NoDelegation: true, Shown: func(*health.Finding) bool { return true }}} {
+		if _, f, _ := ix.RouteStateOf(id1, vw); f&FlagDropped != 0 {
+			t.Errorf("shown %v: k1 flags %v", vw.Shown != nil, f.Names())
+		}
+		p, err := ix.QueryRoutesAs(Query{States: FlagDropped}, vw)
+		if err != nil || p.Total != 0 {
+			t.Errorf("shown %v: state=dropped %v total %d, err %v", vw.Shown != nil, names(ix, p), p.Total, err)
+		}
+	}
 }
 
 // A route an owned parent selects is a "selected" candidate, By its first
@@ -1202,7 +1213,8 @@ func TestSelectedAdmission(t *testing.T) {
 		want Admission
 	}{
 		{"selected no-parent row", k1, Admission{Reason: ReasonSelected, By: &dA, Referrers: []objects.Ref{dA, dB}, NoParent: true}},
-		{"a finding wins over selected", k2, Admission{Reason: ReasonFinding}},
+		// It keeps its selecting parent for a caller its finding is not shown to.
+		{"a finding wins over selected", k2, Admission{Reason: ReasonFinding, Referrers: []objects.Ref{dA}, Else: ReasonSelected}},
 		{"selected only by a parent the install does not own", k3, Admission{NoParent: true}},
 		{"owned parent", dA, Admission{Owned: true}},
 	} {

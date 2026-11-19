@@ -4,21 +4,22 @@ import { FileCode, LayoutList, type LucideIcon } from "lucide-react";
 import { createContext, type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import type { ApiError } from "../../api/client";
 import { useNow } from "../../api/clock";
+import { ApiErrorState } from "../../api/errorState";
 import { isStale } from "../../api/hooks";
-import type { Candidate, DetailReason, LinkedRef, Page } from "../../api/types";
+import type { Candidate, DetailReason, LinkedRef, Page, RouteConfigSignal, RoutePathSignal } from "../../api/types";
 import { detailCopy, listCopy } from "../../copy/explorer";
 import { CandidateBanner } from "../../explore/CandidateBanner";
 import { CopyCommandButton } from "../../explore/CopyCommandButton";
 import { DetailTabs } from "../../explore/DetailTabs";
 import { type ObjectColumn, ObjectTable } from "../../explore/ObjectTable";
 import { PROBLEM_ID, ProblemStrip, type ProblemStripProps } from "../../explore/ProblemStrip";
+import { decidingSignal, pathNote, signalLabel } from "../../explore/RouteSignals";
 import { StaleView } from "../../health/staleView";
 import { CopyNameButton } from "../../resource/CopyNameButton";
 import { ResourceName } from "../../resource/ResourceName";
 import { ResourceYaml } from "../../resource/ResourceYaml";
 import { TrailRefsProvider, useReportTrailRefs, useTrailRefsCollector } from "../../shell/Breadcrumbs";
 import { Slot, useShownDetailTabs, useSideSectionContributions } from "../../shell/contributions";
-import { useVocabulary } from "../../shell/extension";
 import { DetailColumns, layout, useTwoColumns } from "../../shell/layout";
 import { OBJECT_HEADER_H, ObjectHeader } from "../../shell/ObjectHeader";
 import { installPath } from "../../shell/paths";
@@ -107,10 +108,18 @@ interface DetailFrameProps {
   /** The object from the URL, so the header renders before the data. */
   refValue: LinkedRef;
   noun: string;
-  data?: { health: HealthState; candidate?: Candidate; collectedAt: string; reason?: DetailReason };
+  data?: {
+    health: HealthState;
+    candidate?: Candidate;
+    collectedAt: string;
+    reason?: DetailReason;
+    /** A route's two signals: the header shows both and the strip names the one that decides. */
+    config?: RouteConfigSignal;
+    path?: RoutePathSignal;
+  };
   error?: ApiError;
   /** The page's part of the problem strip, shown over the main column while the state is not healthy. */
-  problem?: Pick<ProblemStripProps, "condition" | "conditionsId" | "parent">;
+  problem?: Pick<ProblemStripProps, "condition" | "conditionsId" | "parent" | "gateway">;
   /** The page draws its own strip with id PROBLEM_ID, e.g. the backend status line; the badge still links to it. */
   ownProblem?: boolean;
   /** The Overview tab's main column; rendered only once data has loaded. */
@@ -146,7 +155,6 @@ export function DetailFrame({
   stylesOverride,
 }: DetailFrameProps) {
   const wide = useTwoColumns();
-  const vocab = useVocabulary();
   const urlParams = useUrlParams();
   const [params, update] = urlParams;
   const coreIds = useMemo(() => [...CORE_TAB_IDS, ...(extraTabs ?? []).map((t) => t.id)], [extraTabs]);
@@ -175,7 +183,11 @@ export function DetailFrame({
   const heldRefs = useMemo(() => [...(trailRefs ?? []), ...(by ? [by] : [])], [trailRefs, by]);
   const [pageRefs, reportRefs] = useTrailRefsCollector(heldRefs);
   // The strip explains the server's state; a stale view replaces that state, so it goes too.
-  const problemShown = !!data && !stale && data.health !== "healthy" && tab === "overview";
+  const deciding = data?.config && data.path ? decidingSignal(data.config, data.path) : undefined;
+  const problemShown = !!data && !stale && (data.health !== "healthy" || !!deciding) && tab === "overview";
+  // The configuration's reason carries the finding id only on the page's own reason.
+  const stripReason =
+    deciding?.id === "config" && data?.reason?.kind === "finding" ? data.reason : (deciding?.reason ?? data?.reason);
   // A hidden object 404s as an absent one does (D-013).
   if (error?.status === 404 && !data)
     return (
@@ -201,7 +213,15 @@ export function DetailFrame({
         main={
           <>
             {problemShown && !ownProblem ? (
-              <ProblemStrip installId={installId} state={data.health} reason={data.reason} {...problem} />
+              <ProblemStrip
+                installId={installId}
+                state={deciding?.state ?? data.health}
+                reason={stripReason}
+                signal={deciding ? signalLabel[deciding.id] : undefined}
+                incomplete={data.path?.incomplete}
+                pathReason={data.path?.reason}
+                {...problem}
+              />
             ) : null}
             {children}
           </>
@@ -228,10 +248,8 @@ export function DetailFrame({
         }
       />
     )
-  ) : error?.status === 503 ? (
-    <PageState kind="connecting" title={vocab.connecting} message={error.message} />
   ) : error ? (
-    <PageState kind="error" title={errorTitle} message={error.message} copyText={error.message} />
+    <ApiErrorState error={error} title={errorTitle} />
   ) : (
     <div aria-busy="true" data-testid="detail-skeleton">
       <DetailColumns
@@ -257,6 +275,25 @@ export function DetailFrame({
             name={refValue.name}
             namespace={refValue.namespace}
             state={data?.health}
+            signals={
+              data?.config && data.path
+                ? [
+                    {
+                      id: "config",
+                      label: signalLabel.config,
+                      state: data.config.state,
+                      reason: data.config.reason,
+                    },
+                    {
+                      id: "path",
+                      label: signalLabel.path,
+                      state: data.path.state,
+                      reason: data.path.reason,
+                      note: pathNote(data.path),
+                    },
+                  ]
+                : undefined
+            }
             stateHref={problemShown ? `#${PROBLEM_ID}` : undefined}
             collectedAt={data?.collectedAt}
             trailRefs={pageRefs}

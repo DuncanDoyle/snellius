@@ -5,7 +5,6 @@ import (
 	"slices"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/DuncanDoyle/snellius/pkg/computed"
@@ -180,45 +179,4 @@ func mergeTriggers(fs []Finding, declared int, cs []Finding) []Finding {
 		f.Evidence = ev
 	}
 	return fs
-}
-
-// delegationOnly reports whether u is an HTTPRoute whose every backendRef
-// delegates and which has no ExtensionRef filter, so a BackendNotFound on it
-// can only come from delegation (computed-rules §3.2, §8.2).
-func delegationOnly(u *unstructured.Unstructured) bool {
-	gvk := u.GroupVersionKind()
-	if gvk.Group != objects.GatewayAPIGroup || gvk.Kind != "HTTPRoute" {
-		return false
-	}
-	extension := func(fs []objects.Filter) bool {
-		for _, f := range fs {
-			if f.ExtensionRef != nil {
-				return true
-			}
-		}
-		return false
-	}
-	delegates := false
-	for _, r := range objects.DecodeHTTPRoute(u).Rules {
-		if extension(r.Filters) {
-			return false
-		}
-		for _, b := range r.BackendRefs {
-			if b.Delegation == nil || extension(b.Filters) {
-				return false
-			}
-			delegates = true
-		}
-	}
-	return delegates
-}
-
-// delegationCondition rewords a route's ResolvedRefs=False/BackendNotFound
-// when only delegation can cause it (D-021 item 9); code and severity stay.
-// An install without delegation keeps the controller's wording.
-func (in Input) delegationCondition(f *Finding, u *unstructured.Unstructured, c metav1.Condition) {
-	if in.Install.NoDelegation || c.Type != "ResolvedRefs" || c.Reason != "BackendNotFound" || !delegationOnly(u) {
-		return
-	}
-	f.Message, f.Detail = DelegationNoChildMessage, DelegationNoChildDetail+"; "+f.Detail
 }

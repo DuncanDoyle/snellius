@@ -320,11 +320,15 @@ export interface ProcessSummary {
   desired?: number;
   version?: string;
   restricted?: boolean;
+  /** Set for a viewer without the full read in secure mode: the state comes from findings they are not shown. */
+  notAssessed?: boolean;
 }
 /** Visible Gateways: with every proxy ready, rejecting, with skew, restarting, and not observed. */
 export interface ProxySummary {
   /** The worst known health of these Gateways, from the server; unknown when none is known. */
   state: HealthState;
+  /** As on ProcessSummary. */
+  notAssessed?: boolean;
   gateways: number;
   ready: number;
   rejecting: number;
@@ -372,11 +376,15 @@ export interface ProcessSet {
   processes: ProcessInfo[];
   rollout?: { progressing: boolean; reason?: string };
   restricted?: boolean;
+  /** Set in secure mode when the viewer may not read the set: no counts or Pods. */
+  notAssessed?: boolean;
 }
 /** One Gateway's proxies; skew includes patch differences, which are never a finding. */
 export interface GatewayProcesses {
   gateway: LinkedRef;
   health: HealthState;
+  /** As on ProcessSummary; health is then unknown. */
+  notAssessed?: boolean;
   set: ProcessSet;
   rejects?: number;
   skew?: boolean;

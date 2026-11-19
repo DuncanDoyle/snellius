@@ -9,6 +9,10 @@
 # UI_EXTRA_ARGS are space-separated UI flags for the chart's extraArgs, e.g. --poll-interval=10m;
 # a value must not contain a comma (helm's --set list syntax splits on it).
 # KGW_HELM_ARGS are space-separated extra helm flags for install A, e.g. --set controller.xds.scoping.mode=REFERENCED.
+# SECURE=1 installs the UI in secure mode against test/oidc-issuer, run on this host at
+# https://oidc.snellius.test:$ISSUER_PORT (default 18443). The API server trusts it through
+# kind-auth.yaml; the node and the UI pod reach it on the kind network's gateway, or
+# ISSUER_HOST_IP when the host is elsewhere (Docker Desktop). Linux runners need no override.
 # The cluster's kubeconfig is written to $E2E_DIR/kubeconfig; the current
 # kubeconfig context is left alone.
 set -euo pipefail
@@ -19,6 +23,11 @@ tmp=${TMPDIR:-/tmp}
 E2E_DIR=${E2E_DIR:-${tmp%/}/$CLUSTER}
 PORT=${PORT:-18080}
 export KUBECONFIG=$E2E_DIR/kubeconfig
+ISSUER_HOST=oidc.snellius.test
+ISSUER_PORT=${ISSUER_PORT:-18443}
+ISSUER_URL=https://$ISSUER_HOST:$ISSUER_PORT
+OIDC_DIR=$E2E_DIR/oidc
+CLIENT_ID=snellius
 
 if [[ "$CLUSTER" == kgwui-dev ]]; then
   echo "refusing to manage the development cluster kgwui-dev" >&2
@@ -29,6 +38,10 @@ down() {
   if [[ -f "$E2E_DIR/port-forward.pid" ]]; then
     kill "$(cat "$E2E_DIR/port-forward.pid")" 2>/dev/null || true
     rm -f "$E2E_DIR/port-forward.pid"
+  fi
+  if [[ -f "$E2E_DIR/oidc-issuer.pid" ]]; then
+    kill "$(cat "$E2E_DIR/oidc-issuer.pid")" 2>/dev/null || true
+    rm -f "$E2E_DIR/oidc-issuer.pid"
   fi
   if kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
     kind delete cluster --name "$CLUSTER" --kubeconfig "$KUBECONFIG"
@@ -48,6 +61,88 @@ poll() {
   done
 }
 
+# start_issuer runs test/oidc-issuer on all interfaces, so the kind node and pods reach it too.
+start_issuer() {
+  mkdir -p "$OIDC_DIR"
+  rm -f "$OIDC_DIR/ca.pem"
+  openssl rand -hex 24 >"$OIDC_DIR/client-secret"
+  go build -o "$OIDC_DIR/oidc-issuer" ./test/oidc-issuer
+  nohup "$OIDC_DIR/oidc-issuer" --issuer "$ISSUER_URL" --listen "0.0.0.0:$ISSUER_PORT" --ca-out "$OIDC_DIR/ca.pem" \
+    --client-id "$CLIENT_ID" --client-secret-file "$OIDC_DIR/client-secret" \
+    --redirect-uri "http://127.0.0.1:$PORT/auth/callback" \
+    --user alice=team-a,team-b --user bob=team-b >"$OIDC_DIR/issuer.log" 2>&1 &
+  echo $! >"$E2E_DIR/oidc-issuer.pid"
+  if ! poll 60 curl -fsS --cacert "$OIDC_DIR/ca.pem" --resolve "$ISSUER_HOST:$ISSUER_PORT:127.0.0.1" \
+    "$ISSUER_URL/.well-known/openid-configuration"; then
+    cat "$OIDC_DIR/issuer.log" >&2
+    exit 1
+  fi
+}
+
+# render_auth prints kind-auth.yaml for API version $1, with the issuer's CA inline.
+render_auth() {
+  awk -v api="$1" -v url="$ISSUER_URL" -v client="$CLIENT_ID" -v ca="$OIDC_DIR/ca.pem" '
+    /^ *#/ { print; next }
+    /certificateAuthority: CA_PEM/ {
+      indent = $0; sub(/[^ ].*/, "", indent)
+      sub(/CA_PEM/, "|"); print
+      while ((getline line < ca) > 0) print indent "  " line
+      next
+    }
+    { gsub(/API_VERSION/, api); gsub(/ISSUER_URL/, url); gsub(/CLIENT_ID/, client); print }
+  ' test/e2e/kind-auth.yaml
+}
+
+# patch_apiserver adds the authentication config flag and its hostPath volume to
+# kubeadm's kube-apiserver manifest on stdin; it fails if an anchor line moved.
+patch_apiserver() {
+  awk '
+    { print }
+    $0 == "    - kube-apiserver" { print "    - --authentication-config=/etc/snellius-oidc/auth.yaml"; n++ }
+    $0 == "    volumeMounts:" { print "    - mountPath: /etc/snellius-oidc"; print "      name: snellius-oidc"; print "      readOnly: true"; n++ }
+    $0 == "  volumes:" { print "  - hostPath:"; print "      path: /etc/snellius-oidc"; print "      type: Directory"; print "    name: snellius-oidc"; n++ }
+    END { if (n != 3) { print "kube-apiserver manifest layout changed: " n " of 3 anchors" > "/dev/stderr"; exit 1 } }
+  '
+}
+
+apiserver_has_auth() {
+  kubectl -n kube-system get pod "kube-apiserver-$CLUSTER-control-plane" -o jsonpath='{.spec.containers[0].command}' |
+    grep -q authentication-config && kubectl get --raw /readyz
+}
+
+# trust_issuer points the API server at the test issuer. The node's /etc/hosts maps the
+# issuer name to the host; kubelet copies it into the restarted host-network API server Pod.
+trust_issuer() {
+  local node=$CLUSTER-control-plane minor api=v1beta1
+  ISSUER_IP=${ISSUER_HOST_IP:-$(docker network inspect kind -f '{{range .IPAM.Config}}{{println .Gateway}}{{end}}' | grep -v : | grep . | head -n1)}
+  if [[ -z "$ISSUER_IP" ]]; then
+    echo "no IPv4 gateway on the kind network; set ISSUER_HOST_IP" >&2
+    exit 1
+  fi
+  # Structured authentication config is beta from 1.30 and v1 from 1.34.
+  minor=$(kubectl get --raw /version | sed -n 's/.*"minor": *"\([0-9]*\).*/\1/p')
+  if ((minor < 30)); then
+    echo "SECURE=1 needs Kubernetes 1.30 or later, got 1.$minor" >&2
+    exit 1
+  elif ((minor >= 34)); then
+    api=v1
+  fi
+  render_auth "$api" >"$OIDC_DIR/auth.yaml"
+  docker exec "$node" mkdir -p /etc/snellius-oidc
+  docker cp "$OIDC_DIR/auth.yaml" "$node:/etc/snellius-oidc/auth.yaml"
+  docker exec "$node" sh -c "echo '$ISSUER_IP $ISSUER_HOST' >>/etc/hosts"
+  docker cp "$node:/etc/kubernetes/manifests/kube-apiserver.yaml" "$OIDC_DIR/kube-apiserver.orig.yaml"
+  patch_apiserver <"$OIDC_DIR/kube-apiserver.orig.yaml" >"$OIDC_DIR/kube-apiserver.yaml"
+  # Stage outside the manifests directory, then move: kubelet reads every file in it.
+  # Not in /tmp: it is a tmpfs on kind nodes, and docker cp cannot write into one.
+  docker cp "$OIDC_DIR/kube-apiserver.yaml" "$node:/etc/snellius-oidc/kube-apiserver.yaml"
+  docker exec "$node" mv /etc/snellius-oidc/kube-apiserver.yaml /etc/kubernetes/manifests/kube-apiserver.yaml
+  if ! poll 180 apiserver_has_auth; then
+    docker exec "$node" sh -c 'crictl ps -a --name kube-apiserver; crictl logs --tail 50 $(crictl ps -a -q --name kube-apiserver | head -n1)' >&2 || true
+    exit 1
+  fi
+}
+
 if [[ "${1:-}" == down ]]; then
   down
   exit 0
@@ -56,7 +151,13 @@ fi
 : "${KGW_VERSION:?}" "${GWAPI_VERSION:?}"
 mkdir -p "$E2E_DIR"
 down # idempotent: start from a fresh cluster
+if [[ "${SECURE:-}" == 1 ]]; then
+  start_issuer
+fi
 kind create cluster --name "$CLUSTER" --kubeconfig "$KUBECONFIG" --wait 120s
+if [[ "${SECURE:-}" == 1 ]]; then
+  trust_issuer
+fi
 # The experimental channel adds TCPRoute, TLSRoute and ListenerSet for the computed-view e2e.
 kubectl apply --server-side -f "https://github.com/kubernetes-sigs/gateway-api/releases/download/${GWAPI_VERSION}/experimental-install.yaml"
 if [[ "${OBSERVE_XLISTENERSET:-}" == 1 ]]; then
@@ -122,6 +223,20 @@ if [[ -n "${UI_EXTRA_ARGS:-}" ]]; then
 fi
 if [[ "${CONTROLLER_LOGS:-}" == 1 ]]; then
   ui_args+=(--set diagnostics.controllerLogs=true --set "diagnostics.controllerLogsNamespaces={kgw-a}")
+fi
+if [[ "${SECURE:-}" == 1 ]]; then
+  kubectl create namespace snellius
+  kubectl -n snellius create secret generic snellius-oidc --from-file=client-secret="$OIDC_DIR/client-secret" >/dev/null
+  kubectl -n snellius create configmap snellius-oidc-ca --from-file=ca.pem="$OIDC_DIR/ca.pem"
+  # Plain-HTTP redirect on loopback, so the browser and the Go client use the port-forward.
+  ui_args+=(--set auth.mode=secure --set "auth.oidc.issuerURL=$ISSUER_URL" --set "auth.oidc.clientID=$CLIENT_ID"
+    --set "auth.oidc.redirectURL=http://127.0.0.1:$PORT/auth/callback"
+    --set auth.oidc.clientSecret.existingSecret=snellius-oidc --set auth.oidc.ca.existingConfigMap=snellius-oidc-ca
+    --set auth.session.cookieSecure=false
+    --set-json "hostAliases=[{\"ip\":\"$ISSUER_IP\",\"hostnames\":[\"$ISSUER_HOST\"]}]")
+  # Alice may read HTTPRoutes in shop; Bob gets no RBAC.
+  kubectl -n shop create role route-reader --verb=get,list --resource=httproutes.gateway.networking.k8s.io
+  kubectl -n shop create rolebinding alice-route-reader --role=route-reader --user=oidc:alice
 fi
 # ${a[@]+...} keeps an empty array safe under set -u on bash 3.
 helm install ui deploy/helm/snellius -n snellius --create-namespace \

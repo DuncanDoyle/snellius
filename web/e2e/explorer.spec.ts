@@ -381,7 +381,13 @@ async function expectStableHead(page: Page, path: string, detailApi: string) {
   expect(before.banner).toBeNull();
   release();
   await expect(page.getByTestId("detail-skeleton")).toHaveCount(0);
-  await expect(page.getByTestId("detail-header").getByTestId(/^health-icon-/)).toBeVisible();
+  // A route's header has an icon per signal.
+  await expect(
+    page
+      .getByTestId("detail-header")
+      .getByTestId(/^health-icon-/)
+      .first(),
+  ).toBeVisible();
   const after = await measureHead(page);
   // Design §8.6: the candidate banner is the one allowed shift; it takes the place of the trail above the header.
   let dy = 0;
