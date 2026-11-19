@@ -84,6 +84,12 @@ function Where() {
   );
 }
 const location = () => screen.getByTestId("location").textContent ?? "";
+/** Focuses the tab stop before el, then presses Tab once, so el gets keyboard focus without walking the page. */
+async function tabInto(el: HTMLElement) {
+  const stops = Array.from(document.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), [tabindex="0"]'));
+  act(() => stops[stops.indexOf(el) - 1]?.focus());
+  await userEvent.tab();
+}
 
 function mount(path: string, themeId?: string) {
   return renderWithTheme(
@@ -254,7 +260,7 @@ it("a sub-table name is one truncated line with the full name in a keyboard tool
   const style = getComputedStyle(name);
   expect([style.whiteSpace, style.overflow, style.textOverflow]).toEqual(["nowrap", "hidden", "ellipsis"]);
   const link = name.closest("a") as HTMLElement;
-  for (let i = 0; i < 80 && document.activeElement !== link; i++) await userEvent.tab();
+  await tabInto(link);
   expect(link).toHaveFocus();
   expect(screen.getByRole("tooltip")).toHaveTextContent(name.getAttribute("aria-label") ?? "");
 });
@@ -303,10 +309,10 @@ it("failed-route table has Not accepted, Waiting for status and Namespace not wa
   // The Why cell is one line; its full text is in the Tooltip, on keyboard focus.
   const why = within(rowOf(failed, "rejected")).getByText("UnsupportedValue").closest("[tabindex]") as HTMLElement;
   expect([getComputedStyle(why).whiteSpace, getComputedStyle(why).textOverflow]).toEqual(["nowrap", "ellipsis"]);
-  for (let i = 0; i < 160 && document.activeElement !== why; i++) await userEvent.tab();
+  await tabInto(why);
   expect(why).toHaveFocus();
   expect(screen.getByRole("tooltip")).toHaveTextContent("UnsupportedValue unsupported filter type");
-  why.blur();
+  act(() => why.blur());
   // A pending reason is ours, not the controller's: it is never shown as a code.
   expect(within(failed).queryByText("no status from the controller")).toBeNull();
   await userEvent.click(within(group).getByRole("button", { name: /Waiting for status/ }));
