@@ -341,9 +341,9 @@ func (h *handler) findingDetail(w http.ResponseWriter, r *http.Request) {
 // stands alone, ungrouped.
 func (v *view) findFinding(i *engine.InstallModel, id string) (*diagnose.Diagnosis, []health.Finding, int, bool) {
 	if !v.projects() {
-		d := diagnosis(i)
-		k, ok := d.Index.Find(i.Health.Findings, id)
-		return d, i.Health.Findings, k, ok
+		d, fs := v.diagnosis(i), v.report(i).Findings
+		k, ok := d.Index.Find(fs, id)
+		return d, fs, k, ok
 	}
 	k, ok := diagnosis(i).Index.Find(i.Health.Findings, id)
 	if !ok {

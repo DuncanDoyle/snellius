@@ -264,9 +264,10 @@ func visibleHealth(v *view, i *engine.InstallModel) health.Report {
 }
 
 // visibleOverview rebuilds the overview over the owned objects the caller of v
-// may see: denied objects leave the count tiles and the gateway rows.
+// may see: denied objects leave the count tiles and the gateway rows, and
+// findings from Events their states when the caller may not list Events.
 func (h *handler) visibleOverview(v *view, m *engine.Model, i *engine.InstallModel, rep health.Report) overview.Overview {
-	if v.readsAll() {
+	if v.readsAll() && !v.withholds() {
 		return i.Overview
 	}
 	can := func(u *unstructured.Unstructured) bool { return v.can(objects.RefOf(u)) }

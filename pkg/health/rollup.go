@@ -13,6 +13,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
 
@@ -101,6 +102,35 @@ func Project(rep Report, rd Readable) Report {
 			c = CheckResult{Name: c.Name, Required: c.Required, CollectedAt: c.CollectedAt, OK: true, NotAssessed: true}
 		}
 		out.Checks[i] = c
+	}
+	out.State = RollUp(out.Findings, out.Checks)
+	return out
+}
+
+// FromEvents reports whether f comes from Kubernetes Events: KGWUI-020's probe failures.
+func (f *Finding) FromEvents() bool { return f.Code == CodeProbeFailing }
+
+// OnCRD reports whether f is on a CustomResourceDefinition: KGWUI-022's bundle skew quotes its annotations.
+func (f *Finding) OnCRD() bool {
+	return f.Resource != nil && f.Resource.Group == cache.CRDsKind.Group && f.Resource.Kind == cache.CRDsKind.Kind
+}
+
+// Withhold is rep for a full reader who may not list Events or CRDs, as
+// events and crds say (D-110): without findings from them and, for Events,
+// the probe check "Not checked" unless a collection failure, as Project shows
+// them; counted and rolled up again.
+func Withhold(rep Report, events, crds bool) Report {
+	out := rep
+	out.Findings = slices.DeleteFunc(slices.Clone(rep.Findings), func(f Finding) bool { return events && f.FromEvents() || crds && f.OnCRD() })
+	out.Counts = map[Severity]int{}
+	for _, f := range out.Findings {
+		out.Counts[f.Severity]++
+	}
+	out.Checks = slices.Clone(rep.Checks)
+	for i, c := range out.Checks {
+		if events && c.Name == probesCheckName && !c.Collection {
+			out.Checks[i] = CheckResult{Name: c.Name, Required: c.Required, CollectedAt: c.CollectedAt, OK: true, NotAssessed: true}
+		}
 	}
 	out.State = RollUp(out.Findings, out.Checks)
 	return out

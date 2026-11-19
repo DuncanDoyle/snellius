@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -481,5 +482,95 @@ func TestProbeFactsNeedEventsList(t *testing.T) {
 	}
 	if d := decode[api.Diagnostics](t, srv, restrictedUser, ruleBase+"/diagnostics").Processes.Proxies; d.Skew != 0 {
 		t.Errorf("restricted proxy line skew %d", d.Skew)
+	}
+}
+
+// inputSurfaces are the responses a finding from Events or a CRD may reach.
+var inputSurfaces = []string{"/api/v1/installs", ruleBase + "/overview", ruleBase + "/health", ruleBase + "/findings?limit=200",
+	ruleBase + "/findings?view=groups&limit=200", ruleBase + "/findings?limit=200&namespaces=" + ns0, ruleBase + "/diagnostics",
+	ruleBase + "/processes?limit=200", ruleBase + "/gateways?limit=200", ruleBase + "/gateways?limit=200&sort=health",
+	ruleBase + "/gateways/" + ns0 + "/" + testutil.ScaleGateway(0), ruleBase + "/routes?limit=200", ruleBase + "/paths?limit=200"}
+
+// noCRDs leaves the CRD watch on with no Gateway API CRDs.
+func noCRDs(s ruleSnap) { s.CRDs = nil }
+
+// inputWorlds serve the probing world, without CRDs, plus each of extras, as built with opts.
+func inputWorlds(t *testing.T, extras []func(ruleSnap), opts ...api.HandlerOption) []*httptest.Server {
+	t.Helper()
+	var out []*httptest.Server
+	for _, x := range extras {
+		out = append(out, ruleServe(t, worldPlus(t, func(s ruleSnap) { probing(s); noCRDs(s); x(s) }, ruleChange{name: "base"}), opts...))
+	}
+	return out
+}
+
+// eventWorlds have no Events, probe failures, and capped Events; crdWorlds no CRDs, then the base world's.
+func eventWorlds(t *testing.T, opts ...api.HandlerOption) []*httptest.Server {
+	quiet := func(s ruleSnap) { s.EventDeltas, s.EventHistoryUnknown = nil, nil }
+	return inputWorlds(t, []func(ruleSnap){quiet, func(ruleSnap) {}, func(s ruleSnap) { s.EventsCapped = true }}, opts...)
+}
+
+func crdWorlds(t *testing.T, opts ...api.HandlerOption) []*httptest.Server {
+	crds := ruleSnapshot(t).CRDs
+	return inputWorlds(t, []func(ruleSnap){func(ruleSnap) {}, func(s ruleSnap) { s.CRDs = crds }}, opts...)
+}
+
+// inputDiffs are the surfaces, and the detail of the first code finding the
+// full viewer sees in srvs[1], that differ for user between srvs[0] and each other world.
+func inputDiffs(t *testing.T, srvs []*httptest.Server, user, code string) []string {
+	t.Helper()
+	var id string
+	for _, f := range decode[api.Page[api.FindingRow]](t, srvs[1], fullUser, ruleBase+"/findings?limit=200").Items {
+		if f.Code == code && id == "" {
+			id = f.ID
+		}
+	}
+	if id == "" {
+		t.Fatalf("the full viewer sees no %s; the fixture does not reach it", code)
+	}
+	var out []string
+	for _, p := range append(slices.Clone(inputSurfaces), ruleBase+"/findings/"+url.PathEscape(id)) {
+		c0, b0 := fetch(t, srvs[0], user, p)
+		for _, srv := range srvs[1:] {
+			if c, b := fetch(t, srv, user, p); c != c0 || b != b0 {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// A full reader who may not list Events or CRDs gets nothing from them: no
+// probe or CRD finding, state, count, group or check detail moves with them
+// (D-110), while the full viewer sees them. With the check off, they reach the full reader.
+func TestFullReadWithoutInputsSeesNoneOfThem(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		code  string
+		world func(*testing.T, ...api.HandlerOption) []*httptest.Server
+	}{{"Events", health.CodeProbeFailing, eventWorlds}, {"CRDs", health.CodeVersionSkew, crdWorlds}} {
+		t.Run(c.name, func(t *testing.T) {
+			srvs := c.world(t)
+			if d := inputDiffs(t, srvs, fullNoInputs, c.code); len(d) > 0 {
+				t.Errorf("%s reach the full reader without access on %v", c.name, d)
+			}
+			if d := inputDiffs(t, srvs, fullUser, c.code); !slices.Contains(d, ruleBase+"/findings?limit=200") {
+				t.Errorf("the full viewer sees %s only on %v", c.name, d)
+			}
+			if d := inputDiffs(t, c.world(t, api.WithProjectionStepOff("findings")), fullNoInputs, c.code); len(d) == 0 {
+				t.Errorf("with the check off, %s still reach no surface: the test is vacuous", c.name)
+			}
+		})
+	}
+	// Without probe failures or CRDs, both full readers read the same, but for the probe check's result.
+	srv := eventWorlds(t)[0]
+	for _, p := range inputSurfaces {
+		if p == ruleBase+"/health" || p == ruleBase+"/diagnostics" {
+			continue
+		}
+		if _, a := fetch(t, srv, fullUser, p); a != func() string { _, b := fetch(t, srv, fullNoInputs, p); return b }() {
+			t.Errorf("%s differs between the full readers in the quiet world", p)
+		}
 	}
 }

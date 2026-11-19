@@ -330,6 +330,17 @@ func (v *view) readsInput(gk objects.GroupKind, named *objects.Ref) bool {
 	return v.asksList(gk, "")
 }
 
+// eventKind is the Kubernetes Event kind.
+var eventKind = objects.GroupKind{Kind: "Event"}
+
+// eventsWithheld and crdsWithheld report whether v has the full read but may
+// not list Events or CRDs, so findings from them are left out as a projection leaves them out (D-110).
+func (v *view) eventsWithheld() bool { return !v.projects() && !v.readsInput(eventKind, nil) }
+func (v *view) crdsWithheld() bool   { return !v.projects() && !v.readsInput(crdKind, nil) }
+
+// withholds reports whether v leaves findings out of the full read's report.
+func (v *view) withholds() bool { return v.eventsWithheld() || v.crdsWithheld() }
+
 // asksList is canList without the full read's answer.
 func (v *view) asksList(gk objects.GroupKind, namespace string) bool {
 	q := ListQuery{Kind: gk, Namespace: namespace}
@@ -500,7 +511,10 @@ func (v *view) noDelegation() bool { return v.secure && v.off&stepDelegation == 
 // and outside secure mode, where D-013's restricted rows stay; else when
 // f.ShownTo the caller.
 func (v *view) shown(f *health.Finding) bool {
-	return !v.projects() || f.ShownTo(v)
+	if !v.projects() {
+		return (!f.FromEvents() || !v.eventsWithheld()) && (!f.OnCRD() || !v.crdsWithheld())
+	}
+	return f.ShownTo(v)
 }
 
 // omits reports whether v leaves out what D-013 shows as a placeholder:
@@ -520,6 +534,9 @@ func (v *view) viewerIn(i *engine.InstallModel, scope []string) explore.Viewer {
 	vw := explore.Viewer{Visible: v.visible(), NoDelegation: v.noDelegation()}
 	if v.secure && v.off&stepRowState == 0 && !v.readsAll() {
 		vw.Shown, vw.Unknown, vw.Perms = v.shown, requiredNotOK(health.Project(health.Report{Checks: i.Health.Checks}, v).Checks), incompletePermissions{v}
+	} else if v.withholds() {
+		// Row states leave out the withheld findings, as the report does.
+		vw.Shown, vw.Unknown = v.shown, requiredNotOK(v.report(i).Checks)
 	}
 	return vw
 }
@@ -603,9 +620,9 @@ func requiredNotOK(cs []health.CheckResult) bool {
 
 // report is install i's report as the caller of v sees it: the model's under
 // the full read and outside secure mode, else health.Project's, grouped by
-// v.diagnosis. It is memoised per request.
+// v.diagnosis. A full reader who may not list Events or CRDs gets it without findings from them. It is memoised per request.
 func (v *view) report(i *engine.InstallModel) health.Report {
-	if !v.projects() {
+	if !v.projects() && !v.withholds() {
 		return i.Health
 	}
 	return v.projection(i).rep
@@ -615,7 +632,7 @@ func (v *view) report(i *engine.InstallModel) health.Report {
 // under the full read and outside secure mode, else one built over v.report
 // that only names causes and affected objects the caller may read.
 func (v *view) diagnosis(i *engine.InstallModel) *diagnose.Diagnosis {
-	if !v.projects() {
+	if !v.projects() && !v.withholds() {
 		return diagnosis(i)
 	}
 	return v.projection(i).diag
@@ -636,6 +653,12 @@ func (v *view) projection(i *engine.InstallModel) *projection {
 
 // project is rep, a report of install i, projected for the caller of v and grouped.
 func (v *view) project(i *engine.InstallModel, rep health.Report) *projection {
+	if !v.projects() {
+		// A full reader who may not list Events or CRDs (D-110).
+		rep = health.Withhold(rep, v.eventsWithheld(), v.crdsWithheld())
+		d := diagnose.Build(&rep, diagnose.Input{Install: i.Resolved, Owned: i.Owned, Views: decoderOf(i)}, diagnose.Families())
+		return &projection{rep: rep, diag: d}
+	}
 	v.prefetchFindings(rep.Findings, nil)
 	rep = health.Project(rep, v)
 	d := diagnose.Build(&rep, diagnose.Input{Install: i.Resolved, Owned: i.Owned, Views: decoderOf(i), Readable: v.can}, diagnose.Families())
@@ -653,7 +676,7 @@ func (v *view) findingsIn(i *engine.InstallModel, scope []string, groups bool) (
 	}
 	rep := i.Health
 	rep.Findings = slices.DeleteFunc(slices.Clone(rep.Findings), func(f health.Finding) bool { return !findingInScope(&f, scope) })
-	if v.projects() {
+	if v.projects() || v.withholds() {
 		p := v.project(i, rep)
 		return p.rep.Findings, p.diag
 	}

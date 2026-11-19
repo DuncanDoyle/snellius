@@ -250,11 +250,19 @@ func TestCommitCheckLimit(t *testing.T) {
 	}
 }
 
-// Under a full read no check is made and every answer is AllowAll's byte for byte.
+// inputsAuthz is fullAuthz that may also list the inputs the full-read proof leaves out.
+type inputsAuthz struct{ *fullAuthz }
+
+func (inputsAuthz) CanList(_ *http.Request, gk objects.GroupKind, ns string) (bool, error) {
+	return ns == "" && (gk == eventKind || gk == crdKind), nil
+}
+
+// Under a full read with the inputs it leaves out, no object check is made
+// and every answer is AllowAll's byte for byte.
 func TestCommitFullReadSkipsChecks(t *testing.T) {
 	e, _, _ := startWith(t, setup{}, visWorld()...)
 	full := &fullAuthz{errAuthz: &errAuthz{deny: hiddenSome}, all: true}
-	srv, ref := secureServer(t, e, full), secureServer(t, e, AllowAll{})
+	srv, ref := secureServer(t, e, inputsAuthz{full}), secureServer(t, e, AllowAll{})
 	for _, p := range append(slices.Clone(visRequests), listBase+"/paths", listBase+"/backends", backendsURL+"/gateway.kgateway.dev/Backend/shop/be-x") {
 		gc, _, got := fetchRaw(t, srv, p)
 		wc, _, want := fetchRaw(t, ref, p)
