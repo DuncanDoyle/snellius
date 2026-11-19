@@ -1,6 +1,6 @@
 import type { SerializedStyles } from "@emotion/react";
 import styled from "@emotion/styled";
-import { type ComponentType, type ReactNode, useMemo } from "react";
+import { type ComponentType, type ReactNode, useMemo, useState } from "react";
 import { BrowserRouter, Route, Routes, useMatch } from "react-router-dom";
 import { useMeta } from "../api/hooks";
 import { useSignInBlock } from "../auth/AuthGate";
@@ -26,6 +26,7 @@ import { Header } from "./Header";
 import { ModeBanner } from "./ModeBanner";
 import { ABOUT_PATH } from "./paths";
 import { RootRedirect } from "./RootRedirect";
+import { SignInIntro, shouldPlayIntro } from "./SignInIntro";
 import { kubernetesVocabulary } from "./vocabulary";
 
 // region Styles
@@ -63,6 +64,8 @@ interface ShellProps {
 
 /** The application shell. Upstream and downstream apps render this with their own extension. */
 export function Shell({ extension = noExtension, pages, stylesOverride }: ShellProps) {
+  // Read before the router mounts, which would otherwise keep the marker in its location.
+  const [intro] = useState(shouldPlayIntro);
   // The server's packs: undefined while /meta loads, null from an older server, which runs them all.
   const { data: meta } = useMeta();
   const served = meta ? (meta.packs?.join("\n") ?? null) : undefined;
@@ -160,6 +163,7 @@ export function Shell({ extension = noExtension, pages, stylesOverride }: ShellP
               </main>
             </Root>
           </BrowserRouter>
+          {intro && <SignInIntro />}
         </ThemeProvider>
       </CorePagesContext.Provider>
     </ShellExtensionContext.Provider>
