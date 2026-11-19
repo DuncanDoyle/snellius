@@ -37,3 +37,28 @@ I reviewed the requested design, plan, decisions, sub-phase records and earlier 
 | PH4 | P2 design §12 and the plan disagree with the chart and code | accept | design.md and implementation-plan.md corrected: fixed 5-minute window, extra audiences as API-server setup, burst 500, one replica in both modes, only the binary refuses host networking |
 | PH5 | P3 the browser e2e signs in only alice | accept | Stabilization round: alice and bob in Playwright on secure kind |
 | PH6 | P4 extensions get the raw publication beside per-object helpers | defer | Carry-over for Phase 8 (inherited policies) and Phase 9 (winning-route predictions) |
+
+## Check of the stabilization round (4df2d6e..93218be)
+
+- **PH1 — Fixed for the original 404→200 leak.** Backend YAML now requires a list-readable consumer for a restricted viewer. Overview and extension Backend counts use readable consumers. Hidden referrers still add scan work and can trigger cold SARs, so latency can vary. A cap-induced 503 falls under D-112’s accepted exception. [link.go:93](../../../../pkg/api/link.go:93) · [handlers.go:307](../../../../pkg/api/handlers.go:307) · [decisions.md:1642](../../../../docs/decisions.md:1642)
+- **PH2 — Partly fixed.** Probe fields require cluster-wide Events `list`. ListenerSet CRD fields require CRD `list` or named Gateway CRD access. Remaining leaks are below. [processes.go:165](../../../../pkg/api/processes.go:165) · [details.go:423](../../../../pkg/api/details.go:423)
+- **PH3 — Fixed.** The audit wraps the gate, records refused 401s, and preserves session attribution for admitted requests. I found no secure API bypass through the main listener, extension mounts, auth routes, or probe listener. [handlers.go:110](../../../../pkg/api/handlers.go:110) · [audit.go:302](../../../../pkg/api/audit.go:302) · [app.go:583](../../../../pkg/app/app.go:583)
+- **PH5 — Fixed.** Secure-kind Playwright signs in both users and checks Alice’s rendered routes and Bob’s empty table and hidden-details notice. [restricted.spec.ts:17](../../../../web/e2e/restricted.spec.ts:17) · [e2e.yaml:103](../../../../.github/workflows/e2e.yaml:103)
+
+### Remaining findings
+
+- **P1 — Controller probe failures still change YAML admission.** KGWUI-020 can be the only finding admitting a controller Deployment. `findingShown` accepts any finding under the full-read proof, so Deployment YAML and its breadcrumb link can appear for a viewer denied Events. [process.go:79](../../../../pkg/health/process.go:79) · [admit.go:94](../../../../pkg/explore/admit.go:94) · [link.go:122](../../../../pkg/api/link.go:122)
+- **P1 — CRD presence can still change check text.** With an unknown or unmapped controller version, the CRD comparison note appears only when the CRD slice is non-nil. Withholding removes CRD findings but preserves that note in `/health` and `/diagnostics`. [skew.go:127](../../../../pkg/health/skew.go:127) · [skew.go:351](../../../../pkg/health/skew.go:351) · [rollup.go:122](../../../../pkg/health/rollup.go:122)
+- **P2 — Recompute timestamps still expose hidden input activity.** `/installs` `computedAt` and per-check timestamps retain model times for these readers. D-109 permits response `collectedAt` to move. [handlers.go:348](../../../../pkg/api/handlers.go:348) · [diagnostics.go:461](../../../../pkg/api/diagnostics.go:461)
+- **P3 — Browser assertions are loose.** Alice’s namespace check matches anywhere in the row, and the signal checks cover only headers. Assert the route-name cells and a rendered signal value. [restricted.spec.ts:22](../../../../web/e2e/restricted.spec.ts:22)
+
+Finding detail, groups, counts, search, overview tints, diagnostic rollups, and extension `Viewer.Shown` use filtered findings. With both input grants, the precomputed paths remain available. I found no payload regression there. Read-only source review. No files edited or tests rerun.
+### Triage (stabilization check)
+
+| # | Finding | Verdict | Resolution |
+|---|---|---|---|
+| Q1 | P1 a probe finding can admit a controller Deployment for a full reader without Events | accept | Stabilization round 2 |
+| Q2 | P1 CRD presence changes the skew check text | accept | Stabilization round 2 |
+| Q3 | P2 recompute timestamps move with hidden Events or CRD activity | accept | Stabilization round 2: D-109's treatment |
+| Q4 | P3 browser assertions are loose | accept | Stabilization round 2 |
+| PH2′ | partly fixed | accept | Closed by Q1–Q3 |

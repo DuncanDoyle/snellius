@@ -1720,3 +1720,12 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** Secure mode always builds the SAR authoriser. A registered authoriser becomes a policy over it (`api.Narrowed`): every decision (named, list, batch, full read) needs both to allow; admission and caching stay SAR's. A policy that cannot answer list questions denies them. Local mode is unchanged. Extension helpers (`ViewerOf`, `Visible`) deny everything when given no authoriser in secure mode, including an extension mounted on its own (`Registry.Mounts` without one). A request keeps one full-read answer per authoriser, so one authoriser's answer never stands in for another's.
 
 **Consequences:** A downstream build can restrict what users see further, never widen it. A policy without list support hides everything gated on list permission (for example Pod and Event checks); a downstream build that wants those must answer list questions.
+
+## D-120 — The full read does not cover Events or CRDs (2026-11-19, Phase 7)
+**Status:** decided by the author (user away; release approved) to fix the phase review's P1s (`phases/phase-7/reviews/phase-codex.md`, PH2, Q1–Q3).
+
+**Context:** The full-read proof (D-100 item 3) leaves out Events and CustomResourceDefinitions, so it stays cheap. But probe facts (KGWUI-020, the probe check) come from Events, and CRD bundle skew (KGWUI-022, the skew check) from CRDs. A full reader without access to them could see those facts, or see pages change when they changed, against D-085 and D-110.
+
+**Decision:** Under the full read, Snellius also asks cluster-wide `list` on Events and on CRDs (one cached check each). A reader without them gets what a restricted viewer gets for those inputs: no KGWUI-020 and no KGWUI-022 on a CRD, the probe check reads "Not checked", check text and admission do not depend on them, and timestamps follow D-109.
+
+**Consequences:** Full-read `/routes` costs 24 cold checks instead of 22. A full reader needs cluster-wide `list` on CRDs to see CRD bundle skew; the README's RBAC section says so.
