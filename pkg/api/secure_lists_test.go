@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -489,30 +490,95 @@ func TestProbeFactsNeedEventsList(t *testing.T) {
 var inputSurfaces = []string{"/api/v1/installs", ruleBase + "/overview", ruleBase + "/health", ruleBase + "/findings?limit=200",
 	ruleBase + "/findings?view=groups&limit=200", ruleBase + "/findings?limit=200&namespaces=" + ns0, ruleBase + "/diagnostics",
 	ruleBase + "/processes?limit=200", ruleBase + "/gateways?limit=200", ruleBase + "/gateways?limit=200&sort=health",
-	ruleBase + "/gateways/" + ns0 + "/" + testutil.ScaleGateway(0), ruleBase + "/routes?limit=200", ruleBase + "/paths?limit=200"}
+	ruleBase + "/gateways/" + ns0 + "/" + testutil.ScaleGateway(0), ruleBase + "/routes?limit=200", ruleBase + "/paths?limit=200",
+	ctrlYAML}
+
+// ctrlYAML is the controller Deployment's YAML, which only a finding admits.
+const ctrlYAML = ruleBase + "/resources/apps/Deployment/kgw/kgateway"
 
 // noCRDs leaves the CRD watch on with no Gateway API CRDs.
 func noCRDs(s ruleSnap) { s.CRDs = nil }
 
-// inputWorlds serve the probing world, without CRDs, plus each of extras, as built with opts.
-func inputWorlds(t *testing.T, extras []func(ruleSnap), opts ...api.HandlerOption) []*httptest.Server {
+// ctrlProbing gives the controller Pod a readiness probe that Events report failing.
+func ctrlProbing(s ruleSnap) {
+	for _, p := range s.Pods {
+		if p.Namespace == "kgw" && p.Name == "kgateway-0" {
+			p.Spec.Containers = slices.Clone(p.Spec.Containers)
+			p.Spec.Containers[0].ReadinessProbe = &corev1.Probe{}
+			s.EventDeltas[p.UID] = []cache.Observation{{At: testutil.Now.Add(-time.Minute), Reason: "Unhealthy", Delta: 3}}
+		}
+	}
+}
+
+// unmapped labels the controller with a minor no Gateway API bundle is mapped
+// to, so the skew check notes that while there are CRDs to compare.
+func unmapped(s ruleSnap) {
+	d := s.deployment("kgw", "kgateway")
+	d.Labels = maps.Clone(d.Labels)
+	if d.Labels == nil {
+		d.Labels = map[string]string{}
+	}
+	d.Labels["app.kubernetes.io/version"] = "9.9.0"
+}
+
+// inputWorlds serve the probing world with a probing controller and no CRDs,
+// then each of cs, as built with opts.
+func inputWorlds(t *testing.T, cs []ruleChange, opts ...api.HandlerOption) []*httptest.Server {
 	t.Helper()
 	var out []*httptest.Server
-	for _, x := range extras {
-		out = append(out, ruleServe(t, worldPlus(t, func(s ruleSnap) { probing(s); noCRDs(s); x(s) }, ruleChange{name: "base"}), opts...))
+	for _, c := range cs {
+		out = append(out, ruleServe(t, worldPlus(t, func(s ruleSnap) { probing(s); ctrlProbing(s); noCRDs(s) }, c), opts...))
 	}
 	return out
 }
 
-// eventWorlds have no Events, probe failures, and capped Events; crdWorlds no CRDs, then the base world's.
-func eventWorlds(t *testing.T, opts ...api.HandlerOption) []*httptest.Server {
-	quiet := func(s ruleSnap) { s.EventDeltas, s.EventHistoryUnknown = nil, nil }
-	return inputWorlds(t, []func(ruleSnap){quiet, func(ruleSnap) {}, func(s ruleSnap) { s.EventsCapped = true }}, opts...)
+// quietEvents drops the probe failures, probeEvents brings them back, and
+// mixedCRDs adds a CRD off the others' bundle.
+func quietEvents(s ruleSnap) { s.EventDeltas, s.EventHistoryUnknown = nil, nil }
+
+func probeEvents(s ruleSnap) {
+	w := ruleSnapshot(s.t)
+	probing(w)
+	ctrlProbing(w)
+	s.EventDeltas, s.EventHistoryUnknown = w.EventDeltas, w.EventHistoryUnknown
 }
 
+func mixedCRDs(s ruleSnap) {
+	s.CRDs = append(ruleSnapshot(s.t).CRDs, cache.CRDMeta{Name: "tlsroutes." + objects.GatewayAPIGroup, Group: objects.GatewayAPIGroup, BundleVersion: "v1.3.0", Channel: "experimental"})
+}
+
+// eventWorlds have no Events, probe failures, and capped Events.
+func eventWorlds(t *testing.T, opts ...api.HandlerOption) []*httptest.Server {
+	return inputWorlds(t, []ruleChange{{name: "quiet", apply: quietEvents}, {name: "base"}, {name: "capped", apply: func(s ruleSnap) { s.EventsCapped = true }}}, opts...)
+}
+
+// crdWorlds, on an unmapped controller, have no CRDs and mixed bundles.
 func crdWorlds(t *testing.T, opts ...api.HandlerOption) []*httptest.Server {
-	crds := ruleSnapshot(t).CRDs
-	return inputWorlds(t, []func(ruleSnap){func(ruleSnap) {}, func(s ruleSnap) { s.CRDs = crds }}, opts...)
+	return inputWorlds(t, []ruleChange{{name: "none", apply: unmapped}, {name: "crds", apply: func(s ruleSnap) { unmapped(s); mixedCRDs(s) }}}, opts...)
+}
+
+// inputRecompute serves, on one engine over the inputWorlds base plus base, a
+// confirm tick at the last step and then a recompute there after change.
+func inputRecompute(t *testing.T, base, change func(ruleSnap)) (before, after *httptest.Server) {
+	t.Helper()
+	snap := func() ruleSnap {
+		s := ruleSnapshot(t)
+		probing(s)
+		ctrlProbing(s)
+		noCRDs(s)
+		base(s)
+		return s
+	}
+	r := newRuleEngine(t, snap(), ruleChange{name: "base"})
+	for _, at := range ruleSteps[:len(ruleSteps)-1] {
+		r.compute(at)
+	}
+	cur := r.e.Current()
+	before = ruleServe(t, confirmed{e: r.e, p: &engine.Published{Model: cur.Model, Source: cur.Source, ConfirmedAt: testutil.Now}})
+	r.s = snap()
+	change(r.s)
+	r.compute(0)
+	return before, ruleServe(t, r.e)
 }
 
 // inputDiffs are the surfaces, and the detail of the first code finding the
@@ -549,17 +615,49 @@ func TestFullReadWithoutInputsSeesNoneOfThem(t *testing.T) {
 		name  string
 		code  string
 		world func(*testing.T, ...api.HandlerOption) []*httptest.Server
-	}{{"Events", health.CodeProbeFailing, eventWorlds}, {"CRDs", health.CodeVersionSkew, crdWorlds}} {
+		// reach are surfaces the change must reach for the full viewer.
+		reach []string
+	}{
+		{"Events", health.CodeProbeFailing, eventWorlds, []string{ruleBase + "/findings?limit=200", ctrlYAML}},
+		// The skew check's text names the unmapped minor only while there are CRDs to compare.
+		{"CRDs", health.CodeVersionSkew, crdWorlds, []string{ruleBase + "/findings?limit=200", ruleBase + "/health"}},
+	} {
 		t.Run(c.name, func(t *testing.T) {
 			srvs := c.world(t)
 			if d := inputDiffs(t, srvs, fullNoInputs, c.code); len(d) > 0 {
 				t.Errorf("%s reach the full reader without access on %v", c.name, d)
 			}
-			if d := inputDiffs(t, srvs, fullUser, c.code); !slices.Contains(d, ruleBase+"/findings?limit=200") {
-				t.Errorf("the full viewer sees %s only on %v", c.name, d)
+			d := inputDiffs(t, srvs, fullUser, c.code)
+			for _, p := range c.reach {
+				if !slices.Contains(d, p) {
+					t.Errorf("the full viewer sees %s only on %v, not on %s", c.name, d, p)
+				}
 			}
 			if d := inputDiffs(t, c.world(t, api.WithProjectionStepOff("findings")), fullNoInputs, c.code); len(d) == 0 {
 				t.Errorf("with the check off, %s still reach no surface: the test is vacuous", c.name)
+			}
+		})
+	}
+	// A recompute for arriving probe failures or CRDs leaves no timestamp the
+	// full reader without them could tell apart from a confirm tick (D-109).
+	for _, c := range []struct {
+		name         string
+		base, change func(ruleSnap)
+	}{{"Events", quietEvents, probeEvents}, {"CRDs", unmapped, mixedCRDs}} {
+		t.Run(c.name+" recompute", func(t *testing.T) {
+			before, after := inputRecompute(t, c.base, c.change)
+			var moved bool
+			for _, p := range inputSurfaces {
+				_, b := fetch(t, before, fullNoInputs, p)
+				if _, a := fetch(t, after, fullNoInputs, p); a != b {
+					t.Errorf("%s moves for the full reader without %s after a recompute:\n%.400s\n  vs %.400s", p, c.name, b, a)
+				}
+				_, fb := fetch(t, before, fullUser, p)
+				_, fa := fetch(t, after, fullUser, p)
+				moved = moved || p == "/api/v1/installs" && fa != fb
+			}
+			if !moved {
+				t.Error("the recompute moves nothing on /installs for the full viewer: the test is vacuous")
 			}
 		})
 	}

@@ -394,6 +394,9 @@ type CheckResult struct {
 	Collection bool `json:"-"`
 	// fixed is a collection result's fixed Error, for Project.
 	fixed string
+	// crdNoted marks a Detail with a CRD comparison note; noCRDNote is that Detail without it, for Withhold.
+	crdNoted  bool
+	noCRDNote string
 }
 
 // Hold is what a check waits on before it decides: counts and a time, never

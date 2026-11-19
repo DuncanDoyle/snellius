@@ -545,11 +545,11 @@ func (v *view) viewerIn(i *engine.InstallModel, scope []string) explore.Viewer {
 var endpointSlices = objects.GroupKind{Group: "discovery.k8s.io", Kind: "EndpointSlice"}
 
 // projectInput is what the caller of v's path projection of install i in p
-// reads: for a viewer without the full read, endpoint summaries carry the
-// confirmation time, never the time of the last recompute (D-109).
+// reads: for a viewer without the full read, or without Events or CRDs,
+// endpoint summaries carry the confirmation time, never the time of the last recompute (D-109).
 func (v *view) projectInput(p *engine.Published, i *engine.InstallModel) paths.ProjectInput {
 	in := projectInput(p, i)
-	if v.projects() {
+	if v.projects() || v.withholds() {
 		in.ReadAt = p.ConfirmedAt
 	}
 	return in
@@ -564,10 +564,10 @@ func (v *view) visibleRows(t *paths.Topology, rows func(paths.Row) bool) func(pa
 // scopedFilter is what the caller of v may see of install i's path projection,
 // projecting only the rows of t that rows picks (all when nil): finding signals
 // of shown findings only, and endpoint counts only where it may list
-// EndpointSlices. Nil when v does not project. Findings and the picked rows'
+// EndpointSlices. Nil when v neither projects nor withholds inputs. Findings and the picked rows'
 // EndpointSlice checks are prefetched for those rows only.
 func (v *view) scopedFilter(i *engine.InstallModel, t *paths.Topology, rows func(paths.Row) bool) *paths.ProjectionFilter {
-	if !v.projects() {
+	if !v.projects() && !v.withholds() {
 		return nil
 	}
 	var want func(objects.Ref) bool

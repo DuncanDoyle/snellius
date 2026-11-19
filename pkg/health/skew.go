@@ -127,6 +127,7 @@ func (c skewCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 	if crds != nil {
 		cf, note := crdSkew(in, crds, ctrl)
 		if note != "" {
+			res.crdNoted, res.noCRDNote = true, strings.Join(notes, "; ")
 			notes = append(notes, note)
 		}
 		fs = append(fs, cf...)

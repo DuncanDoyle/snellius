@@ -121,7 +121,8 @@ func (l linker) admitWith(ref objects.Ref, named bool) Link {
 // is read by name, its basis as population members.
 func (l linker) findingShown(ref objects.Ref, named bool) bool {
 	if !l.v.projects() {
-		return true
+		// A full reader without Events or CRDs is not shown the findings from them.
+		return !l.v.withholds() || l.i.Index.FindingShown(ref, l.v.shown)
 	}
 	var rd health.Readable = l.v
 	if named {

@@ -118,7 +118,7 @@ func (f *Finding) OnCRD() bool {
 // Withhold is rep for a full reader who may not list Events or CRDs, as
 // events and crds say (D-110): without findings from them and, for Events,
 // the probe check "Not checked" unless a collection failure, as Project shows
-// them; counted and rolled up again.
+// them, and for CRDs no CRD comparison note; counted and rolled up again.
 func Withhold(rep Report, events, crds bool) Report {
 	out := rep
 	out.Findings = slices.DeleteFunc(slices.Clone(rep.Findings), func(f Finding) bool { return events && f.FromEvents() || crds && f.OnCRD() })
@@ -130,6 +130,9 @@ func Withhold(rep Report, events, crds bool) Report {
 	for i, c := range out.Checks {
 		if events && c.Name == probesCheckName && !c.Collection {
 			out.Checks[i] = CheckResult{Name: c.Name, Required: c.Required, CollectedAt: c.CollectedAt, OK: true, NotAssessed: true}
+		}
+		if crds && c.crdNoted {
+			out.Checks[i].Detail, out.Checks[i].crdNoted = c.noCRDNote, false
 		}
 	}
 	out.State = RollUp(out.Findings, out.Checks)

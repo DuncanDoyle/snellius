@@ -456,10 +456,10 @@ func xdsUnavailable(checks []health.CheckResult) bool {
 }
 
 // stampChecks gives each of cs, results already in wire form, the response's
-// collectedAt when v projects: a result's own stamp is when the last compute
-// ran, which a hidden change may have triggered (D-085).
+// collectedAt when v projects or withholds inputs: a result's own stamp is
+// when the last compute ran, which a hidden change may have triggered (D-085, D-109).
 func (v *view) stampChecks(cs []health.CheckResult, collectedAt time.Time) {
-	if !v.projects() {
+	if !v.projects() && !v.withholds() {
 		return
 	}
 	for k := range cs {

@@ -346,8 +346,8 @@ func (h *handler) installs(w http.ResponseWriter, r *http.Request) {
 	}
 	out, v := []InstallSummary{}, h.view(r)
 	computed := wireTime(m.ComputedAt)
-	if v.projects() && confirmed != nil {
-		// When the model was computed is when the cluster last changed, hidden objects included (D-085).
+	if (v.projects() || v.withholds()) && confirmed != nil {
+		// When the model was computed is when the cluster last changed, hidden objects and inputs included (D-085).
 		computed = *confirmed
 	}
 	for k := range m.Installs {
