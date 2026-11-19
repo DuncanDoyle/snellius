@@ -477,6 +477,7 @@ Saved theme choices carry over. Finding codes keep the `KGWUI-` prefix, so API v
 
 ### v0.8.2
 
+- **Intro in local mode.** Local mode has no sign-in, so the intro plays on the first page load in each browser tab instead. A reload in the same tab does not replay it.
 - **Sign-in intro.** The finished prism and name now hold for about 0.7 s before the intro fades, and the prism's outline closes at its apex. No values, flags or API fields change.
 
 ### v0.8.1
