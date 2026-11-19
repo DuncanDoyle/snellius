@@ -16,6 +16,8 @@ const SKIP_FADE_MS = 150;
 const CONSUMED_KEYS = new Set([" ", "Enter"]);
 
 const draw = keyframes`from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; }`;
+// Once drawn, the outline is one solid stroke, so the dash's ends leave no notch at the apex.
+const solid = keyframes`to { stroke-dasharray: none; }`;
 // A line stays hidden until it draws, or its round cap shows as a dot.
 const trace = keyframes`from { stroke-dashoffset: 1; visibility: visible; } to { stroke-dashoffset: 0; visibility: visible; }`;
 const appear = keyframes`from { opacity: 0; } to { opacity: 1; }`;
@@ -59,7 +61,7 @@ const Optics = styled.svg`
   .ray, .ray-halo { animation-duration: 0.36s; animation-timing-function: ${easeOut}; animation-delay: calc(0.64s + var(--i) * 0.09s); }
   .ray-halo { stroke: var(--band); stroke-width: 30; opacity: 0.32; }
   .ray { stroke: ${(p) => (p.theme.mode === "dark" ? "var(--bright)" : "var(--band)")}; animation-delay: calc(0.66s + var(--i) * 0.09s); }
-  .prism-outline { stroke: ${(p) => ink[p.theme.mode].line}; stroke-dasharray: 1; animation: ${draw} 0.47s ${easeInOut} 0.02s both; }
+  .prism-outline { stroke: ${(p) => ink[p.theme.mode].line}; stroke-dasharray: 1; animation: ${draw} 0.47s ${easeInOut} 0.02s both, ${solid} 0s linear 0.49s forwards; }
   .prism-fill, .prism-eye { fill: ${(p) => ink[p.theme.mode].fill}; animation: ${appear} 0.26s ${easeOut} 0.25s both; }
   .prism-eye { stroke: ${(p) => ink[p.theme.mode].line}; }
   .prism-band { animation: ${appear} 0.17s ${easeOut} both; animation-delay: calc(0.58s + var(--i) * 0.047s); }
