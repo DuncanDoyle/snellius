@@ -3,6 +3,7 @@ Scope: design (Phase 8, design + implementation plan)
 Dimensions: architecture (design)
 Diff: n/a (design review of the uncommitted draft at b01b677)
 Timing: on time
+Note: program commit `429b2a2` cited below is `bd1f17d` after a history rewrite of kgateway-tooling main (2026-11-22).
 
 I would revise the Phase 8 design before approving implementation. The declared-policy view can ship without a resolver. The draft still needs to close a target-existence leak and define a provenance contract that kgwctl can consume. Phase 12 also needs a visibility rule for the runtime chain itself.
 

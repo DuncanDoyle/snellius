@@ -11,7 +11,7 @@ Author: claude (Opus 5.5)
 Sub-phase: none
 
 ## Program
-Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md (read 2026-11-22 at `429b2a2` on `duncandoyle/controllerSemantics`, pending the owner's merge: P-008, P-009, M-1, M-2, E7, E13, E14).
+Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md (read 2026-11-22 at `bd1f17d`; merged on main at `090fd7e`, which adds M-4 and U12: P-008, P-009, M-1, M-2, E7, E13, E14).
 Waiting on: nothing for 8.1 and 8.2. Phase 12 needs xdsview `v0.5.0` (E13).
 Provides: E7 to kgwctl Phase 6, the declared-policy model `pkg/policy` (D-123). At phase close: update E7, M-1 (rule-1 entry, rule-2 status, D-128) and M-2 in the program file; notify kgwctl.
 Consumers: E2, E3, E8 delivered through `v0.8.0` (kgwctl#3 … #8).
