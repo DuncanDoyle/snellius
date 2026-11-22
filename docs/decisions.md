@@ -1729,3 +1729,71 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** Under the full read, Snellius also asks cluster-wide `list` on Events and on CRDs (one cached check each). A reader without them gets what a restricted viewer gets for those inputs: no KGWUI-020 and no KGWUI-022 on a CRD, the probe check reads "Not checked", check text and admission do not depend on them, and timestamps follow D-109. Collection status is the exception, as for every viewer: a failing or recovered Events or CRD watch still shows in the check's availability and in `/meta`.
 
 **Consequences:** Full-read `/routes` costs 24 cold checks instead of 22. A full reader needs cluster-wide `list` on CRDs to see CRD bundle skew; the README's RBAC section says so.
+
+## D-121 — Phase 8 is declared policy visibility; Snellius never resolves policy (2026-11-22, Phase 8)
+**Status:** proposed (Phase 8 design §12), from the user's Phase 8 brief (2026-11-22) and program P-008.
+
+**Context:** The roadmap promised "the direct, inherited and effective policy for a route, with provenance" and merge and override conflicts. kgateway reports policy status per Gateway, not per route, and never names the winning policy (Phase 8 design §4). Its only per-field provenance is level-local `merge.*` xDS metadata. The user: "Snellius must NEVER become a second implementation of kgateway's policy resolution and translation logic."
+
+**Decision:** Phase 8 shows declared policy (targets, annotations, spec sections) and controller-reported status, each labelled with its source. No code infers attachment, inheritance, precedence, merge, override or conflicts. The term "effective policy" is not used.
+
+**Supersedes:** the roadmap's Phase 8 scope text; D-005's consequence "effective policy must build on policy ancestor status". The rest of D-005 stands.
+
+**Consequences:** "Which policies apply to route R" stays unanswered until the controller reports it (design §10). The gap is raised upstream through the program (U-asks), when the owner decides.
+
+## D-122 — Every policy value carries its source (2026-11-22, Phase 8)
+**Status:** proposed (Phase 8 design §3.2; program P-008 point 4).
+
+**Decision:** One of `declared`, `controller-reported`, `controller-reported-contribution`, `inferred`, `unknown`, on every value in the policy model, API and UI. Raw status conditions are `controller-reported` whatever they say. The program's "controller-reported attached" is a relation built only from a current `Attached=True` condition, with source `controller-reported`. Summaries over reported status (worst accepted, has problems) are `inferred`. A later source (such as a registered policy mirror, P-008 point 7) adds a constant, not a field. (Revised after Codex design review #2.)
+
+## D-123 — `pkg/policy` is an exported contract (E7) (2026-11-22, Phase 8)
+**Status:** proposed (Phase 8 design §5; program handoff 2026-11-22).
+
+**Decision:** kgwctl Phase 6 imports `pkg/policy` (`Read`, `Relations`, section-aware `Subject`, the source constants) for `describe`. The caller supplies the objects and a target lookup: `pkg/api` passes viewer-scoped ones, kgwctl a `cache.ListOnce` snapshot. The package knows nothing of viewers. This is Snellius's part of E7; route-level xDS evidence comes from xdsview. Changes are additive within a minor.
+
+## D-124 — The runtime policy view belongs to Phase 12 (2026-11-22, Phase 8)
+**Status:** proposed (Phase 8 design §9; program P-008, P-009).
+
+**Context:** Showing `merge.*` contributions or the runtime filter chain needs Envoy or controller admin access, which the chart forbids (`pods/portforward`, `pods/proxy`), redaction of raw filter config, and xdsview `v0.5.0` (E13). P-009 withdrew comparing the controller's snapshot with the config Envoy accepted.
+
+**Decision:** Phase 12 builds the runtime view and decides access, transport and redaction. Runtime evidence is a separate xdsview-backed result joined on the policy ref, not a field of the Phase 8 model. Phase 12 inherits one rule now: a runtime block is shown only when the viewer may read its full evidence scope (Gateway, routes and every reported policy); otherwise the whole block is withheld, identically whether hidden configuration exists or not (Codex design review #3). Snellius works without xDS (P-008 point 6).
+
+**Supersedes:** in principle 4 and D-006, the Phase 12 (earlier "Phase 9") signal "differences between the controller's xDS snapshot and the config Envoy accepted"; roadmap Phase 12 bullet 2. The rest of D-006 stands.
+
+**Consequences:** Phase 12 = runtime filter chain (E4, E5, E13) plus M-1's optional xDS cross-check. Convergence findings, if any, come later through E14; Snellius stays the owner of findings.
+
+## D-125 — Label selectors are never resolved (2026-11-22, Phase 8)
+**Status:** proposed (Phase 8 design §5.3; program M-2).
+
+**Decision:** targetSelectors are shown as written. Snellius never lists the objects a selector matches, since kgateway's choice depends on controller rules such as the global policy namespace. KGWUI-016's zero-candidate diagnostic stays (M-2) and is never presented as attachment. Retires with kgateway#14998 (U6).
+
+## D-126 — Precedence annotations are shown, not evaluated (2026-11-22, Phase 8)
+**Status:** proposed (Phase 8 design §5.2).
+
+**Decision:** `kgateway.dev/inherited-policy-priority` and `kgateway.dev/policy-weight` appear as written, with a note that kgateway evaluates them. Policy lists are sorted by namespace and name and say so. This answers the Phase 2 concern "a list without precedence can mislead" (user, 2026-10-23) by not presenting any order as precedence.
+
+## D-127 — Phase 8 adds no policy input to route signals (2026-11-22, Phase 8)
+**Status:** proposed (Phase 8 design §6.4).
+
+**Context:** D-087 said Policies would add "inherited policy problems" to the route's traffic-path signal. Without per-route status, deciding that a parent's policy problem affects a route is inference.
+
+**Decision:** Route signals are unchanged in Phase 8. Policy findings stay on the policy (DirectResponse joins them, design §6.5). Revisit when the controller reports per route (U4).
+
+**Supersedes:** D-087's consequence "Policies (Phase 8) adds inherited policy problems to the same signal". The rest of D-087 stands.
+
+## D-128 — M-1's register entry, its conformance status and rule-set selection (2026-11-22, Phase 8)
+**Status:** proposed (Phase 8 design §12); answers program open questions 1 and 3.
+
+**Decision:**
+1. **M-1 rule 1:** D-020's computed views mirror kgateway route→listener attachment (view A), delegation child selection (view B) and the delegated child's merged matcher, `pkg/kgateway/utils/delegation` `MergeParentChildRouteMatch` (view C), in rule sets `kgw23`–`kgw25` for kgateway 2.3–2.5. View C retires with U10.
+2. **Open question 1:** rule 2 is not met for the matcher. The goldens (`pkg/computed/golden_test.go`, `testdata/kgateway-2.{3,4,5}`) are hand-transcribed; delegation cases cite kgateway's translator goldens per tag, but no test loads or compares them. The e2e matrix checks delegation against status only. A conformance test that compares the matcher with the cited upstream goldens per tag is tracked, outside Phase 8.
+3. **Open question 3:** selection already goes through the pack (`Hooks.RulesFor`). The core keeps `pkg/engine`'s fallbacks (`rulesets.Select`, `IsVersion`, `ExpectedGatewayAPI`) and `pkg/api`'s Gateway CRD table. Moving them behind the pack is a separate refactor, outside Phase 8.
+
+## D-129 — Parent joins are declared; DirectResponse gains status findings only (2026-11-22, Phase 8)
+**Status:** proposed (Phase 8 design §5.3, §6.6), from Codex design review #4 and #9.
+
+**Decision:**
+1. "Targeting a parent" joins on the subject's own `spec.parentRefs`, never on status, computed attachment (D-020) or an up-chain walk. A sectioned parentRef relates the Gateway's unsectioned policies and that section's; an unsectioned or port-only one relates only unsectioned policies. A ListenerSet parent adds its Gateway's unsectioned policies (the only two-hop join). Every object on the path must be readable.
+2. DirectResponse stays list-only (no ownership, freshness or route attribution change). Its ancestors feed only the policy ancestor findings. Amends D-058 item 6.
+
+**Consequences:** A route whose parentRef names a whole Gateway shows no listener-level policies; the Gateway page does. Finding changes for DirectResponse update `docs/findings.md`, snellius.dev (P-006) and snellius-demo (P-007).
