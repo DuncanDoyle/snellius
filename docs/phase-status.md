@@ -4,7 +4,7 @@
 Phase: 8 — Policies & Filters
 Base: b01b677
 Docs: docs/phases/phase-8/
-Status: design (2026-11-22). design.md and implementation-plan.md written; Codex design review done (12 findings, all accepted, design revised); waiting for user approval before code. Scope reworked (D-121 … D-129, proposed): declared policy visibility, no resolver; runtime view to Phase 12. Phase start: program read, scope-endpoint reminder given, kgateway#14815 still open.
+Status: design (2026-11-22). design.md and implementation-plan.md written; Codex design review done (12 findings, all accepted, design revised); waiting for user approval before code. Scope reworked (D-121 … D-129, proposed): declared policy visibility, no resolver; runtime view to Phase 12. Phase start: program read, scope endpoint filed as kgateway#15070, kgateway#14815 still open.
 Author: claude (Opus 5.5)
 
 ## Sub-phase
@@ -12,7 +12,7 @@ Sub-phase: none
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md (read 2026-11-22 at `bd1f17d`; merged on main at `090fd7e`, which adds M-4 and U12: P-008, P-009, M-1, M-2, E7, E13, E14).
-Waiting on: nothing for 8.1 and 8.2. Phase 12 needs xdsview `v0.5.0` (E13), tagged 2026-11-22; no impact before Phase 12. Program file latest: kgateway-tooling `841f508`.
+Waiting on: nothing for 8.1 and 8.2. Phase 12 needs xdsview `v0.5.0` (E13), tagged 2026-11-22; no impact before Phase 12. Program file latest: kgateway-tooling `56c8868` (U12 → kgateway#15070).
 Provides: E7 to kgwctl Phase 6, the declared-policy model `pkg/policy` (D-123). At phase close: update E7, M-1 (rule-1 entry, rule-2 status, D-128) and M-2 in the program file; notify kgwctl.
 Consumers: E2, E3, E8 delivered through `v0.8.0` (kgwctl#3 … #8).
 Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; unchanged). The xdsview session will ask which of KGWUI-001, 006, 008, 025, 026 and the withheld-config signal answer the convergence questions (P-009 q6): answer it directly.
@@ -22,7 +22,7 @@ Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; uncha
 - (P4) Phase 8 and 9 (phase review PH6): extensions receive the raw publication beside per-object visibility helpers; policy relations (Phase 8, no inherited policy, D-121) and winning-route predictions must use viewer-scoped computations so a hidden input cannot change a readable result (D-085) — src: phases/phase-7/reviews/phase-codex.md
 - (P3) After `v0.8.0` (user, 2026-11-18, D-118): compare how other Kubernetes UIs and platforms authorise per user, whether they hit the same check-rate limits, and whether Snellius's per-object visibility (D-085) causes them; what could be learned from their architecture. Include (user, 2026-11-18) an implicit namespace scope: derive the namespaces a viewer can read (cached SAR list answers, or SelfSubjectRulesReview as a hint only) and scope pages to them by default, SAR still deciding every object, shown in the UI with a way to widen; OpenShift's Projects API is the precedent
 - (P3) After `v0.8.0` (user, 2026-11-18): poll every 10 s instead of 5 s, pause while the tab is hidden and refresh on return (saves server work; check load follows answer lifetimes, not polls); a quiet "checking what you can see" hint after a few seconds of waiting; fairness between viewers in admission. No session cap for restricted viewers: idle sessions cost little, and D-116 already bounds concurrent work
-- (P3) REMIND USER at the start of each phase: file the upstream kgateway issue "Expose the controller's effective discovery scope through a read-only endpoint" (H9, D-009 §7). User chose to file it in a later phase (2026-10-20). Draft kept outside the repo (public repo). Before filing: confirm on a cluster that status stays after a namespace is deselected, and re-verify the file:line refs against kgateway main.
+- (P3) Mirror M-4 (`pkg/install` discovery scope, incl. `Scope.Excluded` for kgwctl) retires with [kgateway#15070](https://github.com/kgateway-dev/kgateway/issues/15070) (program U12, filed 2026-11-22; H9, D-009 §7). At each phase start, check its state; when it lands, read the endpoint, keep the env parsing only as a fallback for older controllers, and switch KGWUI-007 to the enabled kinds (D-017 §4). Stale status after deselection was confirmed on v2.5.1 (2026-11-22).
 - (P4) Guideline (user, 2026-11-21): keep `pkg/auth/oidc` and `pkg/auth/session` free of new imports from other Snellius packages, so a downstream can later extract them cheaply (program edge E12, deferred). Today they import only `pkg/audit` and `pkg/obs` (and `session` imports `oidc`); where it fits, take those through small interfaces instead
 - (P3) Scope verification for experimental Gateway API kinds: switch KGWUI-007 to the controller's enabled kinds once the upstream scope endpoint exists (D-017 §4) — src: phases/phase-1/reviews/phase-codex.md#5
 - (P3) Watch CRDs added or removed after startup without a restart — https://github.com/DuncanDoyle/kgateway-ui/issues/1
