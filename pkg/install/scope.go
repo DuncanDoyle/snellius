@@ -3,6 +3,7 @@ package install
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -63,6 +64,23 @@ func (s Scope) Contains(nsName string, ns *corev1.Namespace) bool {
 		}
 	}
 	return false
+}
+
+// Excluded returns the sorted names of the namespaces in nss that s leaves out.
+// known is false when the scope is unknown. Scope only answers for namespaces;
+// cluster-scoped objects are never filtered. Interim copy of the controller's
+// selector semantics until kgateway reports its own scope (kgateway#15070).
+func (s Scope) Excluded(nss []*corev1.Namespace) (names []string, known bool) {
+	if s.Mode == ScopeUnknown {
+		return nil, false
+	}
+	for _, ns := range nss {
+		if ns != nil && !s.Contains(ns.Name, ns) {
+			names = append(names, ns.Name)
+		}
+	}
+	slices.Sort(names)
+	return names, true
 }
 
 // compile converts sels to selectors, skipping invalid ones: an invalid
