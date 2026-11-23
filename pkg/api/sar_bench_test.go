@@ -919,8 +919,7 @@ func policyReader(a sar.Attributes) bool {
 }
 
 // A cold Large policies list with one policy per route answers within the
-// per-request check budget for the restricted viewers (8.1 re-review: budget).
-// policy-reader is report-only: it needs one named get per hidden target and ancestor.
+// per-request check budget for every restricted viewer (8.1 re-review: budget).
 func TestBudgetSARPoliciesLarge(t *testing.T) {
 	build, m := api.TierHandlersWith(t, scale.Large, largePolicies)
 	path := "/api/v1/installs/" + m.Installs[0].Resolved.ID() + "/policies?limit=1"
@@ -929,7 +928,7 @@ func TestBudgetSARPoliciesLarge(t *testing.T) {
 		h := build(newAuthz(c, clk, nil, lifted), api.WithSecureMode(), api.WithCommitClock(clk.Now))
 		cold := get(h, c, "u", path)
 		t.Logf("%-16s /policies?limit=1 cold %d SARs (%d list, %d get) → %d", v.name, cold.sars, c.lists.Load(), c.gets.Load(), cold.code)
-		if v.name != "policy-reader" && (cold.code != http.StatusOK || cold.sars > api.CheckLimit) {
+		if cold.code != http.StatusOK || cold.sars > api.CheckLimit {
 			t.Errorf("%s: cold /policies?limit=1 %d with %d SARs (limit %d)", v.name, cold.code, cold.sars, api.CheckLimit)
 		}
 	}

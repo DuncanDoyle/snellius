@@ -18,7 +18,8 @@ type Lookup interface {
 	// Watched reports whether kind gk is served and its collection holds namespace ns:
 	// false when the watch is denied, pending or scoped away from ns.
 	Watched(gk objects.GroupKind, ns string) bool
-	// CanGet reports whether the caller may get the object named ref.
+	// CanGet reports whether the caller may get the object named ref. CheckTargets asks it
+	// only after CanList allows the kind in the namespace (list before get).
 	CanGet(ref objects.Ref) bool
 	// CanList reports whether the caller may list kind gk in namespace ns.
 	CanList(gk objects.GroupKind, ns string) bool
@@ -97,9 +98,10 @@ func CheckTargets(p Policy, in Inputs) []TargetCheck {
 }
 
 // gate keeps a targeter's outcome only when the caller may read what it rests on
-// (design §7 item 4): every outcome needs named get; not found also needs list in the namespace.
-// A name the caller may not get is unknown whether or not it exists (D-119). An
-// outcome already unknown asks nothing, so no check is spent on it.
+// (design §7 item 4): every outcome needs list on the kind in the namespace, then named
+// get on the target. A name the caller may not get is unknown whether or not it exists
+// (D-119). Asking list first keeps the checks to one per kind and namespace for a viewer
+// who may not list it; an outcome already unknown asks nothing.
 func gate(l Lookup, ns string, r computed.TargetRef, outcome string) string {
 	gk := objects.GroupKind{Group: r.Group, Kind: r.Kind}
 	switch outcome {
@@ -107,10 +109,7 @@ func gate(l Lookup, ns string, r computed.TargetRef, outcome string) string {
 	default:
 		return computed.TargetUnknown
 	}
-	if !l.Watched(gk, ns) || !l.CanGet(objects.Ref{Group: r.Group, Kind: r.Kind, Namespace: ns, Name: r.Name}) {
-		return computed.TargetUnknown
-	}
-	if outcome == computed.TargetNotFound && !l.CanList(gk, ns) {
+	if !l.Watched(gk, ns) || !l.CanList(gk, ns) || !l.CanGet(objects.Ref{Group: r.Group, Kind: r.Kind, Namespace: ns, Name: r.Name}) {
 		return computed.TargetUnknown
 	}
 	return outcome

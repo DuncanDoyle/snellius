@@ -116,8 +116,8 @@ func (h *handler) policyReader(p *engine.Published, i *engine.InstallModel, v *v
 }
 
 // read is u as the caller sees it. An ancestor is never current, and carries none
-// of the install's judgments about it, unless the caller may get every object its
-// ownership rests on: the ancestor, and a ListenerSet's parent Gateway (design §7 item 3).
+// of the install's judgments about it, unless the caller may list and get every object
+// its ownership rests on: the ancestor, and a ListenerSet's parent Gateway (design §7 item 3).
 func (pr policyReader) read(u *unstructured.Unstructured) policyEntry {
 	p := policy.Read(u, pr.interp, pr.guard)
 	for k := range p.Ancestors {
@@ -129,11 +129,11 @@ func (pr policyReader) read(u *unstructured.Unstructured) policyEntry {
 	return policyEntry{u: u, p: p, checks: policy.CheckTargets(p, pr.in)}
 }
 
-// ownershipReadable reports whether the caller may get ancestor ar and, when ar is a
-// collected ListenerSet, the Gateway its ownership comes from (D-107).
+// ownershipReadable reports whether ancestor ar is readable and, when ar is a collected
+// ListenerSet, so is the Gateway its ownership comes from (D-107).
 func (pr policyReader) ownershipReadable(ar objects.Ref) bool {
 	l := pr.in.Lookup
-	if !l.CanGet(ar) {
+	if !readable(l, ar) {
 		return false
 	}
 	if !slices.ContainsFunc(pr.served, func(k kinds.Served) bool {
@@ -142,7 +142,13 @@ func (pr policyReader) ownershipReadable(ar objects.Ref) bool {
 		return true
 	}
 	ls, ok := l.Object(ar)
-	return !ok || l.CanGet(objects.ListenerSetParent(ls).Ref())
+	return !ok || readable(l, objects.ListenerSetParent(ls).Ref())
+}
+
+// readable reports whether the caller may list ref's kind in its namespace and then get
+// ref by name. List first keeps a hidden namespace to one check, not one per name.
+func readable(l policy.Lookup, ref objects.Ref) bool {
+	return l.CanList(objects.GroupKind{Group: ref.Group, Kind: ref.Kind}, ref.Namespace) && l.CanGet(ref)
 }
 
 // problems reports whether e has problems (design §6.2).

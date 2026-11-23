@@ -71,8 +71,8 @@ func TestCheckTargets(t *testing.T) {
 			edit: func(w *world) { w.unwatched[kindKey(gk("Gateway"), ns)] = true }, want: []string{U, U, U, NF, U, F, SN}},
 		{name: "list allowed, named target denied (D-119)", targeter: rules(kgw24.New()), scope: true,
 			edit: func(w *world) { w.hidden[gwRef] = true }, want: []string{U, U, U, NF, U, F, SN}},
-		{name: "no list on HTTPRoutes in the namespace", targeter: rules(kgw24.New()), scope: true,
-			edit: func(w *world) { w.unlisted[kindKey(gk("HTTPRoute"), ns)] = true }, want: []string{F, F, SN, U, U, F, SN}},
+		{name: "no list on HTTPRoutes in the namespace: every route verdict unknown", targeter: rules(kgw24.New()), scope: true,
+			edit: func(w *world) { w.unlisted[kindKey(gk("HTTPRoute"), ns)] = true }, want: []string{F, F, SN, U, U, U, U}},
 		{name: "a targeter that ignores watch state is still gated", targeter: alwaysFound{}, scope: true,
 			edit: func(w *world) { w.unwatched[kindKey(gk("Gateway"), ns)] = true }, want: []string{U, U, U, F, F, F, F}},
 	}

@@ -444,6 +444,36 @@ func (d denyNamed) AuthorizeNamedErr(_ *http.Request, ref objects.Ref) (bool, er
 
 func (denyNamed) CanList(*http.Request, objects.GroupKind, string) (bool, error) { return true, nil }
 
+// denyList allows every member and every name but refuses the list of kinds in ns.
+type denyList struct {
+	ns    string
+	kinds []string
+}
+
+func (denyList) Authorize(*http.Request, objects.Ref) bool { return true }
+
+func (denyList) AuthorizeNamedErr(*http.Request, objects.Ref) (bool, error) { return true, nil }
+
+func (d denyList) CanList(_ *http.Request, gk objects.GroupKind, ns string) (bool, error) {
+	return ns != d.ns || !slices.Contains(d.kinds, gk.Kind), nil
+}
+
+// A target or ancestor is judged only when the viewer may list its kind in its
+// namespace: named get alone gives unknown and unreadable (8.1 re-review: budget).
+func TestPolicyJudgedOnlyWithList(t *testing.T) {
+	e := policyBase(t, ruleChange{name: "base"})
+	srv := policyServe(t, e, func(a api.Authorizer) api.Authorizer {
+		return api.Narrowed{Base: a, Policy: denyList{ns: ns0, kinds: []string{"HTTPRoute", "Gateway"}}}
+	})
+	d := decode[api.PolicyDetail](t, srv, fullUser, tpPath(ns0, tpAncestors))
+	if got := outcomes(d.Targets); !slices.Equal(got, []string{computed.TargetUnknown}) {
+		t.Errorf("target check %v, want unknown", got)
+	}
+	if a := d.Ancestors[0]; a.Current || a.NotCurrent != policy.NotCurrentUnreadable {
+		t.Errorf("ancestor gw-000: current %v, not current %q; want unreadable", a.Current, a.NotCurrent)
+	}
+}
+
 // A downstream authoriser that allows the list and denies the named target
 // gets unknown, never found; an absent target in a listable namespace is still not found.
 func TestPolicyTargetNarrowedIsUnknown(t *testing.T) {
