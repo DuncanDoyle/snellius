@@ -6,7 +6,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/DuncanDoyle/snellius/pkg/computed"
 	"github.com/DuncanDoyle/snellius/pkg/engine"
+	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/policy"
 )
@@ -33,7 +35,7 @@ type relatedPolicy struct {
 // (design §6.5), made by policy.Relations with the policies endpoints' guard and Lookup. Only
 // policies the caller may view as members take part (design §7 items 1 and 5).
 func (h *handler) policyRelations(p *engine.Published, i *engine.InstallModel, v *view, l linker, s objects.Ref, g relationGroups) PolicyRelationsDTO {
-	all := installPolicies(i)
+	all := candidatePolicies(p.Model, installPolicies(i), s)
 	v.prefetch(func(add func(objects.Ref)) {
 		for _, u := range all {
 			add(objects.RefOf(u))
@@ -85,6 +87,52 @@ func (h *handler) policyRelations(p *engine.Published, i *engine.InstallModel, v
 	}
 	if g.attached {
 		out.AttachedHere = &attached
+	}
+	return out
+}
+
+// candidatePolicies are the policies of all that can relate to subject s, judged from declared
+// and reported data alone, before any access check: a targetRef naming s or one of the parents
+// policy.Relations may walk, an ancestor that is s, or a targetSelector of s's kind in s's namespace.
+// Any other policy makes no relation and no selector kind for any viewer, so leaving it out
+// changes no response; only the checks asked shrink.
+func candidatePolicies(m *engine.Model, all []*unstructured.Unstructured, s objects.Ref) []*unstructured.Unstructured {
+	named := map[objects.Ref]bool{s: true}
+	for _, r := range declaredParents(m, s) {
+		named[r] = true
+	}
+	return slices.DeleteFunc(slices.Clone(all), func(u *unstructured.Unstructured) bool {
+		ns := u.GetNamespace()
+		refs, sels := computed.DecodeTargets(u)
+		return !slices.ContainsFunc(refs, func(t computed.TargetRef) bool {
+			return named[policy.Target{Group: t.Group, Kind: t.Kind, Name: t.Name}.Ref(ns)]
+		}) && !slices.ContainsFunc(objects.PolicyAncestors(u), func(a objects.AncestorStatus) bool { return a.AncestorRef.Ref() == s }) &&
+			!(ns == s.Namespace && slices.ContainsFunc(sels, func(t computed.TargetSelector) bool { return t.Group == s.Group && t.Kind == s.Kind }))
+	})
+}
+
+// declaredParents are the parents policy.Relations may walk from s (design §5.3): a route's
+// parentRefs and, for a ListenerSet among them, its parent Gateway; a ListenerSet's own parentRef.
+// It may name more than Relations walks, never fewer.
+func declaredParents(m *engine.Model, s objects.Ref) []objects.Ref {
+	u, _ := stored(m, s)
+	if u == nil {
+		return nil
+	}
+	isLS := func(r objects.Ref) bool {
+		return slices.ContainsFunc(m.Served, func(k kinds.Served) bool {
+			return k.Category == kinds.CategoryListenerSet && k.Group == r.Group && k.Kind == r.Kind
+		})
+	}
+	if isLS(s) {
+		return []objects.Ref{objects.ListenerSetParent(u).Ref()}
+	}
+	var out []objects.Ref
+	for _, pr := range objects.RouteParentRefs(u) {
+		out = append(out, pr.Ref())
+		if ls, _ := stored(m, pr.Ref()); ls != nil && isLS(pr.Ref()) {
+			out = append(out, objects.ListenerSetParent(ls).Ref())
+		}
 	}
 	return out
 }
