@@ -1804,3 +1804,16 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** `policy.Read(u, interp, g Guard)`. `Guard` carries the install's controller names and two functions, ownership and freshness, which callers build from the guards the policy findings use (`own.BlockFreshness`, `policyAncestors`). `Read` stays pure: no lookups. `pkg/policy` does not import `pkg/health`. A nil function makes no ancestor current. A non-current ancestor carries why: `other-controller`, `not-owned` or `not-fresh` (stale or pending).
 
 **Consequences:** kgwctl (E7) builds a `Guard` too; a zero `Guard` gives verbatim ancestors with none current. The design's "stale" mark reads "not fresh" in the model; UI copy is decided in 8.2.
+
+## D-131 — 8.1 review fixes: per-finding basis for policy ancestors; stricter target checks (2026-11-23, Phase 8)
+**Status:** proposed (sub-phase 8.1, from `phases/phase-8/reviews/8.1-codex.md` #1, #2, #3, #6, #8); amends D-108 item 4, D-130 and design §7 item 4.
+
+**Decision:**
+1. A policy ancestor finding (KGWUI-002) rests only on the ancestor it names. A hidden second ancestor no longer withholds the finding about a readable one. This predates Phase 8 for TrafficPolicy. Amends D-108 item 4 for policy ancestors only; route parent findings keep the shared basis, since parent Gateways are install membership (D-107).
+2. A target check of "not found" needs `list` on the kind in the namespace and named `get` on the target, so a narrowing authoriser (D-119) gives `unknown` whether or not the target exists. Stricter than design §7 item 4.
+3. An ancestor the viewer cannot `get` is never current for that viewer and carries the reason `unreadable` instead of an ownership reason. Extends D-130's reasons.
+4. Snellius's judgments about an ancestor or target (current and its reason, summary marker, staleness, linked health) carry source `inferred`, apart from the controller's verbatim conditions (D-122).
+5. Collection is checked in the namespace asked, not against the kind-wide aggregate. This also changes two existing callers: KGWUI-013's Service explanations, and KGWUI-003 "parent does not exist", which no longer fires for a parent in a namespace a scoped cache does not read.
+6. Until 8.2 adds policy pages, policy links in API responses use the YAML path; detail targets carry a full ref in the policy's namespace. "Has problems" counts a section not found, as KGWUI-016 does.
+
+**Consequences:** A restricted viewer can see more policy 002s than before (item 1) and fewer target verdicts (item 2). kgwctl builds a `Guard` and a `Lookup` with these rules (E7).
