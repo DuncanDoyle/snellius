@@ -356,11 +356,14 @@ func TestPoliciesReaders(t *testing.T) {
 		t.Error("tp-hidden-targets: has problems should be true for the full reader only")
 	}
 
-	// The summaries use only current ancestors; the other controller's False is left out.
-	row := policyRowOf(t, restricted, kgwGroup, ns0, tpAncestors)
-	if row.Accepted == nil || row.Accepted.Status != metav1.ConditionTrue || row.Accepted.Source != policy.SourceInferred || row.Problems.Has ||
-		len(row.AttachedOn) != 2 || row.AttachedOn[0].Source != policy.SourceControllerReported || row.Ref.Link != api.LinkYAML {
-		t.Errorf("tp-ancestors row %+v", row)
+	// The summaries use only current ancestors; the other controller's False is left
+	// out, and the restricted viewer's summaries leave out hidden-gw too.
+	for k, rs := range []api.PoliciesResponse{full, restricted} {
+		row := policyRowOf(t, rs, kgwGroup, ns0, tpAncestors)
+		if row.Accepted == nil || row.Accepted.Status != metav1.ConditionTrue || row.Accepted.Source != policy.SourceInferred || row.Problems.Has ||
+			len(row.AttachedOn) != 2-k || row.AttachedOn[0].Source != policy.SourceControllerReported || row.Ref.Link != api.LinkYAML {
+			t.Errorf("viewer %d: tp-ancestors row %+v", k, row)
+		}
 	}
 	vis := policyRowOf(t, restricted, kgwGroup, ns0, tpVisible)
 	if len(vis.Features) != 1 || vis.Features[0].Key != "cors" || vis.Features[0].Label != "CORS" || vis.Features[0].Value != nil || vis.Accepted != nil {
@@ -378,8 +381,14 @@ func TestPoliciesReaders(t *testing.T) {
 			t.Errorf("hidden ancestor %d linked: %+v", k+1, a)
 		}
 	}
-	if a := d.Ancestors[2]; a.Current || a.NotCurrent != policy.NotCurrentOtherController || a.Source != policy.SourceControllerReported || len(a.Conditions) != 2 {
+	if a := fd.Ancestors[2]; a.Current || a.NotCurrent != policy.NotCurrentOtherController || a.Source != policy.SourceControllerReported || len(a.Conditions) != 2 {
 		t.Errorf("other controller's ancestor %+v", a)
+	}
+	// The restricted viewer gets no judgment about an ancestor it may not read.
+	for k, a := range d.Ancestors[1:] {
+		if a.Current || a.NotCurrent != policy.NotCurrentUnreadable || a.Why != "" || len(a.Conditions) != 2 {
+			t.Errorf("hidden ancestor %d: %+v", k+1, a)
+		}
 	}
 	if fd.Ancestors[1].Ref.Link != api.LinkDetail || fd.Ancestors[1].Health == "" {
 		t.Errorf("full reader's hidden-gw ancestor %+v", fd.Ancestors[1])
@@ -485,6 +494,39 @@ func TestPolicyTargetNarrowedExistenceHidden(t *testing.T) {
 		if got := outcomes(d.Targets); !slices.Equal(got, []string{computed.TargetUnknown}) {
 			t.Errorf("%s: absent narrowed target %v, want unknown", user, got)
 		}
+	}
+}
+
+// Creating or deleting a hidden Gateway that a readable policy names as a
+// fresh ancestor of this install's controller moves no byte for the restricted
+// viewer; the full reader sees it become current (8.1 review #2).
+func TestPolicyHiddenOwnedAncestorUnchanged(t *testing.T) {
+	const pol, hiddenGw = "tp-owned-ancestor", "anc-gw-owned"
+	addPolicy := func(s ruleSnap) {
+		s.add(tp(ns0, pol, []any{targetRef(gatewaysGroup, "HTTPRoute", namesHidden, "")},
+			ancestor(gw0()[0], testutil.Controller, metav1.ConditionTrue, metav1.ConditionTrue),
+			ancestor(hiddenGwRef(hiddenGw), testutil.Controller, metav1.ConditionFalse, metav1.ConditionTrue)))
+	}
+	absent := policyServe(t, policyBase(t, ruleChange{name: "absent", apply: addPolicy}), nil)
+	present := policyServe(t, policyBase(t, ruleChange{name: "present", apply: func(s ruleSnap) {
+		addPolicy(s)
+		s.add(testutil.Gateway(hiddenNS, hiddenGw, scale.Class, nil))
+	}}), nil)
+	paths := []string{policiesPath + "?limit=200", policiesPath + "?limit=200&hasProblems=true", policiesPath + "?limit=200&hasProblems=false",
+		tpPath(ns0, pol)}
+	for _, path := range paths {
+		ac, ab := fetch(t, absent, restrictedUser, path)
+		pc, pb := fetch(t, present, restrictedUser, path)
+		if ac != pc || ab != pb {
+			t.Errorf("%s: the hidden Gateway's existence shows:\n  %d %.600s\n  vs %d %.600s", path, ac, ab, pc, pb)
+		}
+	}
+	if _, a := fetch(t, absent, fullUser, tpPath(ns0, pol)); a == func() string { _, p := fetch(t, present, fullUser, tpPath(ns0, pol)); return p }() {
+		t.Error("the hidden Gateway does not reach the full reader")
+	}
+	d := decode[api.PolicyDetail](t, present, restrictedUser, tpPath(ns0, pol))
+	if a := d.Ancestors[1]; a.Current || a.NotCurrent != policy.NotCurrentUnreadable || a.Why != "" || a.Ref.Link != api.LinkNone || a.Health != "" {
+		t.Errorf("hidden ancestor %+v", a)
 	}
 }
 
@@ -606,7 +648,7 @@ func TestPolicyLabelsCopy(t *testing.T) {
 	}
 	ls = append(ls, string(policy.SourceDeclared), string(policy.SourceControllerReported), string(policy.SourceControllerReportedContribution),
 		string(policy.SourceInferred), string(policy.SourceUnknown), policy.NotCurrentOtherController, policy.NotCurrentNotOwned,
-		policy.NotCurrentNotFresh, policy.NoteGatewayWide, policy.NoteBackendPort)
+		policy.NotCurrentNotFresh, policy.NotCurrentUnreadable, policy.NoteGatewayWide, policy.NoteBackendPort)
 	interp := kgateway.PolicyInterpreter()
 	for _, d := range kgateway.Kinds() {
 		gk := objects.GroupKind{Group: d.Group, Kind: d.Kind}

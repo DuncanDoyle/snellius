@@ -86,6 +86,9 @@ const (
 	NotCurrentNotOwned = "not-owned"
 	// NotCurrentNotFresh: the conditions are stale or pending; Ancestor.Why says which.
 	NotCurrentNotFresh = "not-fresh"
+	// NotCurrentUnreadable: the caller may not read the ancestor, so none of the
+	// install's judgments about it are shown (design §7 item 3). Read never sets it.
+	NotCurrentUnreadable = "unreadable"
 )
 
 // Ancestor is one status.ancestors entry. Conditions are copied verbatim,

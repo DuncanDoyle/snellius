@@ -114,9 +114,16 @@ func (h *handler) policyReader(p *engine.Published, i *engine.InstallModel, v *v
 		Targeter: i.Rules.PolicyTargeter(), ScopeKnown: i.Resolved.Scope.Mode != install.ScopeUnknown}}
 }
 
-// read is u as the caller sees it.
+// read is u as the caller sees it. An ancestor the caller may not get is never
+// current and carries none of the install's judgments about it (design §7 item 3).
 func (pr policyReader) read(u *unstructured.Unstructured) policyEntry {
 	p := policy.Read(u, pr.interp, pr.guard)
+	for k := range p.Ancestors {
+		// The summary ancestor names no object; its guards read only the policy.
+		if a := &p.Ancestors[k]; !a.Summary && !pr.in.Lookup.CanGet(a.Ref.Ref()) {
+			a.Current, a.NotCurrent, a.Why = false, policy.NotCurrentUnreadable, ""
+		}
+	}
 	return policyEntry{u: u, p: p, checks: policy.CheckTargets(p, pr.in)}
 }
 
