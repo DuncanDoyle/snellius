@@ -52,6 +52,8 @@ type PolicyTargetDTO struct {
 	Check  *PolicyCheckDTO `json:"check,omitempty"`
 	Ref    *LinkedRef      `json:"ref,omitempty"`
 	Health health.State    `json:"health,omitempty"`
+	// HealthSource is Health's source, inferred; empty without Health.
+	HealthSource policy.Source `json:"healthSource,omitempty"`
 }
 
 // PolicyCheckDTO is a target check: found, not-found, section-not-found or unknown.
@@ -138,22 +140,32 @@ type PolicyDetail struct {
 }
 
 // PolicyAncestorDTO is one status.ancestors entry with its conditions
-// (controller-reported). NotCurrent says why an entry is left out of the
-// summaries: other-controller, not-owned or not-fresh, with Why. Link is none
-// and Health empty unless the caller may get the ancestor by name.
+// (controller-reported, Source). NotCurrent says why an entry is left out of
+// the summaries: other-controller, not-owned, not-fresh with Why, or
+// unreadable. Link is none and Health empty unless the caller may get the
+// ancestor by name. Snellius derives Current, NotCurrent, Why, Summary, each
+// condition's Stale and Health; each carries its own source field.
 type PolicyAncestorDTO struct {
-	Ref         LinkedRef          `json:"ref"`
-	SectionName string             `json:"sectionName,omitempty"`
-	Port        int32              `json:"port,omitempty"`
-	Health      health.State       `json:"health,omitempty"`
-	Controller  string             `json:"controller"`
-	Conditions  []Condition        `json:"conditions"`
-	Current     bool               `json:"current"`
-	NotCurrent  string             `json:"notCurrent,omitempty"`
-	Why         string             `json:"why,omitempty"`
-	Summary     bool               `json:"summary,omitempty"`
-	Readings    []PolicyReadingDTO `json:"readings"`
-	Source      policy.Source      `json:"source"`
+	Ref         LinkedRef    `json:"ref"`
+	SectionName string       `json:"sectionName,omitempty"`
+	Port        int32        `json:"port,omitempty"`
+	Health      health.State `json:"health,omitempty"`
+	// HealthSource is Health's source, inferred; empty without Health.
+	HealthSource policy.Source `json:"healthSource,omitempty"`
+	Controller   string        `json:"controller"`
+	Conditions   []Condition   `json:"conditions"`
+	// StaleSource is the source of every condition's Stale: inferred.
+	StaleSource policy.Source `json:"staleSource"`
+	Current     bool          `json:"current"`
+	NotCurrent  string        `json:"notCurrent,omitempty"`
+	Why         string        `json:"why,omitempty"`
+	// CurrentSource is the source of Current, NotCurrent and Why: inferred.
+	CurrentSource policy.Source `json:"currentSource"`
+	Summary       bool          `json:"summary,omitempty"`
+	// SummarySource is Summary's source: inferred from the pack, unknown without one.
+	SummarySource policy.Source      `json:"summarySource"`
+	Readings      []PolicyReadingDTO `json:"readings"`
+	Source        policy.Source      `json:"source"`
 }
 
 // PolicyReadingDTO is the pack's reading of one ancestor condition (inferred).

@@ -265,6 +265,35 @@ func TestReadGuards(t *testing.T) {
 	}
 }
 
+// Every ancestor's derived fields carry their own source apart from its
+// controller-reported conditions: Current and its reason inferred, Summary
+// inferred from a pack or unknown without one (8.1 review #8).
+func TestReadAncestorDerivedSources(t *testing.T) {
+	n := 0
+	for _, file := range []string{"kgateway-2.3.yaml", "kgateway-2.4.yaml", "kgateway-2.5.yaml"} {
+		for _, u := range load(t, file) {
+			for _, c := range []struct {
+				interp  policy.Interpreter
+				summary policy.Source
+			}{{kgateway.PolicyInterpreter(), policy.SourceInferred}, {nil, policy.SourceUnknown}} {
+				p := policy.Read(u, c.interp, guard())
+				if !p.Interpreted && c.interp != nil {
+					continue
+				}
+				for _, a := range p.Ancestors {
+					n++
+					if a.Source != policy.SourceControllerReported || a.CurrentSource != policy.SourceInferred || a.SummarySource != c.summary {
+						t.Errorf("%s ancestor %s: sources %s, current %s, summary %s", p.Ref, a.Ref.Ref(), a.Source, a.CurrentSource, a.SummarySource)
+					}
+				}
+			}
+		}
+	}
+	if n == 0 {
+		t.Fatal("no ancestors read")
+	}
+}
+
 // Targets keep spec order, refs before selectors, with a selector's labels as written.
 func TestReadSelectors(t *testing.T) {
 	u := &unstructured.Unstructured{Object: map[string]any{

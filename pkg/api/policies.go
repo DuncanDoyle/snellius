@@ -188,6 +188,14 @@ func (e *policyEntry) features(withValues bool) []PolicyFeatureDTO {
 // no health, when the caller may not get it or it is not admitted (design §7 item 3).
 type linkHealth func(ref objects.Ref) (Link, health.State)
 
+// healthSource is the source of a linked object's health: inferred, or none without it.
+func healthSource(s health.State) policy.Source {
+	if s == "" {
+		return ""
+	}
+	return policy.SourceInferred
+}
+
 // targets are e's targets with their checks; detail links them through lh.
 func (e *policyEntry) targets(lh linkHealth) []PolicyTargetDTO {
 	out := make([]PolicyTargetDTO, 0, len(e.p.Targets))
@@ -202,7 +210,7 @@ func (e *policyEntry) targets(lh linkHealth) []PolicyTargetDTO {
 				ref := t.Ref(e.p.Ref.Namespace)
 				lr := LinkedRef{Ref: ref}
 				lr.Link, d.Health = lh(ref)
-				d.Ref = &lr
+				d.Ref, d.HealthSource = &lr, healthSource(d.Health)
 			}
 		}
 		out = append(out, d)
@@ -450,11 +458,13 @@ func (h *handler) policyDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, a := range e.p.Ancestors {
 		d := PolicyAncestorDTO{Ref: LinkedRef{Ref: a.Ref.Ref(), Link: LinkNone}, SectionName: a.Ref.SectionName, Port: a.Ref.Port, Controller: a.Controller,
-			Conditions: conditions(e.u, a.Conditions), Current: a.Current, NotCurrent: a.NotCurrent, Why: a.Why, Summary: a.Summary,
-			Readings: make([]PolicyReadingDTO, 0, len(a.Readings)), Source: a.Source}
+			Conditions: conditions(e.u, a.Conditions), StaleSource: policy.SourceInferred, Current: a.Current, NotCurrent: a.NotCurrent, Why: a.Why,
+			CurrentSource: a.CurrentSource, Summary: a.Summary, SummarySource: a.SummarySource, Readings: make([]PolicyReadingDTO, 0, len(a.Readings)),
+			Source: a.Source}
 		// The summary ancestor names no object.
 		if !a.Summary {
 			d.Ref.Link, d.Health = lh(a.Ref.Ref())
+			d.HealthSource = healthSource(d.Health)
 		}
 		for _, rd := range a.Readings {
 			d.Readings = append(d.Readings, PolicyReadingDTO{Type: rd.Type, Warning: rd.Warning, Note: rd.Note, Source: rd.Source})

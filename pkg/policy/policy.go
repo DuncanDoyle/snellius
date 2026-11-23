@@ -104,12 +104,17 @@ type Ancestor struct {
 	// NotCurrent is a NotCurrent* value when Current is false; Why is the freshness reason.
 	NotCurrent string
 	Why        string
+	// CurrentSource is the source of Current, NotCurrent and Why: inferred, from the Guard.
+	CurrentSource Source
 	// Summary is true when the pack marks the entry as its controller's synthetic
-	// missing-target ancestor (inferred).
+	// missing-target ancestor.
 	Summary bool
+	// SummarySource is the source of Summary: inferred from the pack, unknown without one.
+	SummarySource Source
 	// Readings are the pack's readings of conditions, only those it reads (inferred).
 	Readings []Reading
-	Source   Source
+	// Source is the source of Ref, Controller and Conditions: controller-reported.
+	Source Source
 }
 
 // Note keys a pack may put on a Reading. The client words them.
@@ -220,7 +225,8 @@ func readAncestors(u *unstructured.Unstructured, gk objects.GroupKind, interp In
 	as := objects.PolicyAncestors(u)
 	out := make([]Ancestor, 0, len(as))
 	for _, a := range as {
-		an := Ancestor{Ref: a.AncestorRef, Controller: a.ControllerName, Conditions: slices.Clone(a.Conditions), Source: SourceControllerReported}
+		an := Ancestor{Ref: a.AncestorRef, Controller: a.ControllerName, Conditions: slices.Clone(a.Conditions), Source: SourceControllerReported,
+			CurrentSource: SourceInferred, SummarySource: SourceUnknown}
 		// The order of pkg/health/own policyAncestors: controller, ownership, freshness.
 		switch {
 		case !slices.Contains(g.ControllerNames, a.ControllerName):
@@ -237,7 +243,7 @@ func readAncestors(u *unstructured.Unstructured, gk objects.GroupKind, interp In
 			}
 		}
 		if interp != nil {
-			an.Summary = interp.Summary(gk, a.AncestorRef)
+			an.Summary, an.SummarySource = interp.Summary(gk, a.AncestorRef), SourceInferred
 			for _, c := range a.Conditions {
 				if r := interp.Condition(gk, a.AncestorRef, c); !r.zero() {
 					r.Type, r.Source = c.Type, SourceInferred

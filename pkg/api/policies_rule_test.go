@@ -559,6 +559,37 @@ func TestPolicyHiddenOwnedAncestorUnchanged(t *testing.T) {
 	}
 }
 
+// The detail gives an ancestor's derived fields their own source apart from its
+// controller-reported conditions: current, summary, each condition's staleness and
+// a link's health are inferred; so is a target's health (8.1 review #8).
+func TestPolicyDetailDerivedSources(t *testing.T) {
+	srv := policyServe(t, policyBase(t, ruleChange{name: "base"}), nil)
+	for _, user := range []string{fullUser, restrictedUser} {
+		d := decode[map[string]any](t, srv, user, tpPath(ns0, tpAncestors))
+		healths := 0
+		for _, x := range d["ancestors"].([]any) {
+			a := x.(map[string]any)
+			if a["source"] != string(policy.SourceControllerReported) || a["currentSource"] != string(policy.SourceInferred) ||
+				a["summarySource"] != string(policy.SourceInferred) || a["staleSource"] != string(policy.SourceInferred) {
+				t.Errorf("%s: ancestor sources %v", user, a)
+			}
+			if _, linked := a["health"]; linked != (a["healthSource"] == string(policy.SourceInferred)) {
+				t.Errorf("%s: health %v with source %v", user, a["health"], a["healthSource"])
+			}
+			if _, linked := a["health"]; linked {
+				healths++
+			}
+		}
+		tg := d["targets"].([]any)[0].(map[string]any)
+		if tg["source"] != string(policy.SourceDeclared) || tg["health"] == nil || tg["healthSource"] != string(policy.SourceInferred) {
+			t.Errorf("%s: target sources %v", user, tg)
+		}
+		if healths == 0 {
+			t.Errorf("%s: no linked ancestor health", user)
+		}
+	}
+}
+
 // Two policies with one kind, namespace and name in two groups are two rows and two details.
 func TestPolicyGroupCollision(t *testing.T) {
 	s := ruleSnapshot(t)

@@ -29,7 +29,9 @@
         ],
         "controller": "kgateway.dev/kgateway",
         "current": true,
+        "currentSource": "inferred",
         "health": "healthy",
+        "healthSource": "inferred",
         "readings": [
           {
             "note": "gateway-wide",
@@ -44,7 +46,9 @@
           "name": "edge",
           "namespace": "infra"
         },
-        "source": "controller-reported"
+        "source": "controller-reported",
+        "staleSource": "inferred",
+        "summarySource": "inferred"
       },
       {
         "conditions": [
@@ -60,6 +64,7 @@
         ],
         "controller": "example.com/other",
         "current": false,
+        "currentSource": "inferred",
         "notCurrent": "other-controller",
         "readings": [],
         "ref": {
@@ -69,7 +74,9 @@
           "name": "foreign",
           "namespace": "infra"
         },
-        "source": "controller-reported"
+        "source": "controller-reported",
+        "staleSource": "inferred",
+        "summarySource": "inferred"
       }
     ],
     "annotations": [
@@ -121,6 +128,7 @@
         },
         "group": "gateway.networking.k8s.io",
         "health": "healthy",
+        "healthSource": "inferred",
         "index": 0,
         "kind": "HTTPRoute",
         "name": "cart",
