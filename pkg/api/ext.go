@@ -16,6 +16,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/install"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/paths"
+	"github.com/DuncanDoyle/snellius/pkg/policy"
 )
 
 // ExtMount is one extension endpoint (design §4.1 gap 1). Pattern is
@@ -47,6 +48,8 @@ type handlerConfig struct {
 	scoped endpoints.ScopedReader
 	// consumersFor, if set, gives an install's non-route backend consumers.
 	consumersFor func(install.Install, *install.Owned) []objects.Consumer
+	// interpFor, if set, gives an install's pack policy interpreter.
+	interpFor func(install.Install) policy.Interpreter
 	// secure marks secure mode.
 	secure bool
 	// commitCheck and authzAudit are the commit wrapper's hooks (commit.go); nil means none.

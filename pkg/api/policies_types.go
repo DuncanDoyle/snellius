@@ -1,0 +1,172 @@
+package api
+
+import (
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/DuncanDoyle/snellius/pkg/health"
+	"github.com/DuncanDoyle/snellius/pkg/objects"
+	"github.com/DuncanDoyle/snellius/pkg/policy"
+)
+
+// PoliciesResponse is GET …/policies (Phase 8 design §6.2): the install's
+// policies the caller may view, sorted by namespace, name, group and kind.
+// Total and Facets count readable policies only.
+type PoliciesResponse struct {
+	Page[PolicyRow]
+	// Facets are the kind, feature and namespace filter values and the has-problems
+	// count, each counted with every filter but its own.
+	Facets PolicyFacetsDTO `json:"facets"`
+}
+
+// PolicyRow is one policy in the list.
+type PolicyRow struct {
+	// Ref is the policy, kind with group; its link opens the YAML.
+	Ref LinkedRef `json:"ref"`
+	// Targets are the targetRefs, then the targetSelectors, as written; refs carry their check.
+	Targets []PolicyTargetDTO `json:"targets"`
+	// Accepted is the worst Accepted over the current ancestors; nil when none reports one.
+	Accepted *PolicyAcceptedDTO `json:"accepted,omitempty"`
+	// AttachedOn are the current ancestors that report Attached=True.
+	AttachedOn []PolicyAttachedDTO `json:"attachedOn"`
+	// Features are the spec sections other than the targets, by key.
+	Features []PolicyFeatureDTO `json:"features"`
+	Problems PolicyProblemsDTO  `json:"problems"`
+}
+
+// PolicyTargetDTO is one targetRef or targetSelector as written (declared).
+// Ref and Health are set for a detail's targetRefs only: Ref is the named
+// object in the policy's namespace, its link none and Health empty unless the
+// caller may get it by name.
+type PolicyTargetDTO struct {
+	Index       int               `json:"index"`
+	Group       string            `json:"group"`
+	Kind        string            `json:"kind"`
+	Name        string            `json:"name,omitempty"`
+	SectionName string            `json:"sectionName,omitempty"`
+	Selector    bool              `json:"selector,omitempty"`
+	MatchLabels map[string]string `json:"matchLabels,omitempty"`
+	Source      policy.Source     `json:"source"`
+	// Check is a targetRef's check (design §5.2); selectors have none.
+	Check  *PolicyCheckDTO `json:"check,omitempty"`
+	Ref    *LinkedRef      `json:"ref,omitempty"`
+	Health health.State    `json:"health,omitempty"`
+}
+
+// PolicyCheckDTO is a target check: found, not-found, section-not-found or unknown.
+type PolicyCheckDTO struct {
+	Outcome string        `json:"outcome"`
+	Source  policy.Source `json:"source"`
+}
+
+// PolicyAcceptedDTO is the worst Accepted condition over a policy's current
+// ancestors (inferred): False before True, the first in status order.
+type PolicyAcceptedDTO struct {
+	Status metav1.ConditionStatus `json:"status"`
+	Reason string                 `json:"reason"`
+	Source policy.Source          `json:"source"`
+}
+
+// PolicyAttachedDTO is a current ancestor that reports Attached=True (controller-reported).
+type PolicyAttachedDTO struct {
+	objects.ParentRef
+	Source policy.Source `json:"source"`
+}
+
+// PolicyFeatureDTO is one spec section (declared). Label is the pack's name
+// for Key, empty without one; Value is the section as written, detail only.
+type PolicyFeatureDTO struct {
+	Key    string        `json:"key"`
+	Label  string        `json:"label,omitempty"`
+	Value  any           `json:"value,omitempty"`
+	Source policy.Source `json:"source"`
+}
+
+// PolicyProblemsDTO says whether a policy has problems (inferred): a current
+// ancestor condition False, a condition the pack reads as a warning, or a
+// target check not-found or section-not-found the caller may know of.
+type PolicyProblemsDTO struct {
+	Has    bool          `json:"has"`
+	Source policy.Source `json:"source"`
+}
+
+// PolicyFacetsDTO are the policies list's filter values.
+type PolicyFacetsDTO struct {
+	Kinds       []PolicyKindFacetDTO      `json:"kinds"`
+	Features    []PolicyFeatureFacetDTO   `json:"features"`
+	Namespaces  []PolicyNamespaceFacetDTO `json:"namespaces"`
+	HasProblems int                       `json:"hasProblems"`
+}
+
+// PolicyKindFacetDTO is a policy kind and its readable policies.
+type PolicyKindFacetDTO struct {
+	Group    string `json:"group"`
+	Kind     string `json:"kind"`
+	Policies int    `json:"policies"`
+}
+
+// PolicyFeatureFacetDTO is a spec key and the readable policies that set it.
+type PolicyFeatureFacetDTO struct {
+	Key      string `json:"key"`
+	Policies int    `json:"policies"`
+}
+
+// PolicyNamespaceFacetDTO is a namespace and its readable policies.
+type PolicyNamespaceFacetDTO struct {
+	Namespace string `json:"namespace"`
+	Policies  int    `json:"policies"`
+}
+
+// PolicyDetail is GET …/policies/{group}/{kind}/{ns}/{name} (Phase 8 design §6.3).
+type PolicyDetail struct {
+	Install string    `json:"install"`
+	Ref     LinkedRef `json:"ref"`
+	// YAML is the install-scoped YAML path of the policy, empty when it is not admitted.
+	YAML       string `json:"yaml,omitempty"`
+	Generation int64  `json:"generation"`
+	// Interpreted is true when the install's pack reads this kind.
+	Interpreted bool                  `json:"interpreted"`
+	Targets     []PolicyTargetDTO     `json:"targets"`
+	Ancestors   []PolicyAncestorDTO   `json:"ancestors"`
+	Accepted    *PolicyAcceptedDTO    `json:"accepted,omitempty"`
+	AttachedOn  []PolicyAttachedDTO   `json:"attachedOn"`
+	Features    []PolicyFeatureDTO    `json:"features"`
+	Annotations []PolicyAnnotationDTO `json:"annotations"`
+	Problems    PolicyProblemsDTO     `json:"problems"`
+	CollectedAt time.Time             `json:"collectedAt"`
+}
+
+// PolicyAncestorDTO is one status.ancestors entry with its conditions
+// (controller-reported). NotCurrent says why an entry is left out of the
+// summaries: other-controller, not-owned or not-fresh, with Why. Link is none
+// and Health empty unless the caller may get the ancestor by name.
+type PolicyAncestorDTO struct {
+	Ref         LinkedRef          `json:"ref"`
+	SectionName string             `json:"sectionName,omitempty"`
+	Port        int32              `json:"port,omitempty"`
+	Health      health.State       `json:"health,omitempty"`
+	Controller  string             `json:"controller"`
+	Conditions  []Condition        `json:"conditions"`
+	Current     bool               `json:"current"`
+	NotCurrent  string             `json:"notCurrent,omitempty"`
+	Why         string             `json:"why,omitempty"`
+	Summary     bool               `json:"summary,omitempty"`
+	Readings    []PolicyReadingDTO `json:"readings"`
+	Source      policy.Source      `json:"source"`
+}
+
+// PolicyReadingDTO is the pack's reading of one ancestor condition (inferred).
+type PolicyReadingDTO struct {
+	Type    string        `json:"type"`
+	Warning bool          `json:"warning,omitempty"`
+	Note    string        `json:"note,omitempty"`
+	Source  policy.Source `json:"source"`
+}
+
+// PolicyAnnotationDTO is a precedence annotation as written (declared); kgateway evaluates it.
+type PolicyAnnotationDTO struct {
+	Key    string        `json:"key"`
+	Value  string        `json:"value"`
+	Source policy.Source `json:"source"`
+}
