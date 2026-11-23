@@ -46,7 +46,7 @@ function Gated({ children }: { children: ReactNode }) {
 const noExtension: ShellExtension = {};
 
 // The explorer's install-scoped paths (design §8.2); the CorePages slots replace their pages.
-const RESERVED = ["gateways", "listenersets", "routes", "traffic", "backends"];
+const RESERVED = ["gateways", "listenersets", "routes", "traffic", "backends", "policies"];
 
 /** The reserved path an install-scoped contribution sits at or below, if any; every other path competes by router rank as in Phase 1. */
 export function reservedPathOf(r: RouteContribution): string | undefined {
@@ -114,6 +114,8 @@ export function Shell({ extension = noExtension, pages, stylesOverride }: ShellP
   const TrafficPage = pages.TrafficPage ?? defaultPages.TrafficPage;
   const BackendsPage = pages.BackendsPage ?? defaultPages.BackendsPage;
   const BackendPage = pages.BackendPage ?? defaultPages.BackendPage;
+  const PoliciesPage = pages.PoliciesPage ?? defaultPages.PoliciesPage;
+  const PolicyPage = pages.PolicyPage ?? defaultPages.PolicyPage;
   // Core pages under /i/:id/; the install nav shows an entry only when its path is listed here.
   const installRoutes: [string, ComponentType][] = [
     ["", InstallPage],
@@ -121,11 +123,13 @@ export function Shell({ extension = noExtension, pages, stylesOverride }: ShellP
     ["routes", RoutesPage],
     ["traffic", TrafficPage],
     ["backends", BackendsPage],
+    ["policies", PoliciesPage],
     ["listenersets", ListenerSetsPage],
     ["gateways/:ns/:name", GatewayPage],
     ["listenersets/:group/:kind/:ns/:name", ListenerSetPage],
     ["routes/:group/:kind/:ns/:name", RoutePage],
     ["backends/:group/:kind/:ns/:name", BackendPage],
+    ["policies/:group/:kind/:ns/:name", PolicyPage],
     ["findings", FindingsPage],
     ["findings/:findingId", FindingPage],
     ["processes", ProcessesPage],

@@ -41,6 +41,9 @@ import notFound from "../../../../../pkg/api/testdata/golden/not-found.json";
 import overview from "../../../../../pkg/api/testdata/golden/overview.json";
 import pathsGolden from "../../../../../pkg/api/testdata/golden/paths.json";
 import pathsRestrictedGolden from "../../../../../pkg/api/testdata/golden/paths-restricted.json";
+import policiesGolden from "../../../../../pkg/api/testdata/golden/policies.json";
+import policiesFilteredGolden from "../../../../../pkg/api/testdata/golden/policies-filtered.json";
+import policyDetailGolden from "../../../../../pkg/api/testdata/golden/policy-detail.json";
 import processesGolden from "../../../../../pkg/api/testdata/golden/processes.json";
 import processesRestrictedGolden from "../../../../../pkg/api/testdata/golden/processes-restricted.json";
 import refsGolden from "../../../../../pkg/api/testdata/golden/refs.json";
@@ -158,6 +161,18 @@ import type {
   PathStep,
   PathSummary,
   PathsResponse,
+  PoliciesResponse,
+  PolicyAccepted,
+  PolicyAncestor,
+  PolicyAnnotation,
+  PolicyAttached,
+  PolicyDetail,
+  PolicyFacets,
+  PolicyFeature,
+  PolicyProblems,
+  PolicyReading,
+  PolicyRow,
+  PolicyTarget,
   PortChain,
   ProbeFacts,
   ProcessEvidence,
@@ -1474,6 +1489,136 @@ const backendDetail = shape<BackendDetail>(
   },
 );
 /** problems lists keys the types do not declare, required keys the wire omits and values outside a union, recursing. */
+// Policies (sub-phase 8.1 API, 8.2 pages).
+const policySource = {
+  declared: 1,
+  "controller-reported": 1,
+  "controller-reported-contribution": 1,
+  inferred: 1,
+  unknown: 1,
+} as const;
+const policyCheck = shape<NonNullable<PolicyTarget["check"]>>(
+  { outcome: "!", source: "!" },
+  {},
+  { outcome: { found: 1, "not-found": 1, "section-not-found": 1, unknown: 1 }, source: policySource },
+);
+const policyTarget = shape<PolicyTarget>(
+  {
+    index: "!",
+    group: "!",
+    kind: "!",
+    name: "?",
+    sectionName: "?",
+    selector: "?",
+    matchLabels: "?",
+    source: "!",
+    check: "?",
+    ref: "?",
+    health: "?",
+    healthSource: "?",
+  },
+  { check: policyCheck, ref: linkedRef },
+  { source: policySource, health: healthState, healthSource: policySource },
+);
+const policyAccepted = shape<PolicyAccepted>({ status: "!", reason: "!", source: "!" }, {}, { source: policySource });
+const policyAttached = shape<PolicyAttached>(
+  { group: "!", kind: "!", namespace: "?", name: "!", sectionName: "?", port: "?", source: "!" },
+  {},
+  { source: policySource },
+);
+const policyFeature = shape<PolicyFeature>(
+  { key: "!", label: "?", value: "?", source: "!" },
+  {},
+  { source: policySource },
+);
+const policyProblems = shape<PolicyProblems>({ has: "!", source: "!" }, {}, { source: policySource });
+const policyRow = shape<PolicyRow>(
+  { ref: "!", targets: "!", accepted: "?", attachedOn: "!", features: "!", problems: "!" },
+  {
+    ref: linkedRef,
+    targets: policyTarget,
+    accepted: policyAccepted,
+    attachedOn: policyAttached,
+    features: policyFeature,
+    problems: policyProblems,
+  },
+);
+const policiesResponse = shape<PoliciesResponse>(
+  { ...pageKeys, facets: "!" },
+  {
+    items: policyRow,
+    facets: shape<PolicyFacets>(
+      { kinds: "!", features: "!", namespaces: "!", hasProblems: "!" },
+      {
+        kinds: shape<PolicyFacets["kinds"][number]>({ group: "!", kind: "!", policies: "!" }),
+        features: shape<PolicyFacets["features"][number]>({ key: "!", policies: "!" }),
+        namespaces: shape<PolicyFacets["namespaces"][number]>({ namespace: "!", policies: "!" }),
+      },
+    ),
+  },
+);
+const policyReading = shape<PolicyReading>(
+  { type: "!", warning: "?", note: "?", source: "!" },
+  {},
+  { source: policySource },
+);
+const policyAncestor = shape<PolicyAncestor>(
+  {
+    ref: "!",
+    sectionName: "?",
+    port: "?",
+    health: "?",
+    healthSource: "?",
+    controller: "!",
+    conditions: "!",
+    staleSource: "!",
+    current: "!",
+    notCurrent: "?",
+    why: "?",
+    currentSource: "!",
+    summary: "?",
+    summarySource: "!",
+    readings: "!",
+    source: "!",
+  },
+  { ref: linkedRef, conditions: condition, readings: policyReading },
+  {
+    health: healthState,
+    healthSource: policySource,
+    staleSource: policySource,
+    currentSource: policySource,
+    summarySource: policySource,
+    source: policySource,
+  },
+);
+const policyDetail = shape<PolicyDetail>(
+  {
+    install: "!",
+    ref: "!",
+    yaml: "?",
+    generation: "!",
+    interpreted: "!",
+    targets: "!",
+    ancestors: "!",
+    accepted: "?",
+    attachedOn: "!",
+    features: "!",
+    annotations: "!",
+    problems: "!",
+    collectedAt: "!",
+  },
+  {
+    ref: linkedRef,
+    targets: policyTarget,
+    ancestors: policyAncestor,
+    accepted: policyAccepted,
+    attachedOn: policyAttached,
+    features: policyFeature,
+    annotations: shape<PolicyAnnotation>({ key: "!", value: "!", source: "!" }, {}, { source: policySource }),
+    problems: policyProblems,
+  },
+);
+
 function problems(s: Shape, v: unknown, path: string): string[] {
   if (Array.isArray(v)) return v.flatMap((e, i) => problems(s, e, `${path}[${i}]`));
   if (v === null || typeof v !== "object") return [`${path}: want an object, got ${JSON.stringify(v)}`];
@@ -1616,6 +1761,9 @@ describe("types.ts matches the golden v1 wire format", () => {
     ["backend-detail-service", backendDetailServiceGolden.body satisfies Wide<BackendDetail>, backendDetail],
     ["backend-detail-backend", backendDetailBackendGolden.body satisfies Wide<BackendDetail>, backendDetail],
     ["backend-detail-explained", backendDetailExplainedGolden.body satisfies Wide<BackendDetail>, backendDetail],
+    ["policies", policiesGolden.body satisfies Wide<PoliciesResponse>, policiesResponse],
+    ["policies-filtered", policiesFilteredGolden.body satisfies Wide<PoliciesResponse>, policiesResponse],
+    ["policy-detail", policyDetailGolden.body satisfies Wide<PolicyDetail>, policyDetail],
   ] as const)("%s", (_, body, s) => {
     expect(problems(s, body, "body")).toEqual([]);
   });

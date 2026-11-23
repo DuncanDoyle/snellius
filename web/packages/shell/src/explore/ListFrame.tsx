@@ -58,7 +58,8 @@ interface ListFrameProps {
   error?: ApiError;
   /** Whether data has loaded; without it an error replaces the page. */
   loaded: boolean;
-  search: { label: string; placeholder: string; value: string; onChange: (v: string) => void };
+  /** The text filter; absent for a list whose server has no text search (Policies). */
+  search?: { label: string; placeholder: string; value: string; onChange: (v: string) => void };
   /** Filter chips and tags, rendered from the URL, so they are there before the data. */
   filters?: ReactNode;
   /** Content above the filter bar that the filters do not apply to, e.g. the Processes page's controller. */
@@ -107,17 +108,19 @@ export function ListFrame({
       {/* Without data the error below stands in for the lead too. */}
       {failed ? null : lead}
       <Bar>
-        <SearchBox>
-          <Search size={14} aria-hidden="true" />
-          <input
-            type="search"
-            aria-label={search.label}
-            autoComplete="off"
-            placeholder={search.placeholder}
-            value={search.value}
-            onChange={(e) => search.onChange(e.target.value)}
-          />
-        </SearchBox>
+        {search ? (
+          <SearchBox>
+            <Search size={14} aria-hidden="true" />
+            <input
+              type="search"
+              aria-label={search.label}
+              autoComplete="off"
+              placeholder={search.placeholder}
+              value={search.value}
+              onChange={(e) => search.onChange(e.target.value)}
+            />
+          </SearchBox>
+        ) : null}
         {filters}
         {onClearFilters ? (
           <QuietButton type="button" onClick={onClearFilters}>

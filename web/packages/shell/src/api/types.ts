@@ -4,6 +4,7 @@ import type { Link, LinkedRef } from "./exploreTypes";
 
 export * from "./diagTypes";
 export * from "./exploreTypes";
+export * from "./policyTypes";
 
 /** Mirrors pkg/api, pkg/overview, pkg/health JSON as built (sub-phase 1.1). */
 export type Severity = "error" | "warning" | "info";
