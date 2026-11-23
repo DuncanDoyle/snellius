@@ -585,6 +585,18 @@ func TestPolicyTargetPartlyMissingFromStatus(t *testing.T) {
 	}
 }
 
+// A list-only DirectResponse never gets a 016, so on 2.5 a current
+// TargetNotFound ancestor stays a 002 per condition, as on 2.4 (8.1 review #7).
+func TestDirectResponseTargetNotFoundKeeps002(t *testing.T) {
+	dr := testutil.Policy("gateway.kgateway.dev/v1alpha1", "DirectResponse", "infra", "dr", summary(1))
+	for name, sel := range map[string]computed.Selection{"2.4": rules24, "2.5": rules25} {
+		r := targetsRun(t, sel, []*unstructured.Unstructured{dr.DeepCopy()}, time.Hour)
+		if fs := findingsFor(r, CodeConditionFalse, "infra/dr"); len(fs) != 2 || has(r, CodePolicyTargetNotFound, "", "infra/dr") {
+			t.Errorf("%s: want two 002, no 016: %+v", name, r.Findings)
+		}
+	}
+}
+
 // kgw24 is unchanged: the same TargetNotFound ancestor stays a 002 per condition.
 func TestPolicyTargetStatusOn24Unchanged(t *testing.T) {
 	tp := targetPolicy("infra", []map[string]any{tRef("Gateway", "edge", "")}, nil, summary(1))

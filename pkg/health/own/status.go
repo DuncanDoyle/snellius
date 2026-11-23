@@ -120,6 +120,8 @@ func listenerBlocks(o *out, u *unstructured.Unstructured, status []objects.Liste
 // controller: a Gateway or ListenerSet one only when the install owns it.
 func policyAncestors(ic InstallContext, u *unstructured.Unstructured, named Named, o *out) {
 	required, optional := PolicyRequired(), PolicyOptional()
+	gvk := u.GroupVersionKind()
+	gk := objects.GroupKind{Group: gvk.Group, Kind: gvk.Kind}
 	for _, a := range objects.PolicyAncestors(u) {
 		if !slices.Contains(ic.ControllerNames, a.ControllerName) {
 			continue
@@ -131,8 +133,9 @@ func policyAncestors(ic InstallContext, u *unstructured.Unstructured, named Name
 		if why, _, _ := BlockFreshness(u, a.Conditions, required, optional); why != "" {
 			continue
 		}
-		// 016 owns TargetNotFound where the rule set reads it from status (D-030).
-		fromStatus := ic.TargetFromStatus && slices.ContainsFunc(append(slices.Clone(required), optional...), func(t string) bool {
+		// 016 owns TargetNotFound where the rule set reads it from status (D-030); it never
+		// judges a list-only policy (DirectResponse), which keeps its 002 (design §6.6).
+		fromStatus := ic.TargetFromStatus && slices.Contains(ic.PolicyKinds, gk) && slices.ContainsFunc(append(slices.Clone(required), optional...), func(t string) bool {
 			c := objects.FindCondition(a.Conditions, t)
 			return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "TargetNotFound"
 		})
