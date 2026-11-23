@@ -120,8 +120,15 @@ func TestRelations(t *testing.T) {
 			edit: func(w *world) { w.hidden[gwRef] = true }, want: []string{tp + "infra/p-ls" + dcl + "HTTPRoute shop/r-ls via ListenerSet infra/ls"}},
 		{name: "hidden ListenerSet drops both hops", subject: policy.Subject{Ref: r("HTTPRoute", "r-ls")},
 			edit: func(w *world) { w.hidden[lsRef] = true }},
-		{name: "absent ListenerSet ends at the first hop", subject: policy.Subject{Ref: r("HTTPRoute", "r-ls")},
-			edit: func(w *world) { delete(w.objs, lsRef) }, want: []string{tp + "infra/p-ls" + dcl + "HTTPRoute shop/r-ls via ListenerSet infra/ls"}},
+		// A hop missing from the inputs drops its relations, as a hidden one does (design §7 item 5).
+		{name: "absent ListenerSet drops both hops", subject: policy.Subject{Ref: r("HTTPRoute", "r-ls")},
+			edit: func(w *world) { delete(w.objs, lsRef) }},
+		{name: "absent Gateway hop drops its relations", subject: policy.Subject{Ref: r("HTTPRoute", "r-sectioned")},
+			edit: func(w *world) { delete(w.objs, gwRef) }, want: []string{"targets shop/p-route" + dcl + "HTTPRoute shop/r-sectioned"}},
+		{name: "absent second hop keeps the first", subject: policy.Subject{Ref: r("HTTPRoute", "r-ls")},
+			edit: func(w *world) { delete(w.objs, gwRef) }, want: []string{tp + "infra/p-ls" + dcl + "HTTPRoute shop/r-ls via ListenerSet infra/ls"}},
+		{name: "ListenerSet whose Gateway is absent", subject: policy.Subject{Ref: lsRef},
+			edit: func(w *world) { delete(w.objs, gwRef) }, want: []string{"targets infra/p-ls" + dcl + "ListenerSet infra/ls"}},
 		{name: "hidden subject", subject: policy.Subject{Ref: r("HTTPRoute", "r-sectioned")},
 			edit: func(w *world) { w.hidden[r("HTTPRoute", "r-sectioned")] = true }},
 		{name: "Gateway: targets and current Attached=True ancestors", subject: policy.Subject{Ref: gwRef}, want: []string{

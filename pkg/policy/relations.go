@@ -55,7 +55,7 @@ type Relation struct {
 //     (design §5.3), with Via the hops walked.
 //   - attached-on-ancestor: a current ancestor with Attached=True is s, matched as targets are.
 //
-// s and every hop must be readable through in.Lookup, or the relation is not made.
+// s must be readable, and every hop readable and present, through in.Lookup, or the relation is not made.
 func Relations(s Subject, in Inputs) []Relation {
 	l := in.Lookup
 	if l == nil || !l.CanGet(s.Ref) {
@@ -102,8 +102,9 @@ type hop struct {
 	unsectioned bool
 }
 
-// parentPaths returns the readable parent hops of u: each parentRef of a route,
-// a ListenerSet's own parentRef, and for a route's ListenerSet parent also its Gateway.
+// parentPaths returns the parent hops of u that exist in l and are readable: each
+// parentRef of a route, a ListenerSet's own parentRef, and for a route's ListenerSet
+// parent also its Gateway (design §7 item 5).
 func parentPaths(u *unstructured.Unstructured, l Lookup) []hop {
 	ref := objects.RefOf(u)
 	var parents []objects.ParentRef
@@ -113,10 +114,18 @@ func parentPaths(u *unstructured.Unstructured, l Lookup) []hop {
 	default:
 		parents = objects.RouteParentRefs(u)
 	}
+	// present returns the hop's object when the caller may get it and l holds it.
+	present := func(r objects.Ref) (*unstructured.Unstructured, bool) {
+		if !l.CanGet(r) {
+			return nil, false
+		}
+		return l.Object(r)
+	}
 	var out []hop
 	for _, p := range parents {
 		first := Subject{Ref: p.Ref(), SectionName: p.SectionName, Port: p.Port}
-		if !l.CanGet(first.Ref) {
+		parent, ok := present(first.Ref)
+		if !ok {
 			continue
 		}
 		out = append(out, hop{via: []Subject{first}, unsectioned: p.SectionName == ""})
@@ -124,13 +133,8 @@ func parentPaths(u *unstructured.Unstructured, l Lookup) []hop {
 		if listenerSet(ref.Group, ref.Kind) || !listenerSet(p.Group, p.Kind) {
 			continue
 		}
-		ls, ok := l.Object(p.Ref())
-		if !ok {
-			continue
-		}
-		g := objects.ListenerSetParent(ls)
-		second := Subject{Ref: g.Ref()}
-		if l.CanGet(second.Ref) {
+		second := Subject{Ref: objects.ListenerSetParent(parent).Ref()}
+		if _, ok := present(second.Ref); ok {
 			out = append(out, hop{via: []Subject{first, second}, unsectioned: true})
 		}
 	}
