@@ -22,7 +22,7 @@ type PoliciesResponse struct {
 
 // PolicyRow is one policy in the list.
 type PolicyRow struct {
-	// Ref is the policy, kind with group; its link opens the YAML.
+	// Ref is the policy, kind with group; its link opens the policy detail.
 	Ref LinkedRef `json:"ref"`
 	// Targets are the targetRefs, then the targetSelectors, as written; refs carry their check.
 	Targets []PolicyTargetDTO `json:"targets"`

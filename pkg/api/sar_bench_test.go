@@ -918,18 +918,29 @@ func policyReader(a sar.Attributes) bool {
 	return a.Verb == "list" && (a.Resource == "trafficpolicies" || a.Namespace != "" && granted(a.Namespace))
 }
 
-// A cold Large policies list with one policy per route answers within the
-// per-request check budget for every restricted viewer (8.1 re-review: budget).
+// A cold Large policies list with one policy per route, and the subject details that
+// carry relations, answer within the per-request check budget for every restricted
+// viewer (8.1 re-review: budget).
 func TestBudgetSARPoliciesLarge(t *testing.T) {
 	build, m := api.TierHandlersWith(t, scale.Large, largePolicies)
-	path := "/api/v1/installs/" + m.Installs[0].Resolved.ID() + "/policies?limit=1"
-	for _, v := range append(slices.Clone(viewers), viewer{"policy-reader", policyReader}) {
-		c, clk := &fakeChecker{allow: v.allow}, clocktesting.NewFakeClock(t0)
-		h := build(newAuthz(c, clk, nil, lifted), api.WithSecureMode(), api.WithCommitClock(clk.Now))
-		cold := get(h, c, "u", path)
-		t.Logf("%-16s /policies?limit=1 cold %d SARs (%d list, %d get) → %d", v.name, cold.sars, c.lists.Load(), c.gets.Load(), cold.code)
-		if cold.code != http.StatusOK || cold.sars > api.CheckLimit {
-			t.Errorf("%s: cold /policies?limit=1 %d with %d SARs (limit %d)", v.name, cold.code, cold.sars, api.CheckLimit)
+	base := "/api/v1/installs/" + m.Installs[0].Resolved.ID()
+	ix := m.Installs[0].Index
+	route, svc := detailPages(t, ix, base)
+	k := slices.IndexFunc(ix.Gateways, func(g explore.GatewayRow) bool { return canView(g.Ref) })
+	if k < 0 {
+		t.Fatal("no visible Gateway")
+	}
+	gw := base + "/gateways/" + ix.Gateways[k].Ref.Namespace + "/" + ix.Gateways[k].Ref.Name
+	for _, path := range []string{base + "/policies?limit=1", gw, route, svc} {
+		for _, v := range append(slices.Clone(viewers), viewer{"policy-reader", policyReader}) {
+			c, clk := &fakeChecker{allow: v.allow}, clocktesting.NewFakeClock(t0)
+			h := build(newAuthz(c, clk, nil, lifted), api.WithSecureMode(), api.WithCommitClock(clk.Now))
+			cold := get(h, c, "u", path)
+			t.Logf("%-16s %s cold %d SARs (%d list, %d get) → %d", v.name, strings.TrimPrefix(path, base), cold.sars, c.lists.Load(), c.gets.Load(), cold.code)
+			// denied-list may not open the Service detail (404), as in TestBudgetSARDeniedList.
+			if cold.code != http.StatusOK && cold.code != http.StatusNotFound || cold.sars > api.CheckLimit {
+				t.Errorf("%s: cold %s %d with %d SARs (limit %d)", v.name, path, cold.code, cold.sars, api.CheckLimit)
+			}
 		}
 	}
 }
