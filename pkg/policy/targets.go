@@ -97,19 +97,20 @@ func CheckTargets(p Policy, in Inputs) []TargetCheck {
 
 // gate keeps a targeter's outcome only when the caller may read what it rests on
 // (design §7 item 4): every outcome needs named get; not found also needs list in the namespace.
-// A name the caller may not get is unknown whether or not it exists (D-119).
+// A name the caller may not get is unknown whether or not it exists (D-119). An
+// outcome already unknown asks nothing, so no check is spent on it.
 func gate(l Lookup, ns string, r computed.TargetRef, outcome string) string {
 	gk := objects.GroupKind{Group: r.Group, Kind: r.Kind}
+	switch outcome {
+	case computed.TargetFound, computed.TargetSectionNotFound, computed.TargetNotFound:
+	default:
+		return computed.TargetUnknown
+	}
 	if !l.Watched(gk, ns) || !l.CanGet(objects.Ref{Group: r.Group, Kind: r.Kind, Namespace: ns, Name: r.Name}) {
 		return computed.TargetUnknown
 	}
-	switch outcome {
-	case computed.TargetFound, computed.TargetSectionNotFound:
-		return outcome
-	case computed.TargetNotFound:
-		if l.CanList(gk, ns) {
-			return outcome
-		}
+	if outcome == computed.TargetNotFound && !l.CanList(gk, ns) {
+		return computed.TargetUnknown
 	}
-	return computed.TargetUnknown
+	return outcome
 }

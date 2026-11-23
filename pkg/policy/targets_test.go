@@ -145,6 +145,30 @@ func TestCheckTargetsLookupLimitedToTarget(t *testing.T) {
 	}
 }
 
+// counting is a world that counts the access questions asked of it.
+type counting struct {
+	*world
+	gets, lists int
+}
+
+func (c *counting) CanGet(r objects.Ref) bool { c.gets++; return c.world.CanGet(r) }
+
+func (c *counting) CanList(gk objects.GroupKind, ns string) bool {
+	c.lists++
+	return c.world.CanList(gk, ns)
+}
+
+// An outcome the targeter leaves unknown, as 2.5 does for explicit refs, asks
+// no access question: no check is spent on a verdict that cannot change (8.1 re-review: budget).
+func TestCheckTargetsUnknownAsksNothing(t *testing.T) {
+	u := trafficPolicy("pt", "p", []map[string]any{targetRef(gw, "Gateway", "gw", ""), targetRef(gw, "HTTPRoute", "missing", "")})
+	c := &counting{world: newWorld(gateway("pt", "gw", "http"))}
+	checks := policy.CheckTargets(policy.Read(u, nil, policy.Guard{}), policy.Inputs{Lookup: c, Targeter: rules(kgw25.New()), ScopeKnown: true})
+	if len(checks) != 2 || checks[0].Outcome != computed.TargetUnknown || c.gets+c.lists != 0 {
+		t.Errorf("checks %+v asked %d gets, %d lists; want unknown and none", checks, c.gets, c.lists)
+	}
+}
+
 // A policy with no targetRefs, or selectors only, has no checks.
 func TestCheckTargetsSelectorsOnly(t *testing.T) {
 	u := obj(kgw, "v1alpha1", "TrafficPolicy", "pt", "sel", map[string]any{
