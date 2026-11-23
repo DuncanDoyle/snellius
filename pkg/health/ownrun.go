@@ -191,21 +191,28 @@ func (b *ownBase) inScope(in Input, ns string) bool {
 // collected reports whether the cache read kind gk and, for a namespace other
 // than "" in a scoped snapshot, read gk there. A kind the UI does not watch counts as read.
 func (in Input) collected(gk objects.GroupKind, ns string) bool {
-	if in.Snapshot == nil {
+	return Collected(in.Snapshot, in.Served, gk, ns)
+}
+
+// Collected reports whether snap read kind gk, one of served, and, for a
+// namespace other than "" in a scoped snapshot, read gk there. A kind served
+// does not list counts as read.
+func Collected(snap *cache.Snapshot, served []kinds.Served, gk objects.GroupKind, ns string) bool {
+	if snap == nil {
 		return false
 	}
 	gvr := cache.ServicesGVR
 	if gk != cache.ServicesKind {
-		i := slices.IndexFunc(in.Served, func(s kinds.Served) bool { return s.Group == gk.Group && s.Kind == gk.Kind })
+		i := slices.IndexFunc(served, func(s kinds.Served) bool { return s.Group == gk.Group && s.Kind == gk.Kind })
 		if i < 0 {
 			return true
 		}
-		gvr = in.Served[i].GVR()
+		gvr = served[i].GVR()
 	}
-	if !in.Snapshot.Access[gvr].OK {
+	if !snap.Access[gvr].OK {
 		return false
 	}
-	return ns == "" || len(in.Snapshot.RequestedNamespaces) == 0 || in.Snapshot.NamespaceAccess[gvr][ns].OK
+	return ns == "" || len(snap.RequestedNamespaces) == 0 || snap.NamespaceAccess[gvr][ns].OK
 }
 
 // runOwn evaluates the analyzers ks on each resource through package own, in

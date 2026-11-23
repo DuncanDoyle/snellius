@@ -125,7 +125,7 @@ func policyAncestors(ic InstallContext, u *unstructured.Unstructured, named Name
 			continue
 		}
 		ar := a.AncestorRef.Ref()
-		if inCategory(ic, ar.Group, ar.Kind, kinds.CategoryGateway, kinds.CategoryListenerSet) && !ic.Owns(ar) {
+		if !AncestorOwned(ic, ar) {
 			continue
 		}
 		if why, _, _ := BlockFreshness(u, a.Conditions, required, optional); why != "" {
@@ -150,6 +150,12 @@ func policyAncestors(ic InstallContext, u *unstructured.Unstructured, named Name
 			}
 		}
 	}
+}
+
+// AncestorOwned reports whether the install of ic may report on policy
+// ancestor ar: false only for a Gateway or ListenerSet ancestor it does not own.
+func AncestorOwned(ic InstallContext, ar objects.Ref) bool {
+	return !inCategory(ic, ar.Group, ar.Kind, kinds.CategoryGateway, kinds.CategoryListenerSet) || ic.Owns(ar)
 }
 
 // policySeverity maps a current policy ancestor condition to a severity
