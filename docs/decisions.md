@@ -1797,3 +1797,10 @@ Measured on the reference machine, 5 runs per world:
 2. DirectResponse stays list-only (no ownership, freshness or route attribution change). Its ancestors feed only the policy ancestor findings. Amends D-058 item 6.
 
 **Consequences:** A route whose parentRef names a whole Gateway shows no listener-level policies; the Gateway page does. Finding changes for DirectResponse update `docs/findings.md`, snellius.dev (P-006) and snellius-demo (P-007).
+
+## D-130 — `policy.Read` takes the ancestor guards as a value (2026-11-23, Phase 8)
+**Status:** proposed (sub-phase 8.1, our call); from (Phase 8 design §5.1, §6.4).
+
+**Decision:** `policy.Read(u, interp, g Guard)`. `Guard` carries the install's controller names and two functions, ownership and freshness, which callers build from the guards the policy findings use (`own.BlockFreshness`, `policyAncestors`). `Read` stays pure: no lookups. `pkg/policy` does not import `pkg/health`. A nil function makes no ancestor current. A non-current ancestor carries why: `other-controller`, `not-owned` or `not-fresh` (stale or pending).
+
+**Consequences:** kgwctl (E7) builds a `Guard` too; a zero `Guard` gives verbatim ancestors with none current. The design's "stale" mark reads "not fresh" in the model; UI copy is decided in 8.2.
