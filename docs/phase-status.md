@@ -4,7 +4,7 @@
 Phase: 8 — Policies & Filters
 Base: b01b677
 Docs: docs/phases/phase-8/
-Status: design (2026-11-22). design.md and implementation-plan.md written; Codex design review done (12 findings, all accepted, design revised); waiting for user approval before code. Scope reworked (D-121 … D-129, proposed): declared policy visibility, no resolver; runtime view to Phase 12. Phase start: program read, scope endpoint filed as kgateway#15070, kgateway#14815 still open.
+Status: design approved (user, 2026-11-23); D-121 … D-129 accepted; runtime view in Phase 12. Next: sub-phase 8.1 (model, pack hook, install-scoped API, DirectResponse status). Phase start: program read, scope endpoint filed as kgateway#15070, kgateway#14815 still open.
 Author: claude (Opus 5.5)
 
 ## Sub-phase
@@ -46,11 +46,6 @@ Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; uncha
 - (P4) Move engine's rule-set fallbacks and the Gateway CRD table behind the pack (D-128, program open question 3)
 
 ## Notes
-- 2026-11-22 (end of day): user decisions needed before work continues. Nothing external blocks Phase 8.1.
-  1. Approve the Phase 8 design (`phases/phase-8/design.md`, D-121 … D-129) so 8.1 can start.
-  2. Runtime view to Phase 12 (D-124, recommended), or an opt-in runtime view in Phase 8 with a new RBAC grant.
-  3. Push `duncandoyle/phase8Design` and open a draft PR.
-  4. Open the `[from kgwctl]` cross-repo issue and PR for `Scope.Excluded` (`duncandoyle/scopeExcluded`, `853e2b6`), linking kgateway#15070.
 - 2026-11-22: `Scope.Excluded` (branch `duncandoyle/scopeExcluded`) is for kgwctl Phase 4 task 4.2.2, which it does not block yet. When a release includes it, send kgwctl the tag (`cross-repo` issue naming E2).
 - 2026-11-14: `v0.7.1` released (walkthrough fixes, #42 and #43, D-079 … D-083; phases/phase-6/phase-6-complete.md, Patch release v0.7.1). API v1 changes are additive. The snellius.dev sync now covers `v0.7.0` and `v0.7.1`.
 - 2026-11-12: Phase 6 closed (phases/phase-6/phase-6-complete.md), merged in #36 and released as `v0.7.0`. Its snellius.dev gate is still open: sync the site for `v0.7.0`. Open items from the record's Deferred / open: the KGWUI-023 title, the map's reserved rule column, export scope, the D-078 review. The user decides when Phase 7 starts; read the program file and set Base then.

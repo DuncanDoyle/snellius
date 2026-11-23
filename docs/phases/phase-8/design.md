@@ -1,10 +1,10 @@
 # Phase 8 — Policies & Filters: Design
 
-**Status:** Revised after the Codex design review (`reviews/design-codex.md`, 12 findings, all accepted). Rescoped on 2026-11-22 from the user's Phase 8 brief and the program handoff (program P-008, P-009; kgateway-tooling `bd1f17d`, now on main). Calls marked (our call) are open to change. Waiting for user approval before code.
+**Status:** Revised after the Codex design review (`reviews/design-codex.md`, 12 findings, all accepted). Rescoped on 2026-11-22 from the user's Phase 8 brief and the program handoff (program P-008, P-009; kgateway-tooling `bd1f17d`, now on main). Approved by the user on 2026-11-23 ("Approved"; runtime view: "Agree, Phase 12"). Calls marked (our call) are open to change.
 **Date:** 2026-11-22
 **Base:** `b01b677` (main after #64; the design adds no code)
 **Roadmap:** `docs/roadmap.md`, Phase 8, principles 4, 9 and 10
-**Decisions:** D-005, D-006, D-020, D-030, D-058, D-085, D-087, D-107, D-109, D-119 in `docs/decisions.md`. This design proposes D-121 … D-129 (§12).
+**Decisions:** D-005, D-006, D-020, D-030, D-058, D-085, D-087, D-107, D-109, D-119 in `docs/decisions.md`. This design adds D-121 … D-129 (§12), accepted 2026-11-23.
 **Code refs:** `file:line` at `b01b677`.
 **Ships as:** `v0.9.0` (our call).
 
