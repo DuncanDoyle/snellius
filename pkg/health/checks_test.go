@@ -42,6 +42,9 @@ type world struct {
 	access    map[schema.GroupVersionResource]cache.Access // overrides on top of "everything readable"
 	platform  platform.Info                                // zero = Kubernetes
 	computed  *computed.Views                              // nil = none
+	// byNS makes the snapshot scoped to w.nss, every input read in each; these
+	// override one namespace's access, and the kind's aggregate becomes the worst, as the cache's does.
+	byNS map[schema.GroupVersionResource]map[string]cache.Access
 }
 
 func healthyWorld() *world {
@@ -76,6 +79,27 @@ func (w *world) input(t *testing.T) Input {
 	}
 	for gvr, a := range w.access {
 		snap.Access[gvr] = a
+	}
+	if w.byNS != nil {
+		snap.NamespaceAccess = map[schema.GroupVersionResource]map[string]cache.Access{}
+		for _, n := range w.nss {
+			snap.RequestedNamespaces = append(snap.RequestedNamespaces, n.Name)
+		}
+		slices.Sort(snap.RequestedNamespaces)
+		for gvr := range snap.Access {
+			snap.NamespaceAccess[gvr] = map[string]cache.Access{}
+			for _, ns := range snap.RequestedNamespaces {
+				snap.NamespaceAccess[gvr][ns] = cache.Access{OK: true}
+			}
+		}
+		for gvr, byNS := range w.byNS {
+			for ns, a := range byNS {
+				snap.NamespaceAccess[gvr][ns] = a
+				if !a.OK {
+					snap.Access[gvr] = a
+				}
+			}
+		}
 	}
 	in, _ := install.UpstreamDetector{}.Detect(w.ctrl)
 	in.Pods = w.pods
@@ -572,6 +596,63 @@ func TestDirectResponseWithoutCurrentStatusRaisesNothing(t *testing.T) {
 				t.Fatalf("state %s: %+v", r.State, r.Findings)
 			}
 		})
+	}
+}
+
+// In a scoped snapshot, a Gateway watch denied in namespace other still lets a
+// route in shop report that its parent infra/gone does not exist; denied in
+// infra, it does not (8.1 review #6).
+func TestParentMissingPerNamespaceWatch(t *testing.T) {
+	var gwGVR schema.GroupVersionResource
+	for _, k := range testutil.ServedUpstream() {
+		if k.Kind == "Gateway" && k.Group == objects.GatewayAPIGroup {
+			gwGVR = k.GVR()
+		}
+	}
+	for _, tc := range []struct {
+		ns   string
+		want bool
+	}{{"other", true}, {"infra", false}} {
+		t.Run("denied in "+tc.ns, func(t *testing.T) {
+			w := healthyWorld()
+			w.nss = append(w.nss, testutil.Namespace("other", nil))
+			w.byNS = map[schema.GroupVersionResource]map[string]cache.Access{gwGVR: {tc.ns: {Err: "forbidden", Denied: true}}}
+			w.objs = append(w.objs, testutil.HTTPRoute("shop", "orphan", []objects.ParentRef{testutil.GwRef("infra", "gone")}))
+			got := false
+			for _, f := range w.report(t).Findings {
+				got = got || f.Code == CodeRouteUnattached && f.Resource != nil && f.Resource.Name == "orphan" && strings.Contains(f.Detail, "does not exist")
+			}
+			if got != tc.want {
+				t.Fatalf("parent does not exist: %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// In a scoped snapshot, a DirectResponse watch denied in namespace other leaves
+// shop's DirectResponse findings in place; other's stay out (8.1 review #6).
+func TestDirectResponseFindingsPerNamespaceWatch(t *testing.T) {
+	gw := testutil.GwRef("infra", "edge")
+	invalid := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}
+	var drGVR schema.GroupVersionResource
+	for _, k := range testutil.ServedUpstream() {
+		if k.Kind == "DirectResponse" {
+			drGVR = k.GVR()
+		}
+	}
+	w := healthyWorld()
+	w.nss = append(w.nss, testutil.Namespace("other", nil))
+	w.byNS = map[schema.GroupVersionResource]map[string]cache.Access{drGVR: {"other": {Err: "forbidden", Denied: true}}}
+	for _, ns := range []string{"shop", "other"} {
+		w.objs = append(w.objs, testutil.Policy("gateway.kgateway.dev/v1alpha1", "DirectResponse", ns, "dr",
+			testutil.PolicyAncestor{Ref: gw, Controller: testutil.Controller, Conds: invalid}))
+	}
+	r := w.report(t)
+	if fs := policyFindings(r, "dr"); len(fs) != 1 {
+		t.Fatalf("shop's DirectResponse findings %+v, want one", fs)
+	}
+	if has(r, CodeConditionFalse, "", "other/dr") {
+		t.Fatal("a finding on the DirectResponse in the denied namespace")
 	}
 }
 

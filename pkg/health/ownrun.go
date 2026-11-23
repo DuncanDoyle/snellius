@@ -194,9 +194,9 @@ func (in Input) collected(gk objects.GroupKind, ns string) bool {
 	return Collected(in.Snapshot, in.Served, gk, ns)
 }
 
-// Collected reports whether snap read kind gk, one of served, and, for a
-// namespace other than "" in a scoped snapshot, read gk there. A kind served
-// does not list counts as read.
+// Collected reports whether snap read kind gk, one of served: everywhere for
+// namespace "", else in ns. A scoped snapshot answers ns from that namespace's
+// access alone, so a failure elsewhere does not count. A kind served does not list counts as read.
 func Collected(snap *cache.Snapshot, served []kinds.Served, gk objects.GroupKind, ns string) bool {
 	if snap == nil {
 		return false
@@ -209,10 +209,10 @@ func Collected(snap *cache.Snapshot, served []kinds.Served, gk objects.GroupKind
 		}
 		gvr = served[i].GVR()
 	}
-	if !snap.Access[gvr].OK {
-		return false
+	if ns == "" || len(snap.RequestedNamespaces) == 0 {
+		return snap.Access[gvr].OK
 	}
-	return ns == "" || len(snap.RequestedNamespaces) == 0 || snap.NamespaceAccess[gvr][ns].OK
+	return snap.NamespaceAccess[gvr][ns].OK
 }
 
 // runOwn evaluates the analyzers ks on each resource through package own, in

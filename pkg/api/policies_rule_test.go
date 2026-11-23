@@ -16,6 +16,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clocktesting "k8s.io/utils/clock/testing"
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
@@ -23,6 +24,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/auth/sar"
+	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/computed"
 	"github.com/DuncanDoyle/snellius/pkg/engine"
 	"github.com/DuncanDoyle/snellius/pkg/health"
@@ -466,6 +468,33 @@ func TestPolicyTargetNarrowedIsUnknown(t *testing.T) {
 		}
 		if got := outcomes(policyRowOf(t, rows, kgwGroup, ns0, tpVisible).Targets); !slices.Equal(got, []string{computed.TargetNotFound}) {
 			t.Errorf("absent target %v", got)
+		}
+	}
+}
+
+// In a scoped snapshot whose HTTPRoute watch is denied in the hidden namespace
+// only, a target check in ns-000, where routes are collected, still answers (8.1 review #6).
+func TestPolicyTargetWatchPerNamespace(t *testing.T) {
+	srv := policyServe(t, policyBase(t, ruleChange{name: "scoped", apply: func(s ruleSnap) {
+		s.NamespaceAccess = map[schema.GroupVersionResource]map[string]cache.Access{}
+		for _, n := range s.Namespaces {
+			s.RequestedNamespaces = append(s.RequestedNamespaces, n.Name)
+		}
+		slices.Sort(s.RequestedNamespaces)
+		for gvr := range s.Access {
+			s.NamespaceAccess[gvr] = map[string]cache.Access{}
+			for _, ns := range s.RequestedNamespaces {
+				s.NamespaceAccess[gvr][ns] = cache.Access{OK: true}
+			}
+		}
+		routes := testutil.ServedUpstream()[slices.IndexFunc(testutil.ServedUpstream(), func(k kinds.Served) bool { return k.Kind == "HTTPRoute" })].GVR()
+		denied := cache.Access{Err: "forbidden", Denied: true}
+		s.NamespaceAccess[routes][hiddenNS], s.Access[routes] = denied, denied
+	}}), nil)
+	for _, user := range []string{fullUser, restrictedUser} {
+		d := decode[api.PolicyDetail](t, srv, user, tpPath(ns0, tpVisible))
+		if got := outcomes(d.Targets); !slices.Equal(got, []string{computed.TargetNotFound}) {
+			t.Errorf("%s: check %v in a collected namespace, want not-found", user, got)
 		}
 	}
 }
