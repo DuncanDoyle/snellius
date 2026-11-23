@@ -146,7 +146,10 @@ func policyAncestors(ic InstallContext, u *unstructured.Unstructured, named Name
 			}
 			if sev, report := policySeverity(*cond); report {
 				named.Object(ar)
-				o.add(conditionFinding(sev, *cond, extra, owner))
+				// Each ancestor's finding rests on that ancestor only, so another one never withholds it.
+				f := conditionFinding(sev, *cond, extra, owner)
+				f.basis = []objects.Ref{ar}
+				o.add(f)
 			}
 		}
 	}

@@ -227,7 +227,8 @@ func runOwn(ctx RunContext, ks []own.Kind, resources []*unstructured.Unstructure
 		}
 		base = ctx.sink.own
 	}
-	// Each analyzer names through its own recorder, so a basis is per resource and analyzer (D-108).
+	// Each analyzer names through its own recorder, so a basis is per resource and analyzer (D-108),
+	// unless a finding narrows it to the objects it alone rests on (policy ancestors).
 	recs := make([]*namedRecorder, len(ks))
 	named := make([]own.Named, len(ks))
 	var ic own.InstallContext
@@ -251,7 +252,15 @@ func runOwn(ctx RunContext, ks []own.Kind, resources []*unstructured.Unstructure
 				basis = slices.Clone(recs[i].refs) // findings keep it; the recorder is reused
 			}
 			for _, of := range r.Findings() {
-				f, ok := fromOwn(of, basis)
+				b := basis
+				if fb := of.Basis(); fb != nil {
+					// A finding that names its own basis rests on that alone; it must be named.
+					if testing.Testing() && slices.ContainsFunc(fb, func(r objects.Ref) bool { return !slices.Contains(basis, r) }) {
+						panic(fmt.Sprintf("own: %s basis %v was not named", of.Code(), fb))
+					}
+					b = fb
+				}
+				f, ok := fromOwn(of, b)
 				if !ok {
 					continue
 				}

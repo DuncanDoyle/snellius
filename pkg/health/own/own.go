@@ -75,8 +75,13 @@ type Finding struct {
 	evidence             []objects.Ref
 	facts                any
 	parent               *objects.ParentRef
+	basis                []objects.Ref
 	sealed               bool
 }
+
+// Basis are the named objects this finding alone rests on, a subset of what its
+// analyzer named; nil when it rests on everything the analyzer named for the resource.
+func (f Finding) Basis() []objects.Ref { return slices.Clone(f.basis) }
 
 // Code is the finding code, such as KGWUI-002.
 func (f Finding) Code() string { return f.code }

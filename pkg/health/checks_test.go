@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -569,6 +570,45 @@ func TestDirectResponseWithoutCurrentStatusRaisesNothing(t *testing.T) {
 			}
 			if r.State != StateHealthy {
 				t.Fatalf("state %s: %+v", r.State, r.Findings)
+			}
+		})
+	}
+}
+
+// A viewer who reads a policy and its ancestor edge, but not the owned
+// Gateway secret/hidden, sees edge's 002 whether or not hidden exists; hidden's
+// own 002 stays withheld (D-108). Both a TrafficPolicy and a DirectResponse (8.1 review #3).
+func TestPolicyAncestorFindingBasisPerFinding(t *testing.T) {
+	edge, hidden := testutil.GwRef("infra", "edge"), testutil.GwRef("secret", "hidden")
+	invalid := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}
+	ancestors := []testutil.PolicyAncestor{{Ref: edge, Controller: testutil.Controller, Conds: invalid},
+		{Ref: hidden, Controller: testutil.Controller, Conds: invalid}}
+	for _, kind := range []string{"TrafficPolicy", "DirectResponse"} {
+		t.Run(kind, func(t *testing.T) {
+			pol := func() *unstructured.Unstructured {
+				return testutil.Policy("gateway.kgateway.dev/v1alpha1", kind, "shop", "p", ancestors...)
+			}
+			rd := readSet{objects.RefOf(pol()): true, edge.Ref(): true}
+			conditionFindings := func(r Report) []Finding {
+				return slices.DeleteFunc(policyFindings(r, "p"), func(f Finding) bool { return f.Code != CodeConditionFalse })
+			}
+			run := func(withHidden bool) (full, shown []Finding) {
+				w := healthyWorld()
+				w.nss = append(w.nss, testutil.Namespace("secret", nil))
+				w.objs = append(w.objs, pol())
+				if withHidden {
+					w.objs = append(w.objs, testutil.Gateway("secret", "hidden", "kgateway", nil))
+				}
+				r := w.report(t)
+				return conditionFindings(r), conditionFindings(Project(r, rd))
+			}
+			fullAbsent, absent := run(false)
+			fullPresent, present := run(true)
+			if len(fullAbsent) != 1 || len(fullPresent) != 2 {
+				t.Fatalf("full reader: %d findings without hidden, %d with; want 1 and 2", len(fullAbsent), len(fullPresent))
+			}
+			if len(absent) != 1 || !reflect.DeepEqual(absent, present) {
+				t.Fatalf("shown without hidden %+v, with hidden %+v", absent, present)
 			}
 		})
 	}
