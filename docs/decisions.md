@@ -1833,3 +1833,10 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** A target check (found, section not found, not found) and an ancestor's currentness are judged only when the viewer may `list` the kind in that namespace, then named `get` as before. Otherwise the check is `unknown` and the ancestor `unreadable`. This keeps the policies list within the per-request check budget: a cold `/policies?limit=1` on the Large world with one policy per route takes 391 checks for a viewer who may list policies everywhere (was 1000, a 503).
 
 **Consequences:** A viewer allowed only by `resourceNames` sees unknown target checks and unreadable ancestors. kgwctl's `Lookup` (E7) asks list before get.
+
+## D-134 — Ownership of a policy's ancestors and targets is install membership (2026-11-23, Phase 8)
+**Status:** accepted (user, 2026-11-23: "Yes, membership"); clarifies D-107 for Phase 8, from `phases/phase-8/reviews/8.1-fix2-codex.md`.
+
+**Decision:** Whether a Gateway or ListenerSet belongs to the install is install context (D-107), also when it is a policy's ancestor or target and the policy stays in the install. A hidden change to that membership (a GatewayClass `controllerName`, a ListenerSet's parent Gateway) may change a readable policy's summaries, ancestor marks, target links and ancestor findings. The stricter checks built in 8.1 stay: an ancestor the viewer cannot read is `unreadable` (D-131), and a ListenerSet ancestor needs its parent Gateway readable.
+
+**Consequences:** The byte tests treat these membership changes like the other D-107 changes. No GatewayClass checks are added to policy reads.
