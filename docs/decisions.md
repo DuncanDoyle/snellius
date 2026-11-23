@@ -1799,14 +1799,14 @@ Measured on the reference machine, 5 runs per world:
 **Consequences:** A route whose parentRef names a whole Gateway shows no listener-level policies; the Gateway page does. Finding changes for DirectResponse update `docs/findings.md`, snellius.dev (P-006) and snellius-demo (P-007).
 
 ## D-130 — `policy.Read` takes the ancestor guards as a value (2026-11-23, Phase 8)
-**Status:** proposed (sub-phase 8.1, our call); from (Phase 8 design §5.1, §6.4).
+**Status:** accepted (user, 2026-11-23: "Yes"; sub-phase 8.1); from (Phase 8 design §5.1, §6.4).
 
 **Decision:** `policy.Read(u, interp, g Guard)`. `Guard` carries the install's controller names and two functions, ownership and freshness, which callers build from the guards the policy findings use (`own.BlockFreshness`, `policyAncestors`). `Read` stays pure: no lookups. `pkg/policy` does not import `pkg/health`. A nil function makes no ancestor current. A non-current ancestor carries why: `other-controller`, `not-owned` or `not-fresh` (stale or pending).
 
 **Consequences:** kgwctl (E7) builds a `Guard` too; a zero `Guard` gives verbatim ancestors with none current. The design's "stale" mark reads "not fresh" in the model; UI copy is decided in 8.2.
 
 ## D-131 — 8.1 review fixes: per-finding basis for policy ancestors; stricter target checks (2026-11-23, Phase 8)
-**Status:** proposed (sub-phase 8.1, from `phases/phase-8/reviews/8.1-codex.md` #1, #2, #3, #6, #8); amends D-108 item 4, D-130 and design §7 item 4.
+**Status:** accepted (user, 2026-11-23: "Yes accepted"; sub-phase 8.1, from `phases/phase-8/reviews/8.1-codex.md` #1, #2, #3, #6, #8); amends D-108 item 4, D-130 and design §7 item 4.
 
 **Decision:**
 1. A policy ancestor finding (KGWUI-002) rests only on the ancestor it names. A hidden second ancestor no longer withholds the finding about a readable one. This predates Phase 8 for TrafficPolicy. Amends D-108 item 4 for policy ancestors only; route parent findings keep the shared basis, since parent Gateways are install membership (D-107).
