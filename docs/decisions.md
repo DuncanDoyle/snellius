@@ -1840,3 +1840,12 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** Whether a Gateway or ListenerSet belongs to the install is install context (D-107), also when it is a policy's ancestor or target and the policy stays in the install. A hidden change to that membership (a GatewayClass `controllerName`, a ListenerSet's parent Gateway) may change a readable policy's summaries, ancestor marks, target links and ancestor findings. The stricter checks built in 8.1 stay: an ancestor the viewer cannot read is `unreadable` (D-131), and a ListenerSet ancestor needs its parent Gateway readable.
 
 **Consequences:** The byte tests treat these membership changes like the other D-107 changes. No GatewayClass checks are added to policy reads.
+
+## D-135 — A policy ancestor's freshness is judged on Accepted alone (2026-11-23, Phase 8)
+**Status:** accepted (bug fix found in sub-phase 8.2; our call, reported to the user); corrects phase-1 design §5.2 item 2.
+
+**Context:** kgateway v2.3.11, v2.4.8 and v2.5.2 write `Accepted=False/Invalid` and `Attached=False/Pending` at the current generation for a policy they reject. `own.BlockFreshness` treated Pending on any condition as a pending block, so a rejected policy raised KGWUI-003 "Not yet processed" instead of KGWUI-002, and the policies API counted it as not current. Phase-1 design §5.2 item 2 assumed the Pending defaults exist only before translation; that holds for `Accepted`, not for `Attached`.
+
+**Decision:** A policy ancestor block is pending only when `Accepted` is missing, Pending or Unknown; a Pending `Attached` neither makes it pending nor counts as a problem. Gateways, listeners and routes keep `BlockFreshness` (kgateway writes Pending only on policy ancestors). The model's non-current reason splits into `stale` and `pending` (amends D-130); `not-fresh` remains only for a `Guard` without a freshness function.
+
+**Consequences:** Rejected policies raise KGWUI-002 on every supported version; accepted policies with a Pending `Attached` no longer raise KGWUI-003. `explore.StatusTrueFor` counts an Accepted policy whose `Attached` is Pending. `docs/findings.md` and snellius.dev follow in 8.3.
