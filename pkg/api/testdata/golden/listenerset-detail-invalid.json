@@ -80,6 +80,16 @@
       "namespace": "infra"
     },
     "parentFound": true,
+    "policyRelations": {
+      "attachedHere": [],
+      "selectors": {
+        "kinds": [],
+        "namespace": "infra",
+        "source": "declared"
+      },
+      "targeting": [],
+      "targetingParent": []
+    },
     "reason": {
       "code": "KGWUI-002",
       "finding": "f1-loqi4jkjlj5bdbhhr74gdwakyr",

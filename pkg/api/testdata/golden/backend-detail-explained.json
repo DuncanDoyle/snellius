@@ -236,6 +236,15 @@
     },
     "install": "kgw.kgateway",
     "kind": "Service",
+    "policyRelations": {
+      "attachedHere": [],
+      "selectors": {
+        "kinds": [],
+        "namespace": "store",
+        "source": "declared"
+      },
+      "targeting": []
+    },
     "portChain": [
       {
         "refPort": 80,

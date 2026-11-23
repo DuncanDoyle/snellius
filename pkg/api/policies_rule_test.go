@@ -184,8 +184,14 @@ var interpreters = api.WithPolicyInterpreters(func(install.Install) policy.Inter
 // user taken from X-User; narrow, when set, wraps the SAR authoriser.
 func policyServe(t *testing.T, src api.ModelSource, narrow func(api.Authorizer) api.Authorizer, opts ...api.HandlerOption) *httptest.Server {
 	t.Helper()
+	return policyServeWith(t, src, policyChecker{}, narrow, opts...)
+}
+
+// policyServeWith is policyServe answering SARs through c.
+func policyServeWith(t *testing.T, src api.ModelSource, c sar.Checker, narrow func(api.Authorizer) api.Authorizer, opts ...api.HandlerOption) *httptest.Server {
+	t.Helper()
 	const unlimited = 1 << 30
-	var az api.Authorizer = sar.New(sar.Options{Checker: policyChecker{}, Kinds: policyKinds{}, Clock: clocktesting.NewFakeClock(ruleCommit),
+	var az api.Authorizer = sar.New(sar.Options{Checker: c, Kinds: policyKinds{}, Clock: clocktesting.NewFakeClock(ruleCommit),
 		IdentityFrom: ruleIdentity, MaxInFlight: unlimited, Rate: unlimited, Burst: unlimited})
 	if narrow != nil {
 		az = narrow(az)

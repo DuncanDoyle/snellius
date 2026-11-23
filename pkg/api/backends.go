@@ -275,6 +275,7 @@ func (h *handler) backendDetail(w http.ResponseWriter, r *http.Request) {
 			out.Sources = append(out.Sources, endpointsDTO(e))
 		}
 	}
+	out.PolicyRelations = h.policyRelations(p, i, v, l, ref, backendRelations)
 	writeJSON(w, out)
 }
 

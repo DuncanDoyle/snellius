@@ -72,6 +72,15 @@
       },
       "state": "unknown"
     },
+    "policyRelations": {
+      "selectors": {
+        "kinds": [],
+        "namespace": "kids",
+        "source": "declared"
+      },
+      "targeting": [],
+      "targetingParent": []
+    },
     "ref": {
       "group": "gateway.networking.k8s.io",
       "kind": "HTTPRoute",

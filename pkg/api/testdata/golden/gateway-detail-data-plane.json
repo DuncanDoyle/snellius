@@ -137,6 +137,15 @@
         }
       }
     ],
+    "policyRelations": {
+      "attachedHere": [],
+      "selectors": {
+        "kinds": [],
+        "namespace": "infra",
+        "source": "declared"
+      },
+      "targeting": []
+    },
     "proxies": {
       "desired": 2,
       "observed": false,

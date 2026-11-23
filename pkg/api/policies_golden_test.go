@@ -16,7 +16,8 @@ import (
 func TestGoldenPolicies(t *testing.T) { runGolden(t, policiesCases(t)) }
 
 // policiesCases are a TrafficPolicy on shop/cart reported on infra/edge, with
-// another controller's stale ancestor and a missing target, and a list-only DirectResponse.
+// another controller's stale ancestor and a missing target, and a list-only
+// DirectResponse; and the subject relations of edge and cart.
 func policiesCases(t *testing.T) []goldenCase {
 	cond := testutil.Cond
 	stale := cond("Accepted", metav1.ConditionTrue, "Accepted")
@@ -32,11 +33,17 @@ func policiesCases(t *testing.T) []goldenCase {
 	p.SetAnnotations(map[string]string{kgateway.InheritedPolicyPriorityAnnotation: "ShallowMergePreferParent"})
 	interp := WithPolicyInterpreters(func(install.Install) policy.Interpreter { return kgateway.PolicyInterpreter() })
 	_, srv, _ := startWith(t, setup{opts: []HandlerOption{interp}}, explorerWorld(p, testutil.DirectResponse("shop", "dr"))...)
+	// rel adds a policy on the whole of infra/edge, so cart's detail has a parent relation.
+	edge := testutil.TrafficPolicy("infra", "tp-edge")
+	edge.Object["spec"] = map[string]any{"targetRefs": []any{map[string]any{"group": objects.GatewayAPIGroup, "kind": "Gateway", "name": "edge"}}}
+	_, rel, _ := startWith(t, setup{opts: []HandlerOption{interp}}, explorerWorld(p.DeepCopy(), edge)...)
 	const base = "/api/v1/installs/kgw.kgateway"
 	return []goldenCase{
 		{"policies", srv, base + "/policies"},
 		{"policies-filtered", srv, base + "/policies?hasProblems=true&kind=gateway.kgateway.dev/TrafficPolicy&limit=1"},
 		{"policy-detail", srv, base + "/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp"},
 		{"policy-detail-absent", srv, base + "/policies/gateway.kgateway.dev/TrafficPolicy/shop/none"},
+		{"gateway-detail-policies", rel, gwDetail},
+		{"route-detail-policies", rel, routeDetail + "shop/cart"},
 	}
 }

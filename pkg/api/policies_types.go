@@ -182,3 +182,53 @@ type PolicyAnnotationDTO struct {
 	Value  string        `json:"value"`
 	Source policy.Source `json:"source"`
 }
+
+// PolicyRelationsDTO are the readable policies that name a subject (Phase 8 design §6.5),
+// each group sorted by policy namespace and name, never by precedence (D-126).
+// A group that does not apply to the subject's kind is omitted.
+type PolicyRelationsDTO struct {
+	// Targeting are the policies whose targetRefs name the subject, or one of its sections.
+	Targeting []PolicyRelationDTO `json:"targeting"`
+	// TargetingParent are the policies whose targetRefs name a parent the subject
+	// declares (design §5.3); routes and ListenerSets only.
+	TargetingParent *[]PolicyRelationDTO `json:"targetingParent,omitempty"`
+	// AttachedHere are the policies with a current Attached=True ancestor that is the
+	// subject; Gateways, ListenerSets and backends only.
+	AttachedHere *[]PolicyRelationDTO `json:"attachedHere,omitempty"`
+	// Selectors backs the note that policies selecting by label are not listed (D-125).
+	Selectors PolicySelectorsDTO `json:"selectors"`
+}
+
+// PolicyRelationDTO is one relation between a policy and the subject. SectionName and
+// Port are the section or port the targetRef or ancestor names; Via is the declared
+// parentRef path a targets-parent relation walked, the policy naming its last hop.
+// Condition, Note and NoteSource are set on attached-on-ancestor relations only.
+type PolicyRelationDTO struct {
+	Policy      LinkedRef           `json:"policy"`
+	Relation    policy.RelationKind `json:"relation"`
+	Source      policy.Source       `json:"source"`
+	SectionName string              `json:"sectionName,omitempty"`
+	Port        int32               `json:"port,omitempty"`
+	Via         []PolicyHopDTO      `json:"via,omitempty"`
+	// Condition is the ancestor's Attached condition, verbatim.
+	Condition *Condition `json:"condition,omitempty"`
+	// Note is the pack's granularity note for that condition; NoteSource is inferred.
+	Note       string        `json:"note,omitempty"`
+	NoteSource policy.Source `json:"noteSource,omitempty"`
+}
+
+// PolicyHopDTO is one parentRef on a relation's path, as written, linked by name.
+type PolicyHopDTO struct {
+	Ref         LinkedRef `json:"ref"`
+	SectionName string    `json:"sectionName,omitempty"`
+	Port        int32     `json:"port,omitempty"`
+}
+
+// PolicySelectorsDTO is what the subject's "select by label" note links to: the
+// Policies list in Namespace, filtered to Kinds. Kinds are the kinds of the readable
+// policies in Namespace whose targetSelectors name the subject's kind (declared).
+type PolicySelectorsDTO struct {
+	Namespace string              `json:"namespace"`
+	Kinds     []objects.GroupKind `json:"kinds"`
+	Source    policy.Source       `json:"source"`
+}
