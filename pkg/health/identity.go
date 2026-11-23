@@ -229,6 +229,32 @@ func policyAncestor002(f *Finding) bool {
 	return f.Code == CodeConditionFalse && len(f.Key) > 0 && f.Key[0] == ownerAncestor
 }
 
+// duplicateKeys gives each finding of fs that match selects, after the first one with
+// the same code, resource and key, an "#n" element: its place among those exact
+// duplicates in fs order (status order). A finding with no duplicate keeps its key.
+// owned follows each own-object finding's new key.
+func duplicateKeys(fs []Finding, match func(f *Finding) bool, owned *ownedSet) {
+	type id struct {
+		code, res, key string
+	}
+	seen := map[id]int{}
+	for i := range fs {
+		f := &fs[i]
+		if !match(f) {
+			continue
+		}
+		res := ""
+		if f.Resource != nil {
+			res = f.Resource.Group + "\x00" + f.Resource.Kind + "\x00" + f.Resource.String()
+		}
+		k := id{f.Code, res, strings.Join(f.Key, "\x00")}
+		seen[k]++
+		if n := seen[k]; n > 1 {
+			owned.rekey(f, func() { f.Key = append(slices.Clip(f.Key), ordinal(n)) })
+		}
+	}
+}
+
 // ordinals are the "#n" key elements; ordinal builds the rare ones past them.
 var ordinals = func() (o [32]string) {
 	for i := range o {

@@ -530,6 +530,7 @@ func (c conditionsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 		}
 		return 0, false
 	}, ctx.sink.ownedSet())
+	duplicateKeys(fs, policyAncestor002, ctx.sink.ownedSet())
 	for _, end := range inGrace {
 		ctx.Hold(end, 1, resourceHoldReason)
 	}

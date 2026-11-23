@@ -557,6 +557,53 @@ func TestPolicyTargetNarrowedExistenceHidden(t *testing.T) {
 	}
 }
 
+// Two exact duplicate ancestor entries (one Gateway, one controller, one condition
+// type, different messages) give two KGWUI-002s with distinct IDs whose detail URLs
+// resolve; a hidden sibling that starts a finding moves neither (8.1 fix2: duplicate 002).
+func TestPolicyAncestorDuplicateIDs(t *testing.T) {
+	const pol, hiddenGw = "tp-duplicates", "anc-first"
+	dup := func(msg string) testutil.PolicyAncestor {
+		c := testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")
+		c.Message = msg
+		return testutil.PolicyAncestor{Ref: gw0()[0], Controller: testutil.Controller, Conds: []metav1.Condition{c}}
+	}
+	addPolicy := func(s ruleSnap) {
+		s.add(tp(ns0, pol, []any{targetRef(gatewaysGroup, "HTTPRoute", namesHidden, "")},
+			ancestor(hiddenGwRef(hiddenGw), testutil.Controller, metav1.ConditionFalse, metav1.ConditionTrue), dup("first"), dup("second")))
+	}
+	absent := policyServe(t, policyBase(t, ruleChange{name: "absent", apply: addPolicy}), nil)
+	present := policyServe(t, policyBase(t, ruleChange{name: "present", apply: func(s ruleSnap) {
+		addPolicy(s)
+		s.add(testutil.Gateway(hiddenNS, hiddenGw, scale.Class, nil))
+	}}), nil)
+	ids := func(srv *httptest.Server) map[string]string {
+		out := map[string]string{}
+		page := decode[map[string]any](t, srv, restrictedUser, ruleBase+"/findings?limit=200&code=KGWUI-002")
+		for _, x := range page["items"].([]any) {
+			f := x.(map[string]any)
+			if res, _ := f["resource"].(map[string]any); res != nil && res["name"] == pol {
+				d, _ := f["detail"].(string)
+				out[d] = f["id"].(string)
+			}
+		}
+		return out
+	}
+	before, after := ids(absent), ids(present)
+	distinct := map[string]bool{}
+	for _, id := range before {
+		distinct[id] = true
+	}
+	if len(before) != 2 || len(distinct) != 2 || !maps.Equal(before, after) {
+		t.Fatalf("duplicate IDs without the hidden Gateway %v, with it %v", before, after)
+	}
+	for _, id := range before {
+		code, body := fetch(t, present, restrictedUser, ruleBase+"/findings/"+id)
+		if code != http.StatusOK {
+			t.Errorf("detail %s: %d %.200s", id, code, body)
+		}
+	}
+}
+
 // A readable policy's KGWUI-002 about its readable ListenerSet ancestor keeps its ID,
 // and its detail URL resolves, when a hidden Gateway ancestor that sorts before it
 // starts or stops a finding of its own (8.1 re-review: renumbered 002).
