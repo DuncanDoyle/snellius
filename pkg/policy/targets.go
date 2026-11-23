@@ -9,7 +9,8 @@ import (
 
 // Lookup answers what target checks and parent joins may read (design §5.2,
 // §7). The API passes one that applies the viewer's access; a one-shot CLI
-// passes its snapshot and the user's own permissions.
+// passes its snapshot and the user's own permissions. CheckTargets never passes
+// a targeter more of it than the one target that targeter checks.
 type Lookup interface {
 	// Object returns the collected object named ref, whatever the caller may read;
 	// false when the collection has none.
@@ -31,6 +32,8 @@ type Inputs struct {
 	// Lookup answers reads and access; nil makes every check unknown and every relation absent.
 	Lookup Lookup
 	// Targeter is the install's rule set's PolicyTargeter; nil makes every check unknown.
+	// CheckTargets calls it once per targetRef, and its Lookup and Served then answer
+	// only that target's object and kind: a check rests on its own target alone (design §7 item 4).
 	Targeter computed.PolicyTargeter
 	// ScopeKnown is false when the install's discovery scope is unknown (D-024).
 	ScopeKnown bool
@@ -66,18 +69,27 @@ func CheckTargets(p Policy, in Inputs) []TargetCheck {
 		return out
 	}
 	ns := p.Ref.Namespace
-	lookup := func(gk objects.GroupKind, ns, name string) (*unstructured.Unstructured, bool) {
-		return in.Lookup.Object(objects.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: ns, Name: name})
-	}
-	served := func(gk objects.GroupKind) bool { return in.Lookup.Watched(gk, ns) }
-	// Selectors are left out: the targeter would match them (D-125).
-	rs := in.Targeter.PolicyTargets(computed.TargetInput{Policy: p.Ref, TargetRefs: refs, Lookup: lookup, Served: served, ScopeKnown: true})
-	for _, r := range rs {
-		if r.Index < 0 || r.Index >= len(refs) {
-			continue
+	for i, tr := range refs {
+		// One call per target, reading that target alone: the gate authorises only it.
+		target := objects.Ref{Group: tr.Group, Kind: tr.Kind, Namespace: ns, Name: tr.Name}
+		gk := objects.GroupKind{Group: tr.Group, Kind: tr.Kind}
+		lookup := func(g objects.GroupKind, n, name string) (*unstructured.Unstructured, bool) {
+			if r := (objects.Ref{Group: g.Group, Kind: g.Kind, Namespace: n, Name: name}); r != target {
+				return nil, false
+			}
+			return in.Lookup.Object(target)
 		}
-		if outcome := gate(in.Lookup, ns, refs[r.Index], r.Outcome); outcome != computed.TargetUnknown {
-			out[r.Index] = TargetCheck{Index: r.Index, Outcome: outcome, Source: SourceInferred}
+		served := func(g objects.GroupKind) bool { return g == gk && in.Lookup.Watched(gk, ns) }
+		// Selectors are left out: the targeter would match them (D-125).
+		rs := in.Targeter.PolicyTargets(computed.TargetInput{Policy: p.Ref, TargetRefs: []computed.TargetRef{tr}, Lookup: lookup, Served: served,
+			ScopeKnown: true})
+		for _, r := range rs {
+			if r.Index != 0 {
+				continue
+			}
+			if outcome := gate(in.Lookup, ns, tr, r.Outcome); outcome != computed.TargetUnknown {
+				out[i] = TargetCheck{Index: i, Outcome: outcome, Source: SourceInferred}
+			}
 		}
 	}
 	return out

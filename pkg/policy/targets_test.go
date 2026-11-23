@@ -5,6 +5,8 @@ import (
 	"slices"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/DuncanDoyle/snellius/pkg/computed"
 	"github.com/DuncanDoyle/snellius/pkg/computed/kgw23"
 	"github.com/DuncanDoyle/snellius/pkg/computed/kgw24"
@@ -103,6 +105,43 @@ func TestCheckTargets(t *testing.T) {
 				t.Errorf("outcomes %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// peeker is a downstream targeter that consults Gateway pt/secret, or any other
+// target of the policy, before it answers: found when it sees one, else section not found.
+type peeker struct{}
+
+func (peeker) PolicyTargets(in computed.TargetInput) []computed.TargetResult {
+	_, seen := in.Lookup(objects.GroupKind{Group: gw, Kind: "Gateway"}, "pt", "secret")
+	for _, r := range in.TargetRefs[1:] {
+		_, ok := in.Lookup(objects.GroupKind{Group: r.Group, Kind: r.Kind}, in.Policy.Namespace, r.Name)
+		seen = seen || ok
+	}
+	out := []computed.TargetResult{{Index: 0, Ref: in.TargetRefs[0], Outcome: computed.TargetSectionNotFound}}
+	if seen {
+		out[0].Outcome = computed.TargetFound
+	}
+	return out
+}
+
+// A targeter reads only the target it checks: a hidden object it consults, or the
+// policy's other target, never changes a readable target's check (8.1 review #4).
+func TestCheckTargetsLookupLimitedToTarget(t *testing.T) {
+	const ns = "pt"
+	u := trafficPolicy(ns, "p", []map[string]any{targetRef(gw, "HTTPRoute", "r1", "rule-a"), targetRef(gw, "Gateway", "other", "")})
+	p := policy.Read(u, nil, policy.Guard{})
+	secret, other := objects.Ref{Group: gw, Kind: "Gateway", Namespace: ns, Name: "secret"}, objects.Ref{Group: gw, Kind: "Gateway", Namespace: ns, Name: "other"}
+	check := func(objs ...*unstructured.Unstructured) string {
+		w := newWorld(append(objs, route(ns, "r1", map[string]any{"name": "gw"}))...)
+		w.hidden[secret], w.hidden[other] = true, true
+		return policy.CheckTargets(p, policy.Inputs{Lookup: w, Targeter: peeker{}, ScopeKnown: true})[0].Outcome
+	}
+	absent := check()
+	for name, present := range map[string]string{"hidden object": check(gateway(ns, "secret")), "other target": check(gateway(ns, "other"))} {
+		if present != absent {
+			t.Errorf("%s: check %s when present, %s when absent", name, present, absent)
+		}
 	}
 }
 
