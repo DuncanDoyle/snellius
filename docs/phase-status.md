@@ -8,7 +8,13 @@ Status: design approved (user, 2026-11-23); D-121 … D-129 accepted; runtime vi
 Author: claude (Opus 5.5)
 
 ## Sub-phase
-Sub-phase: none (8.1 closed 2026-11-23, phases/phase-8/phase-8.1-complete.md; next: 8.2)
+Sub-phase: 8.2 — Subject relations and pages (planned)
+Base: d1abced
+Brief: docs/phases/phase-8/phase-8.2-brief.md
+Queue (plan steps):
+- [ ] 1 relations on subject detail responses; policy detail links ← CURRENT
+- [ ] 2 web: Policies list, policy detail, subject sections, copy test
+- [ ] 3 Phase 7 P3: full read without Events or CRDs, per grant
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md (read 2026-11-22 at `bd1f17d`; merged on main at `090fd7e`, which adds M-4 and U12: P-008, P-009, M-1, M-2, E7, E13, E14).
