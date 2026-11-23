@@ -461,6 +461,33 @@ func TestPolicyTargetNarrowedIsUnknown(t *testing.T) {
 	}
 }
 
+// A target the narrowing authoriser denies by name reads unknown whether it
+// exists or not: list and detail bytes match for both viewers (8.1 review #1).
+func TestPolicyTargetNarrowedExistenceHidden(t *testing.T) {
+	const route, pol = "narrowed-route", "tp-narrowed"
+	addPolicy := func(s ruleSnap) { s.add(tp(ns0, pol, []any{targetRef(gatewaysGroup, "HTTPRoute", route, "")})) }
+	narrow := func(a api.Authorizer) api.Authorizer { return api.Narrowed{Base: a, Policy: denyNamed{name: route}} }
+	absent := policyServe(t, policyBase(t, ruleChange{name: "absent", apply: addPolicy}), narrow)
+	present := policyServe(t, policyBase(t, ruleChange{name: "present", apply: func(s ruleSnap) {
+		addPolicy(s)
+		s.add(routeTo(ns0, route, gw0(), ns0, "be-0000", true))
+	}}), narrow)
+	for _, user := range []string{fullUser, restrictedUser} {
+		for _, path := range []string{policiesPath + "?limit=200", policiesPath + "?limit=200&hasProblems=true",
+			policiesPath + "?limit=200&hasProblems=false", tpPath(ns0, pol)} {
+			ac, ab := fetch(t, absent, user, path)
+			pc, pb := fetch(t, present, user, path)
+			if ac != pc || ab != pb {
+				t.Errorf("%s %s: absent and present target differ:\n  %d %.400s\n  vs %d %.400s", user, path, ac, ab, pc, pb)
+			}
+		}
+		d := decode[api.PolicyDetail](t, absent, user, tpPath(ns0, pol))
+		if got := outcomes(d.Targets); !slices.Equal(got, []string{computed.TargetUnknown}) {
+			t.Errorf("%s: absent narrowed target %v, want unknown", user, got)
+		}
+	}
+}
+
 // Two policies with one kind, namespace and name in two groups are two rows and two details.
 func TestPolicyGroupCollision(t *testing.T) {
 	s := ruleSnapshot(t)
