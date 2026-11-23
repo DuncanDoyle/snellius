@@ -486,12 +486,14 @@ func TestProbeFactsNeedEventsList(t *testing.T) {
 	}
 }
 
-// inputSurfaces are the responses a finding from Events or a CRD may reach.
+// inputSurfaces are the responses a finding from Events or a CRD may reach: gw0's
+// detail, and the backends list, a backend and a route behind gw0.
 var inputSurfaces = []string{"/api/v1/installs", ruleBase + "/overview", ruleBase + "/health", ruleBase + "/findings?limit=200",
 	ruleBase + "/findings?view=groups&limit=200", ruleBase + "/findings?limit=200&namespaces=" + ns0, ruleBase + "/diagnostics",
 	ruleBase + "/processes?limit=200", ruleBase + "/gateways?limit=200", ruleBase + "/gateways?limit=200&sort=health",
 	ruleBase + "/gateways/" + ns0 + "/" + testutil.ScaleGateway(0), ruleBase + "/routes?limit=200", ruleBase + "/paths?limit=200",
-	ctrlYAML}
+	ruleBase + "/backends?limit=200", ruleBase + "/backends/-/Service/" + ns0 + "/shared",
+	ruleBase + "/routes/" + objects.GatewayAPIGroup + "/HTTPRoute/" + ns0 + "/svc-consumer", ctrlYAML}
 
 // ctrlYAML is the controller Deployment's YAML, which only a finding admits.
 const ctrlYAML = ruleBase + "/resources/apps/Deployment/kgw/kgateway"
@@ -607,50 +609,71 @@ func inputDiffs(t *testing.T, srvs []*httptest.Server, user, code string) []stri
 	return out
 }
 
-// A full reader who may not list Events or CRDs gets nothing from them: no
-// probe or CRD finding, state, count, group or check detail moves with them
-// (D-110), while the full viewer sees them. With the check off, they reach the full reader.
+// A full reader who may not list Events, CRDs or both gets nothing from the input it
+// lacks: no probe or CRD finding, state, count, group or check detail moves with it
+// (D-110), while a reader with that grant sees it, whatever the other grant. With the
+// check off, the input reaches the reader without it; the fully granted reader's bytes
+// are the same with the check on and off.
 func TestFullReadWithoutInputsSeesNoneOfThem(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		code  string
 		world func(*testing.T, ...api.HandlerOption) []*httptest.Server
-		// reach are surfaces the change must reach for the full viewer.
+		// reach are surfaces the change must reach for a reader with the grant.
 		reach []string
+		// without lack this grant; with have it and lack the other one.
+		without []string
+		with    string
 	}{
-		{"Events", health.CodeProbeFailing, eventWorlds, []string{ruleBase + "/findings?limit=200", ctrlYAML}},
+		{"Events", health.CodeProbeFailing, eventWorlds, []string{ruleBase + "/findings?limit=200", ctrlYAML}, []string{fullNoEvents, fullNoInputs}, fullNoCRDs},
 		// The skew check's text names the unmapped minor only while there are CRDs to compare.
-		{"CRDs", health.CodeVersionSkew, crdWorlds, []string{ruleBase + "/findings?limit=200", ruleBase + "/health"}},
+		{"CRDs", health.CodeVersionSkew, crdWorlds, []string{ruleBase + "/findings?limit=200", ruleBase + "/health"}, []string{fullNoCRDs, fullNoInputs}, fullNoEvents},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			srvs := c.world(t)
-			if d := inputDiffs(t, srvs, fullNoInputs, c.code); len(d) > 0 {
-				t.Errorf("%s reach the full reader without access on %v", c.name, d)
-			}
-			d := inputDiffs(t, srvs, fullUser, c.code)
-			for _, p := range c.reach {
-				if !slices.Contains(d, p) {
-					t.Errorf("the full viewer sees %s only on %v, not on %s", c.name, d, p)
+			srvs, off := c.world(t), c.world(t, api.WithProjectionStepOff("findings"))
+			for _, user := range c.without {
+				if d := inputDiffs(t, srvs, user, c.code); len(d) > 0 {
+					t.Errorf("%s reach %s without access on %v", c.name, user, d)
+				}
+				if d := inputDiffs(t, off, user, c.code); len(d) == 0 {
+					t.Errorf("with the check off, %s still reach no surface for %s: the test is vacuous", c.name, user)
 				}
 			}
-			if d := inputDiffs(t, c.world(t, api.WithProjectionStepOff("findings")), fullNoInputs, c.code); len(d) == 0 {
-				t.Errorf("with the check off, %s still reach no surface: the test is vacuous", c.name)
+			for _, user := range []string{fullUser, c.with} {
+				d := inputDiffs(t, srvs, user, c.code)
+				for _, p := range c.reach {
+					if !slices.Contains(d, p) {
+						t.Errorf("%s sees %s only on %v, not on %s", user, c.name, d, p)
+					}
+				}
+			}
+			// The fully granted reader's baseline: the check never changes its bytes.
+			for k := range srvs {
+				for _, p := range inputSurfaces {
+					cb, b := fetch(t, off[k], fullUser, p)
+					if ca, a := fetch(t, srvs[k], fullUser, p); ca != cb || a != b {
+						t.Errorf("world %d: %s for the fully granted reader differs with the check on:\n%.400s\n  vs %.400s", k, p, b, a)
+					}
+				}
 			}
 		})
 	}
-	// A recompute for arriving probe failures or CRDs leaves no timestamp the
-	// full reader without them could tell apart from a confirm tick (D-109).
+	// A recompute for arriving probe failures or CRDs leaves no timestamp a full
+	// reader without them could tell apart from a confirm tick (D-109).
 	for _, c := range []struct {
 		name         string
 		base, change func(ruleSnap)
-	}{{"Events", quietEvents, probeEvents}, {"CRDs", unmapped, mixedCRDs}} {
+		without      []string
+	}{{"Events", quietEvents, probeEvents, []string{fullNoEvents, fullNoInputs}}, {"CRDs", unmapped, mixedCRDs, []string{fullNoCRDs, fullNoInputs}}} {
 		t.Run(c.name+" recompute", func(t *testing.T) {
 			before, after := inputRecompute(t, c.base, c.change)
 			var moved bool
 			for _, p := range inputSurfaces {
-				_, b := fetch(t, before, fullNoInputs, p)
-				if _, a := fetch(t, after, fullNoInputs, p); a != b {
-					t.Errorf("%s moves for the full reader without %s after a recompute:\n%.400s\n  vs %.400s", p, c.name, b, a)
+				for _, user := range c.without {
+					_, b := fetch(t, before, user, p)
+					if _, a := fetch(t, after, user, p); a != b {
+						t.Errorf("%s moves for %s after a recompute:\n%.400s\n  vs %.400s", p, user, b, a)
+					}
 				}
 				_, fb := fetch(t, before, fullUser, p)
 				_, fa := fetch(t, after, fullUser, p)
@@ -661,14 +684,17 @@ func TestFullReadWithoutInputsSeesNoneOfThem(t *testing.T) {
 			}
 		})
 	}
-	// Without probe failures or CRDs, both full readers read the same, but for the probe check's result.
+	// Without probe failures or CRDs, every full reader reads the same, but for the probe check's result.
 	srv := eventWorlds(t)[0]
 	for _, p := range inputSurfaces {
 		if p == ruleBase+"/health" || p == ruleBase+"/diagnostics" {
 			continue
 		}
-		if _, a := fetch(t, srv, fullUser, p); a != func() string { _, b := fetch(t, srv, fullNoInputs, p); return b }() {
-			t.Errorf("%s differs between the full readers in the quiet world", p)
+		_, b := fetch(t, srv, fullUser, p)
+		for _, user := range []string{fullNoEvents, fullNoCRDs, fullNoInputs} {
+			if _, a := fetch(t, srv, user, p); a != b {
+				t.Errorf("%s differs between the full reader and %s in the quiet world", p, user)
+			}
 		}
 	}
 }

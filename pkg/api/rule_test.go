@@ -69,6 +69,9 @@ const (
 	crdGetter = "crd-getter"
 	// fullNoInputs has the full read but may not read Events or CRDs, which its proof leaves out.
 	fullNoInputs = "full-no-inputs"
+	// fullNoEvents and fullNoCRDs have the full read and are denied one of those grants each.
+	fullNoEvents = "full-no-events"
+	fullNoCRDs   = "full-no-crds"
 	// nobodyUser may read nothing; metaUser+"dcn" reads the controller Deployment, GatewayClasses and Namespaces.
 	nobodyUser = "nobody"
 	metaUser   = "meta-"
@@ -791,8 +794,13 @@ func (ruleChecker) Check(_ context.Context, id oidc.Identity, a sar.Attributes) 
 	if id.Username == fullUser || id.Username == routeReader && strings.HasSuffix(a.Resource, "routes") {
 		return true, nil
 	}
-	if id.Username == fullNoInputs {
+	switch id.Username {
+	case fullNoInputs:
 		return a.Resource != "events" && a.Resource != "customresourcedefinitions", nil
+	case fullNoEvents:
+		return a.Resource != "events", nil
+	case fullNoCRDs:
+		return a.Resource != "customresourcedefinitions", nil
 	}
 	if id.Username == crdGetter && a.Verb == "get" && a.Resource == "customresourcedefinitions" && a.Name == "gateways."+objects.GatewayAPIGroup {
 		return true, nil
