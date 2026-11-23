@@ -34,6 +34,7 @@ type Inputs struct {
 	// Targeter is the install's rule set's PolicyTargeter; nil makes every check unknown.
 	// CheckTargets calls it once per targetRef, and its Lookup and Served then answer
 	// only that target's object and kind: a check rests on its own target alone (design §7 item 4).
+	// The targeter must keep no state between calls, or one target could shape another's check.
 	Targeter computed.PolicyTargeter
 	// ScopeKnown is false when the install's discovery scope is unknown (D-024).
 	ScopeKnown bool
