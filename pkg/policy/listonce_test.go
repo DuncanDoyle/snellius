@@ -49,12 +49,16 @@ func (l snapshotLookup) Object(r objects.Ref) (*unstructured.Unstructured, bool)
 	return l.snap.Objects[gvr][i], true
 }
 
+// Watched answers a scoped snapshot from ns's access alone, as health.Collected does.
 func (l snapshotLookup) Watched(gk objects.GroupKind, ns string) bool {
 	gvr, ok := l.gvr(gk)
-	if !ok || !l.snap.Access[gvr].OK {
+	switch {
+	case !ok:
 		return false
+	case ns == "" || len(l.snap.RequestedNamespaces) == 0:
+		return l.snap.Access[gvr].OK
 	}
-	return len(l.snap.RequestedNamespaces) == 0 || l.snap.NamespaceAccess[gvr][ns].OK
+	return l.snap.NamespaceAccess[gvr][ns].OK
 }
 
 func (l snapshotLookup) CanGet(r objects.Ref) bool {
@@ -181,6 +185,52 @@ func TestModelFromListOnce(t *testing.T) {
 		i := slices.IndexFunc(ps, func(p policy.Policy) bool { return p.Ref.Name == name })
 		if a := ps[i].Ancestors[0]; a.Current != (want == "") || a.NotCurrent != want || name == "partial" && !a.Summary {
 			t.Errorf("%s's ancestor: current %v, not current %q, summary %v; want not current %q", name, a.Current, a.NotCurrent, a.Summary, want)
+		}
+	}
+}
+
+// scope makes snap scoped to namespaces nss, every input read in each, except
+// gk denied in deny; the kind's aggregate is then the worst, as the cache's is.
+func scope(snap *cache.Snapshot, served []kinds.Served, nss []string, gk objects.GroupKind, deny string) {
+	snap.RequestedNamespaces = nss
+	snap.NamespaceAccess = map[schema.GroupVersionResource]map[string]cache.Access{}
+	for gvr := range snap.Access {
+		snap.NamespaceAccess[gvr] = map[string]cache.Access{}
+		for _, ns := range nss {
+			snap.NamespaceAccess[gvr][ns] = cache.Access{OK: true}
+		}
+	}
+	gvr, _ := snapshotLookup{snap: snap, served: served}.gvr(gk)
+	denied := cache.Access{Err: "forbidden", Denied: true}
+	snap.NamespaceAccess[gvr][deny], snap.Access[gvr] = denied, denied
+}
+
+// In a scoped snapshot whose Gateway list is denied in infra only, a target
+// check in shop still answers and one in infra is unknown (8.1 re-review: E7 fixture).
+func TestModelFromScopedListOnce(t *testing.T) {
+	w, us := relationWorld()
+	var objs []runtime.Object
+	for _, u := range w.objs {
+		if u.GetKind() != "Service" {
+			objs = append(objs, u)
+		}
+	}
+	for _, u := range us {
+		objs = append(objs, u)
+	}
+	served := testutil.ServedUpstream()
+	dyn, kube := testutil.Clients(t, objs...)
+	snap, err := cache.ListOnce(context.Background(), cache.Config{Dynamic: dyn, Kube: kube, Served: served})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope(snap, served, []string{"infra", "shop"}, objects.GroupKind{Group: gw, Kind: "Gateway"}, "infra")
+	in := policy.Inputs{Lookup: snapshotLookup{snap: snap, served: served},
+		Targeter: computed.Selection{Rules: rulesets.Select("v2.4.7").Rules}.PolicyTargeter(), ScopeKnown: true}
+	for name, want := range map[string]string{"p-gw-shop": computed.TargetNotFound, "p-gw-https": computed.TargetUnknown} {
+		i := slices.IndexFunc(us, func(u *unstructured.Unstructured) bool { return u.GetName() == name })
+		if o := policy.CheckTargets(policy.Read(us[i], nil, policy.Guard{}), in)[0].Outcome; o != want {
+			t.Errorf("%s: %s, want %s", name, o, want)
 		}
 	}
 }
