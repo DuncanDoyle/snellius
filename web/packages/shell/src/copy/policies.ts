@@ -136,6 +136,7 @@ export const policyDetailCopy = {
 export const notCurrentCopy: Record<string, string> = {
   "other-controller": "Other controller", // (fixed)
   "not-owned": "Not this install's",
+  stale: "Stale", // (fixed)
   "not-fresh": "Stale", // (fixed)
   unreadable: "You cannot view this ancestor",
 };

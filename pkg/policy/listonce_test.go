@@ -181,7 +181,7 @@ func TestModelFromListOnce(t *testing.T) {
 	}
 	// The snapshot's guard tells the install's Gateway and ListenerSet from another install's, and holds a pending one back.
 	for name, want := range map[string]string{"partial": "", "p-att": "", "p-ls-att": "", "p-foreign-gw": policy.NotCurrentNotOwned,
-		"p-pending": policy.NotCurrentNotFresh} {
+		"p-pending": policy.NotCurrentPending} {
 		i := slices.IndexFunc(ps, func(p policy.Policy) bool { return p.Ref.Name == name })
 		if a := ps[i].Ancestors[0]; a.Current != (want == "") || a.NotCurrent != want || name == "partial" && !a.Summary {
 			t.Errorf("%s's ancestor: current %v, not current %q, summary %v; want not current %q", name, a.Current, a.NotCurrent, a.Summary, want)

@@ -84,7 +84,11 @@ const (
 	NotCurrentOtherController = "other-controller"
 	// NotCurrentNotOwned: a Gateway or ListenerSet ancestor the install does not own.
 	NotCurrentNotOwned = "not-owned"
-	// NotCurrentNotFresh: the conditions are stale or pending; Ancestor.Why says which.
+	// NotCurrentStale: a condition describes an older generation; Ancestor.Why says so.
+	NotCurrentStale = "stale"
+	// NotCurrentPending: the controller has not decided the ancestor yet; Ancestor.Why says how.
+	NotCurrentPending = "pending"
+	// NotCurrentNotFresh: freshness could not be decided (the Guard has no Fresh).
 	NotCurrentNotFresh = "not-fresh"
 	// NotCurrentUnreadable: the caller may not read the ancestor, so none of the
 	// install's judgments about it are shown (design §7 item 3). Read never sets it.
@@ -175,7 +179,7 @@ type Interpreter interface {
 // Guard decides which ancestors are current (design §6.4). It carries the
 // install's checks that the existing policy findings apply in
 // pkg/health/own: the controller names, ownership of a Gateway or ListenerSet
-// ancestor, and own.BlockFreshness with PolicyRequired and PolicyOptional.
+// ancestor, and own.PolicyFreshness.
 // A nil function makes no ancestor current.
 type Guard struct {
 	// ControllerNames are the install's controller names.
@@ -183,8 +187,9 @@ type Guard struct {
 	// Owns reports whether the install may report on ancestor: false for a Gateway or
 	// ListenerSet it does not own, true for every other ancestor kind.
 	Owns func(ancestor objects.Ref) bool
-	// Fresh returns "" when the ancestor's conditions on u are current, or why not.
-	Fresh func(u *unstructured.Unstructured, conditions []metav1.Condition) string
+	// Fresh returns "" when the ancestor's conditions on u are current, or why not and
+	// whether that is because they are stale (else pending).
+	Fresh func(u *unstructured.Unstructured, conditions []metav1.Condition) (why string, stale bool)
 }
 
 // targetsKeys are the spec keys that are targets, not features.
@@ -236,8 +241,11 @@ func readAncestors(u *unstructured.Unstructured, gk objects.GroupKind, interp In
 		case g.Fresh == nil:
 			an.NotCurrent, an.Why = NotCurrentNotFresh, "Freshness unknown"
 		default:
-			if why := g.Fresh(u, a.Conditions); why != "" {
-				an.NotCurrent, an.Why = NotCurrentNotFresh, why
+			if why, stale := g.Fresh(u, a.Conditions); why != "" {
+				an.NotCurrent, an.Why = NotCurrentPending, why
+				if stale {
+					an.NotCurrent = NotCurrentStale
+				}
 			} else {
 				an.Current = true
 			}

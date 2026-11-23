@@ -141,9 +141,9 @@ type PolicyDetail struct {
 
 // PolicyAncestorDTO is one status.ancestors entry with its conditions
 // (controller-reported, Source). NotCurrent says why an entry is left out of
-// the summaries: other-controller, not-owned, not-fresh with Why, or
-// unreadable. Link is none and Health empty unless the caller may get the
-// ancestor by name. Snellius derives Current, NotCurrent, Why, Summary, each
+// the summaries: other-controller, not-owned, stale or pending with Why,
+// not-fresh when freshness is unknown, or unreadable. Link is none and Health
+// empty unless the caller may get the ancestor by name. Snellius derives Current, NotCurrent, Why, Summary, each
 // condition's Stale and Health; each carries its own source field.
 type PolicyAncestorDTO struct {
 	Ref         LinkedRef    `json:"ref"`
