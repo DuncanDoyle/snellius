@@ -16,7 +16,7 @@
       "resource": {
         "group": "gateway.kgateway.dev",
         "kind": "TrafficPolicy",
-        "link": "yaml",
+        "link": "detail",
         "name": "tp-two",
         "namespace": "infra"
       },

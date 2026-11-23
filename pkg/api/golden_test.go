@@ -253,6 +253,8 @@ func detailPath(r objects.Ref) (string, bool) {
 		return "/routes/" + r.Group + "/" + r.Kind + "/" + r.Namespace + "/" + r.Name, true
 	case "ListenerSet", "XListenerSet":
 		return "/listenersets/" + r.Group + "/" + r.Kind + "/" + r.Namespace + "/" + r.Name, true
+	case "BackendTLSPolicy", "TrafficPolicy", "ListenerPolicy", "HTTPListenerPolicy", "BackendConfigPolicy", "DirectResponse":
+		return "/policies/" + r.Group + "/" + r.Kind + "/" + r.Namespace + "/" + r.Name, true
 	}
 	return "", false
 }

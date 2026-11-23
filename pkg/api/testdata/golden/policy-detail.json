@@ -116,7 +116,7 @@
     "ref": {
       "group": "gateway.kgateway.dev",
       "kind": "TrafficPolicy",
-      "link": "yaml",
+      "link": "detail",
       "name": "tp",
       "namespace": "shop"
     },

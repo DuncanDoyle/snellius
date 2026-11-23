@@ -364,7 +364,7 @@ func TestPoliciesReaders(t *testing.T) {
 	for k, rs := range []api.PoliciesResponse{full, restricted} {
 		row := policyRowOf(t, rs, kgwGroup, ns0, tpAncestors)
 		if row.Accepted == nil || row.Accepted.Status != metav1.ConditionTrue || row.Accepted.Source != policy.SourceInferred || row.Problems.Has ||
-			len(row.AttachedOn) != 2-k || row.AttachedOn[0].Source != policy.SourceControllerReported || row.Ref.Link != api.LinkYAML {
+			len(row.AttachedOn) != 2-k || row.AttachedOn[0].Source != policy.SourceControllerReported || row.Ref.Link != api.LinkDetail {
 			t.Errorf("viewer %d: tp-ancestors row %+v", k, row)
 		}
 	}
@@ -773,14 +773,18 @@ func TestPolicyGroupCollision(t *testing.T) {
 	}
 }
 
-// The detail's YAML link and the list row's link agree with the install-scoped YAML endpoint.
-func TestPolicyYAMLLinks(t *testing.T) {
+// A policy's link opens its detail page, in the list and the detail; the detail's
+// YAML path agrees with the install-scoped YAML endpoint.
+func TestPolicyDetailLinks(t *testing.T) {
 	srv := policyServe(t, policyBase(t, ruleChange{name: "base"}), nil)
 	for _, user := range []string{fullUser, restrictedUser} {
 		d := decode[api.PolicyDetail](t, srv, user, tpPath(ns0, tpVisible))
 		want := ruleBase + "/resources/" + kgwGroup + "/TrafficPolicy/" + ns0 + "/" + tpVisible
-		if d.YAML != want || d.Ref.Link != api.LinkYAML {
-			t.Fatalf("%s: yaml %q link %q, want %q", user, d.YAML, d.Ref.Link, want)
+		if d.YAML != want || d.Ref.Link != api.LinkDetail {
+			t.Fatalf("%s: yaml %q link %q, want %q and detail", user, d.YAML, d.Ref.Link, want)
+		}
+		if row := policyRowOf(t, decode[api.PoliciesResponse](t, srv, user, policiesPath+"?limit=200"), kgwGroup, ns0, tpVisible); row.Ref.Link != api.LinkDetail {
+			t.Errorf("%s: row link %q, want detail", user, row.Ref.Link)
 		}
 		code, body := fetch(t, srv, user, d.YAML)
 		var obj map[string]any
