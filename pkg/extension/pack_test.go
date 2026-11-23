@@ -18,6 +18,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/kgateway"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
+	"github.com/DuncanDoyle/snellius/pkg/policy"
 	"github.com/DuncanDoyle/snellius/pkg/process"
 	"github.com/DuncanDoyle/snellius/pkg/proxymode"
 )
@@ -306,5 +307,35 @@ func TestPacksAndKindApplicability(t *testing.T) {
 		if got := r.KindAppliesTo(tc.i, tc.gk); got != tc.want {
 			t.Errorf("%q %v: %v, want %v", tc.i.Impl, tc.gk, got, tc.want)
 		}
+	}
+}
+
+// acmePolicies reads one downstream policy kind.
+type acmePolicies struct{ policy.Interpreter }
+
+func (acmePolicies) Handles(gk objects.GroupKind) bool { return gk.Group == "policy.acme.example" }
+
+// Each install gets its claiming pack's policy interpreter: kgateway's in New,
+// a second pack's own or none, and none for the core (Phase 8 design §8).
+func TestPolicyInterpreterFollowsThePack(t *testing.T) {
+	tp := objects.GroupKind{Group: kinds.KgatewayGroup, Kind: "TrafficPolicy"}
+	r := New(WithPack(Pack{Name: "acme", Detectors: []install.Detector{acmeDetector{}}, Impl: Impl{PolicyInterpreter: acmePolicies{}}}),
+		WithPack(Pack{Name: "bare", Detectors: []install.Detector{acmeDetector{}}}))
+	if r.Err() != nil {
+		t.Fatal(r.Err())
+	}
+	if pi := r.ImplFor(install.Install{Impl: kgateway.Name}).PolicyInterpreter; pi == nil || !pi.Handles(tp) {
+		t.Fatalf("kgateway installs must get the kgateway interpreter, got %T", pi)
+	}
+	if _, ok := r.ImplFor(install.Install{Impl: "acme"}).PolicyInterpreter.(acmePolicies); !ok {
+		t.Fatal("a second pack must keep its own interpreter")
+	}
+	for _, i := range []install.Install{{Impl: "bare"}, {}} {
+		if pi := r.ImplFor(i).PolicyInterpreter; pi != nil {
+			t.Errorf("%q: interpreter %T, want none", i.Impl, pi)
+		}
+	}
+	if pi := NewCore().ImplFor(install.Install{Impl: kgateway.Name}).PolicyInterpreter; pi != nil {
+		t.Errorf("NewCore: interpreter %T, want none", pi)
 	}
 }

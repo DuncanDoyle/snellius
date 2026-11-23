@@ -20,6 +20,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/kgateway"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
+	"github.com/DuncanDoyle/snellius/pkg/policy"
 	"github.com/DuncanDoyle/snellius/pkg/process"
 	"github.com/DuncanDoyle/snellius/pkg/proxymode"
 	"github.com/DuncanDoyle/snellius/pkg/proxystats"
@@ -52,6 +53,9 @@ type Impl struct {
 	Conditions health.ConditionTypes
 	// BackendConsumers lists the backends the install's non-route objects use.
 	BackendConsumers func(install.Install, *install.Owned) []objects.Consumer
+	// PolicyInterpreter reads the pack's own policy kinds: feature labels, precedence
+	// annotations, the summary ancestor and condition notes (Phase 8 design §8). Nil reads nothing.
+	PolicyInterpreter policy.Interpreter
 }
 
 // Pack is one implementation's contributions to the core. Its Name is stamped
@@ -213,14 +217,14 @@ func (r *Registry) FeaturesFor(i install.Install) []string { return slices.Clone
 func (r *Registry) currentImpl() Impl {
 	return Impl{Scope: r.Scope, Verifier: r.Verifier, Settings: r.settings, RulesFor: r.RulesFor, Version: r.version, Reported: r.reported,
 		ExperimentalOnly: r.experimentalOnly, ProxyMode: r.ProxyMode, Process: r.Process, ProxyStats: r.ProxyStats, Commands: r.Commands,
-		Conditions: r.conditions, BackendConsumers: r.backendConsumers}
+		Conditions: r.conditions, BackendConsumers: r.backendConsumers, PolicyInterpreter: r.policyInterpreter}
 }
 
 // setImpl makes im the default pack's hooks.
 func (r *Registry) setImpl(im Impl) {
 	r.Scope, r.Verifier, r.settings, r.RulesFor, r.version, r.reported = im.Scope, im.Verifier, im.Settings, im.RulesFor, im.Version, im.Reported
 	r.experimentalOnly, r.ProxyMode, r.Process, r.ProxyStats, r.Commands = im.ExperimentalOnly, im.ProxyMode, im.Process, im.ProxyStats, im.Commands
-	r.conditions, r.backendConsumers = im.Conditions, im.BackendConsumers
+	r.conditions, r.backendConsumers, r.policyInterpreter = im.Conditions, im.BackendConsumers, im.PolicyInterpreter
 }
 
 // kgatewayPack is pack #1, built from pkg/kgateway.
@@ -228,7 +232,7 @@ func kgatewayPack() Pack {
 	return Pack{Name: kgateway.Name, Kinds: kgateway.Kinds(), Detectors: []install.Detector{kgateway.Detector()}, Checks: kgateway.Checks(),
 		Impl: Impl{Scope: kgateway.Scope(), Settings: kgateway.Settings, RulesFor: kgateway.RulesFor, Version: kgateway.Version, Reported: kgateway.Reported,
 			ExperimentalOnly: kgateway.ExperimentalOnly, ProxyMode: kgateway.ProxyMode(), Process: process.Kube{}, Commands: diagnose.Kubectl{},
-			Conditions: kgateway.Conditions(), BackendConsumers: kgateway.BackendConsumers},
+			Conditions: kgateway.Conditions(), BackendConsumers: kgateway.BackendConsumers, PolicyInterpreter: kgateway.PolicyInterpreter()},
 		Collectors: []func(CollectorEnv) Collector{metricsCollector, proxyStatsCollector, controllerLogsCollector}, Features: kgateway.Features()}
 }
 
