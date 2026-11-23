@@ -63,9 +63,9 @@ func policyGuard(m *engine.Model, i *engine.InstallModel) policy.Guard {
 	return policy.Guard{
 		ControllerNames: i.Resolved.ControllerNames,
 		Owns:            func(ar objects.Ref) bool { return own.AncestorOwned(ic, ar) },
-		Fresh: func(u *unstructured.Unstructured, cs []metav1.Condition) string {
-			why, _, _ := own.BlockFreshness(u, cs, own.PolicyRequired(), own.PolicyOptional())
-			return why
+		Fresh: func(u *unstructured.Unstructured, cs []metav1.Condition) (string, bool) {
+			why, kind, _ := own.PolicyFreshness(u, cs)
+			return why, kind == own.FreshnessStale
 		},
 	}
 }
@@ -162,7 +162,8 @@ func (e *policyEntry) problems() bool {
 		if !a.Current {
 			continue
 		}
-		if slices.ContainsFunc(a.Conditions, func(c metav1.Condition) bool { return c.Status == metav1.ConditionFalse }) ||
+		// A Pending Attached is undecided, not a problem, as for the 002s.
+		if slices.ContainsFunc(a.Conditions, func(c metav1.Condition) bool { return c.Status == metav1.ConditionFalse && c.Reason != "Pending" }) ||
 			slices.ContainsFunc(a.Readings, func(r policy.Reading) bool { return r.Warning }) {
 			return true
 		}

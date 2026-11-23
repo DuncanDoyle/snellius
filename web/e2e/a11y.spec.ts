@@ -3,11 +3,13 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 import { backendsCopy } from "../packages/shell/src/copy/backends";
 import { gatewayCopy, listCopy, navCopy, processesCopy } from "../packages/shell/src/copy/explorer";
 import { mapCopy } from "../packages/shell/src/copy/map";
+import { policiesCopy, policyDetailCopy } from "../packages/shell/src/copy/policies";
 import { trafficCopy } from "../packages/shell/src/copy/traffic";
 import { THEME_STORAGE_KEY } from "../packages/shell/src/theme/themeStorage";
 
 // axe scans of the main pages in each theme. Only serious and critical violations fail; the rest are attached.
-const install = "/i/kgw-a.kgateway";
+// E2E_INSTALL runs the scans against another install, e.g. a local cluster for the Policies pages.
+const install = `/i/${process.env.E2E_INSTALL ?? "kgw-a.kgateway"}`;
 const themes = [
   { id: "control-room-dark", name: "Control room", mode: "dark" },
   { id: "control-room-light", name: "Control room light", mode: "light" },
@@ -118,6 +120,23 @@ const pages: { name: string; open: (page: Page) => Promise<void> }[] = [
       await rows.first().locator('td[data-col="kind"]').click();
       await expect(page).toHaveURL(new RegExp(`${install}/backends/[^/]+/[^/]+/[^/]+/[^/?]+`));
       await expect(page.getByTestId("status-line")).toBeVisible();
+    },
+  },
+  {
+    name: "Policies list",
+    open: async (page) => {
+      await nav(page, policiesCopy.title);
+      await expect((await dataRows(page.getByRole("table", { name: policiesCopy.title }))).first()).toBeVisible();
+    },
+  },
+  {
+    name: "policy detail",
+    open: async (page) => {
+      await nav(page, policiesCopy.title);
+      const rows = await dataRows(page.getByRole("table", { name: policiesCopy.title }));
+      await rows.first().locator('td[data-col="kind"]').click();
+      await expect(page).toHaveURL(new RegExp(`${install}/policies/[^/]+/[^/]+/[^/]+/[^/?]+`));
+      await expect(page.getByRole("heading", { name: policyDetailCopy.summary })).toBeVisible();
     },
   },
   {

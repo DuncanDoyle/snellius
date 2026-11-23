@@ -113,8 +113,8 @@ const Ready = styled.span`
     outline: 2px solid ${(p) => p.theme.color.focus};
     outline-offset: 2px;
   }
-  /* Narrow windows keep the icon; the text stays for screen readers and in the tooltip, so the nav fits. */
-  @media (max-width: 1099px) {
+  /* Narrower windows keep the icon; the text stays for screen readers and in the tooltip, so the nav fits. */
+  @media (max-width: 1599px) {
     .label {
       position: absolute;
       width: 1px;
@@ -147,8 +147,8 @@ const Nav = styled.nav`
 `;
 
 // region Helpers
-/** Below this width the readiness text moves into a tooltip, so five nav entries fit (the .label rule matches it). */
-const COMPACT = "(max-width: 1099px)";
+/** Below this width the readiness text moves into a tooltip, so the full install nav fits (the .label rule matches it). */
+const COMPACT = "(max-width: 1599px)";
 
 /** Matches KGWUI-005: not ready is an error; readiness the platform cannot tell is unknown. */
 function readinessState(r: Readiness): HealthState {

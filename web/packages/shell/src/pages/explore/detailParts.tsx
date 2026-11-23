@@ -109,7 +109,8 @@ interface DetailFrameProps {
   refValue: LinkedRef;
   noun: string;
   data?: {
-    health: HealthState;
+    /** Absent for an object Snellius gives no health, such as a policy: no badge and no problem strip. */
+    health?: HealthState;
     candidate?: Candidate;
     collectedAt: string;
     reason?: DetailReason;
@@ -184,7 +185,8 @@ export function DetailFrame({
   const [pageRefs, reportRefs] = useTrailRefsCollector(heldRefs);
   // The strip explains the server's state; a stale view replaces that state, so it goes too.
   const deciding = data?.config && data.path ? decidingSignal(data.config, data.path) : undefined;
-  const problemShown = !!data && !stale && (data.health !== "healthy" || !!deciding) && tab === "overview";
+  const problemShown =
+    !!data && !stale && ((!!data.health && data.health !== "healthy") || !!deciding) && tab === "overview";
   // The configuration's reason carries the finding id only on the page's own reason.
   const stripReason =
     deciding?.id === "config" && data?.reason?.kind === "finding" ? data.reason : (deciding?.reason ?? data?.reason);
@@ -215,7 +217,7 @@ export function DetailFrame({
             {problemShown && !ownProblem ? (
               <ProblemStrip
                 installId={installId}
-                state={deciding?.state ?? data.health}
+                state={deciding?.state ?? data.health ?? "unknown"}
                 reason={stripReason}
                 signal={deciding ? signalLabel[deciding.id] : undefined}
                 incomplete={data.path?.incomplete}

@@ -56,10 +56,10 @@ func guard() policy.Guard {
 	}
 }
 
-// fresh is own.BlockFreshness over the policy ancestor condition types, as policyAncestors calls it.
-func fresh(u *unstructured.Unstructured, cs []metav1.Condition) string {
-	why, _, _ := own.BlockFreshness(u, cs, own.PolicyRequired(), own.PolicyOptional())
-	return why
+// fresh is own.PolicyFreshness, as policyAncestors calls it.
+func fresh(u *unstructured.Unstructured, cs []metav1.Condition) (string, bool) {
+	why, kind, _ := own.PolicyFreshness(u, cs)
+	return why, kind == own.FreshnessStale
 }
 
 // summary renders p for comparison: targets, features, annotations and ancestors.
@@ -155,7 +155,7 @@ func TestReadRealPolicies(t *testing.T) {
 			Features:    []string{"transformation=Transformations" + decl},
 			Annotations: []string{"kgateway.dev/policy-weight=5" + decl},
 			Ancestors: []string{
-				gw + "/Gateway default/test # " + kgwController + " not-fresh (Status describes an older generation)" + ctrl,
+				gw + "/Gateway default/test # " + kgwController + " stale (Status describes an older generation)" + ctrl,
 				gw + "/Gateway default/test # example.com/other-controller other-controller" + ctrl}},
 		"2.5 TrafficPolicy default/partial": {Interpreted: true,
 			Targets:  []string{"0 " + gw + "/Gateway example-gateway #", "1 " + gw + "/HTTPRoute route-b-typo #"},

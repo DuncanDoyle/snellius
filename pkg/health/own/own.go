@@ -355,6 +355,18 @@ func within(extra string) string {
 // and, for a stale block, the lowest observed generation; "" when it is
 // current. Kinds are tried in §10.1 order (D-006).
 func BlockFreshness(u *unstructured.Unstructured, cs []metav1.Condition, required, optional []string) (why, kind string, observed int64) {
+	return blockFreshness(u, cs, required, optional, true)
+}
+
+// PolicyFreshness is BlockFreshness for one status.ancestors entry of policy u.
+// A Pending reason holds the block only on Accepted: kgateway keeps
+// Attached=False/Pending beside a definitive Accepted, so Accepted decides.
+func PolicyFreshness(u *unstructured.Unstructured, cs []metav1.Condition) (why, kind string, observed int64) {
+	return blockFreshness(u, cs, PolicyRequired(), PolicyOptional(), false)
+}
+
+// blockFreshness is BlockFreshness; pendingOptional makes a Pending optional condition hold the block too.
+func blockFreshness(u *unstructured.Unstructured, cs []metav1.Condition, required, optional []string, pendingOptional bool) (why, kind string, observed int64) {
 	if crdDefaultOnly(cs) {
 		return NoControllerStatus, FreshnessNeverWritten, 0
 	}
@@ -375,7 +387,11 @@ func BlockFreshness(u *unstructured.Unstructured, cs []metav1.Condition, require
 			return fmt.Sprintf("No %s condition", t), FreshnessPending, 0
 		}
 	}
-	for _, ts := range types {
+	pendingTypes := types[:1]
+	if pendingOptional {
+		pendingTypes = types[:]
+	}
+	for _, ts := range pendingTypes {
 		for _, t := range ts {
 			if c := objects.FindCondition(cs, t); c != nil && c.Reason == "Pending" {
 				return t + " is Pending", FreshnessPending, 0

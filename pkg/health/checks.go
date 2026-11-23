@@ -502,7 +502,8 @@ func (c conditionsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 			extra := "ancestor " + a.AncestorRef.Kind + " " + a.AncestorRef.Ref().String()
 			owner := append([]string{ownerAncestor}, refKey(a.AncestorRef.Ref())...)
 			owner = append(owner, a.AncestorRef.SectionName, strconv.Itoa(int(a.AncestorRef.Port)))
-			if !current(p.Obj, a.Conditions, policyRequired, policyOptional, extra) {
+			if why, kind, observed := own.PolicyFreshness(p.Obj, a.Conditions); why != "" {
+				pending(p.Obj, why+within(extra), kind, observed)
 				continue
 			}
 			// 016 owns TargetNotFound where the rule set reads it from status (D-030).
@@ -581,9 +582,11 @@ func GatewayPending(u *unstructured.Unstructured, cs []metav1.Condition) string 
 	return pendingReason(u, cs, gatewayRequired, nil)
 }
 
-// PolicyPending is RoutePending for one status.ancestors entry of policy u.
+// PolicyPending is RoutePending for one status.ancestors entry of policy u,
+// under own.PolicyFreshness: a Pending Attached alone does not hold it.
 func PolicyPending(u *unstructured.Unstructured, cs []metav1.Condition) string {
-	return pendingReason(u, cs, policyRequired, policyOptional)
+	why, _, _ := own.PolicyFreshness(u, cs)
+	return why
 }
 
 // experimentalKind returns u's served kind when the install's controller watches

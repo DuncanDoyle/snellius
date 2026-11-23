@@ -15,6 +15,9 @@ import type {
   Page,
   PathRow,
   PathsResponse,
+  PoliciesResponse,
+  PolicyDetail,
+  PolicyRow,
   Ref,
   RouteDetail,
   RouteRow,
@@ -99,6 +102,17 @@ export function usePaths(id: string, query: URLSearchParams) {
 /** GET …/backends: the install's backends, filtered, sorted and paged by the server (Phase 6 design §8.1). */
 export function useBackends(id: string, query: URLSearchParams) {
   return useList<BackendRow, BackendsResponse>(id, "backends", query);
+}
+
+/** GET …/policies: the install's readable policies, filtered and paged by the server (Phase 8 design §6.2). */
+export function usePolicies(id: string, query: URLSearchParams) {
+  return useList<PolicyRow, PoliciesResponse>(id, "policies", query);
+}
+
+/** GET …/policies/{group}/{kind}/{ns}/{name}, "-" for the empty group (Phase 8 design §6.3). */
+export function usePolicyDetail(id: string, r: Ref) {
+  const path = `policies/${seg(r.group || "-")}/${seg(r.kind)}/${seg(r.namespace ?? "")}/${seg(r.name)}`;
+  return useDetail<PolicyDetail>(id, path);
 }
 
 /** GET …/backends/{group}/{kind}/{ns}/{name}, "-" for the empty group (design §8.2). */

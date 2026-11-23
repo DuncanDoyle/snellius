@@ -164,6 +164,7 @@ it("the header's install nav links only to pages that exist, and navigates", asy
     ["Routes", "/i/kgw.kgateway/routes"],
     ["Traffic", "/i/kgw.kgateway/traffic"],
     ["Backends", "/i/kgw.kgateway/backends"],
+    ["Policies", "/i/kgw.kgateway/policies"],
     ["ListenerSets", "/i/kgw.kgateway/listenersets"],
     ["Findings", "/i/kgw.kgateway/findings"],
     ["Processes", "/i/kgw.kgateway/processes"],
@@ -185,9 +186,9 @@ it("serves the list pages under the install", async () => {
   expect(await screen.findByText("No ListenerSets in this install.")).toBeInTheDocument();
 });
 
-it("below 1100 px the readiness text shows in a tooltip on keyboard focus", async () => {
+it("below 1600 px the readiness text shows in a tooltip on keyboard focus", async () => {
   vi.stubGlobal("matchMedia", (q: string) => ({
-    matches: q.includes("max-width: 1099px"),
+    matches: q.includes("max-width: 1599px"),
     addEventListener: () => {},
     removeEventListener: () => {},
   }));

@@ -929,3 +929,60 @@ func TestPoliciesPaging(t *testing.T) {
 		t.Errorf("unknown parameter: %d", code)
 	}
 }
+
+// kgateway v2.3–v2.5 keep Attached=False/Pending beside a definitive Accepted. A fresh
+// rejection is current, Not accepted · Invalid, with a problem and its KGWUI-002; a pending
+// or stale block stays not current and says which.
+func TestPolicyAncestorAttachedPending(t *testing.T) {
+	attachedPending := testutil.Cond("Attached", metav1.ConditionFalse, "Pending")
+	rejected := testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")
+	rejected.Message = "extauth: " + ns0 + "/no-such-authz: gateway extension not found"
+	staleRejected, staleAttached := rejected, attachedPending
+	staleRejected.ObservedGeneration, staleAttached.ObservedGeneration = 0, 0
+	cases := []struct {
+		name       string
+		conds      []metav1.Condition
+		current    bool
+		notCurrent string
+		accepted   string // "status/reason" of the row's Accepted; "" for none
+		problems   bool
+		finding    string // the policy's finding code; "" for none
+	}{
+		{"tp-rejected", []metav1.Condition{rejected, attachedPending}, true, "", "False/Invalid", true, health.CodeConditionFalse},
+		{"tp-accepted", []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionTrue, "Valid"), attachedPending}, true, "", "True/Valid", false, ""},
+		{"tp-pending", []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Pending"), attachedPending}, false, "pending", "", false, health.CodeRouteUnattached},
+		{"tp-stale", []metav1.Condition{staleRejected, staleAttached}, false, "stale", "", false, health.CodeRouteUnattached},
+	}
+	srv := policyServe(t, policyBase(t, ruleChange{name: "attached-pending", apply: func(s ruleSnap) {
+		for _, c := range cases {
+			s.add(tp(ns0, c.name, []any{targetRef(gatewaysGroup, "Gateway", testutil.ScaleGateway(0), "")},
+				testutil.PolicyAncestor{Ref: gw0()[0], Controller: testutil.Controller, Conds: c.conds}))
+		}
+	}}), nil)
+	list := decode[api.PoliciesResponse](t, srv, fullUser, policiesPath+"?limit=200")
+	findings := decode[map[string]any](t, srv, fullUser, ruleBase+"/findings?limit=200&namespace="+ns0)
+	for _, c := range cases {
+		a := decode[api.PolicyDetail](t, srv, fullUser, tpPath(ns0, c.name)).Ancestors[0]
+		if a.Current != c.current || a.NotCurrent != c.notCurrent {
+			t.Errorf("%s: ancestor current %v, notCurrent %q (%s); want %v, %q", c.name, a.Current, a.NotCurrent, a.Why, c.current, c.notCurrent)
+		}
+		row := policyRowOf(t, list, kgwGroup, ns0, c.name)
+		acc := ""
+		if row.Accepted != nil {
+			acc = string(row.Accepted.Status) + "/" + row.Accepted.Reason
+		}
+		if acc != c.accepted || row.Problems.Has != c.problems {
+			t.Errorf("%s: row Accepted %q, has problems %v; want %q, %v", c.name, acc, row.Problems.Has, c.accepted, c.problems)
+		}
+		var codes []string
+		for _, x := range findings["items"].([]any) {
+			f := x.(map[string]any)
+			if res, _ := f["resource"].(map[string]any); res != nil && res["name"] == c.name {
+				codes = append(codes, f["code"].(string))
+			}
+		}
+		if want := []string{c.finding}; c.finding == "" && len(codes) != 0 || c.finding != "" && !slices.Equal(codes, want) {
+			t.Errorf("%s: findings %v, want %q", c.name, codes, c.finding)
+		}
+	}
+}

@@ -15,6 +15,15 @@ export function backendPath(installId: string, r: Ref): string {
   );
 }
 
+/** Path of the policy detail page of r (Phase 8 design §6.3), "-" for the empty group. */
+export function policyPath(installId: string, r: Ref): string {
+  const seg = encodeURIComponent;
+  return installPath(
+    installId,
+    `policies/${seg(r.group || "-")}/${seg(r.kind)}/${seg(r.namespace ?? "")}/${seg(r.name)}`,
+  );
+}
+
 // region Helpers
 const GATEWAY_API = "gateway.networking.k8s.io";
 const ROUTE_KINDS = new Set(["HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"]);
