@@ -185,9 +185,10 @@ This is an upgrade decision for the operator (D-088), covering kgateway, its Env
 **Docs:** `docs/phases/phase-12/`
 
 - The actual Envoy HTTP filter chain and filter order per route, mapped back to the Gateway API and policy resources that produced it.
-- Controller-reported policy contributions (`merge.*` via xdsview `origin.Policies`, E13), per level and never as the governing policy; the access and redaction decisions (D-124).
+- Controller-reported policy contributions (scoped `merge.*` records for listener, RouteConfiguration, virtual host and route), per level and never as the governing policy; the access and redaction decisions (D-124). Whole-block visibility (Phase 8 design §9) uses each block's enumerable evidence scope.
 - An optional xDS cross-check of M-1's matcher that returns ambiguous on multi-context joins.
-- Builds on the `pkg/envoy` library of [xdsview](https://github.com/DuncanDoyle/xdsview) (xdsview Phase 4, v0.1.0). xdsview owns the mapping from Envoy names to Gateway API refs, and `computed.EnvoyNamer` delegates to it (program P-001, edges E4/E5).
+- Builds on the xdsview Phase 9 tag (program P-010, edge E15), which carries E4, E5 and E13. xdsview owns the mapping from Envoy names to Gateway API refs: `computed.EnvoyNamer` calls its `NameMapper`, which returns claims with certainty, kind and ambiguity (P-001).
+- Before xdsview approves its Phase 9 design, Snellius reviews it against these needs (program open question 7).
 - Easier standalone, because the admin server (9095) and Envoy admin are local (D-016).
 
 ### Phase 13 — App-Team Views
