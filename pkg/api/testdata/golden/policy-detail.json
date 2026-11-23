@@ -1,0 +1,162 @@
+{
+  "body": {
+    "accepted": {
+      "reason": "Accepted",
+      "source": "inferred",
+      "status": "True"
+    },
+    "ancestors": [
+      {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-10-17T11:00:00Z",
+            "message": "",
+            "observedGeneration": 1,
+            "reason": "Accepted",
+            "stale": false,
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-10-17T11:00:00Z",
+            "message": "",
+            "observedGeneration": 1,
+            "reason": "Merged",
+            "stale": false,
+            "status": "True",
+            "type": "Attached"
+          }
+        ],
+        "controller": "kgateway.dev/kgateway",
+        "current": true,
+        "health": "healthy",
+        "readings": [
+          {
+            "note": "gateway-wide",
+            "source": "inferred",
+            "type": "Attached"
+          }
+        ],
+        "ref": {
+          "group": "gateway.networking.k8s.io",
+          "kind": "Gateway",
+          "link": "detail",
+          "name": "edge",
+          "namespace": "infra"
+        },
+        "source": "controller-reported"
+      },
+      {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-10-17T11:00:00Z",
+            "message": "",
+            "observedGeneration": 0,
+            "reason": "Accepted",
+            "stale": true,
+            "status": "True",
+            "type": "Accepted"
+          }
+        ],
+        "controller": "example.com/other",
+        "current": false,
+        "notCurrent": "other-controller",
+        "readings": [],
+        "ref": {
+          "group": "gateway.networking.k8s.io",
+          "kind": "Gateway",
+          "link": "none",
+          "name": "foreign",
+          "namespace": "infra"
+        },
+        "source": "controller-reported"
+      }
+    ],
+    "annotations": [
+      {
+        "key": "kgateway.dev/inherited-policy-priority",
+        "source": "declared",
+        "value": "ShallowMergePreferParent"
+      }
+    ],
+    "attachedOn": [
+      {
+        "group": "gateway.networking.k8s.io",
+        "kind": "Gateway",
+        "name": "edge",
+        "namespace": "infra",
+        "source": "controller-reported"
+      }
+    ],
+    "collectedAt": "2026-10-17T12:00:00Z",
+    "features": [
+      {
+        "key": "timeouts",
+        "label": "Timeouts",
+        "source": "declared",
+        "value": {
+          "request": "5s"
+        }
+      }
+    ],
+    "generation": 1,
+    "install": "kgw.kgateway",
+    "interpreted": true,
+    "problems": {
+      "has": true,
+      "source": "inferred"
+    },
+    "ref": {
+      "group": "gateway.kgateway.dev",
+      "kind": "TrafficPolicy",
+      "link": "yaml",
+      "name": "tp",
+      "namespace": "shop"
+    },
+    "targets": [
+      {
+        "check": {
+          "outcome": "found",
+          "source": "inferred"
+        },
+        "group": "gateway.networking.k8s.io",
+        "health": "healthy",
+        "index": 0,
+        "kind": "HTTPRoute",
+        "name": "cart",
+        "ref": {
+          "group": "gateway.networking.k8s.io",
+          "kind": "HTTPRoute",
+          "link": "detail",
+          "name": "cart",
+          "namespace": "shop"
+        },
+        "source": "declared"
+      },
+      {
+        "check": {
+          "outcome": "not-found",
+          "source": "inferred"
+        },
+        "group": "gateway.networking.k8s.io",
+        "index": 1,
+        "kind": "HTTPRoute",
+        "name": "gone",
+        "ref": {
+          "group": "gateway.networking.k8s.io",
+          "kind": "HTTPRoute",
+          "link": "none",
+          "name": "gone",
+          "namespace": "shop"
+        },
+        "source": "declared"
+      }
+    ],
+    "yaml": "/api/v1/installs/kgw.kgateway/resources/gateway.kgateway.dev/TrafficPolicy/shop/tp"
+  },
+  "headers": {
+    "Cache-Control": "no-store",
+    "Content-Type": "application/json"
+  },
+  "status": 200
+}

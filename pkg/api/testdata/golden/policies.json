@@ -1,0 +1,125 @@
+{
+  "body": {
+    "collectedAt": "2026-10-17T12:00:00Z",
+    "facets": {
+      "features": [
+        {
+          "key": "status",
+          "policies": 1
+        },
+        {
+          "key": "timeouts",
+          "policies": 1
+        }
+      ],
+      "hasProblems": 1,
+      "kinds": [
+        {
+          "group": "gateway.kgateway.dev",
+          "kind": "DirectResponse",
+          "policies": 1
+        },
+        {
+          "group": "gateway.kgateway.dev",
+          "kind": "TrafficPolicy",
+          "policies": 1
+        }
+      ],
+      "namespaces": [
+        {
+          "namespace": "shop",
+          "policies": 2
+        }
+      ]
+    },
+    "install": "kgw.kgateway",
+    "items": [
+      {
+        "attachedOn": [],
+        "features": [
+          {
+            "key": "status",
+            "label": "Status code",
+            "source": "declared"
+          }
+        ],
+        "problems": {
+          "has": false,
+          "source": "inferred"
+        },
+        "ref": {
+          "group": "gateway.kgateway.dev",
+          "kind": "DirectResponse",
+          "link": "yaml",
+          "name": "dr",
+          "namespace": "shop"
+        },
+        "targets": []
+      },
+      {
+        "accepted": {
+          "reason": "Accepted",
+          "source": "inferred",
+          "status": "True"
+        },
+        "attachedOn": [
+          {
+            "group": "gateway.networking.k8s.io",
+            "kind": "Gateway",
+            "name": "edge",
+            "namespace": "infra",
+            "source": "controller-reported"
+          }
+        ],
+        "features": [
+          {
+            "key": "timeouts",
+            "label": "Timeouts",
+            "source": "declared"
+          }
+        ],
+        "problems": {
+          "has": true,
+          "source": "inferred"
+        },
+        "ref": {
+          "group": "gateway.kgateway.dev",
+          "kind": "TrafficPolicy",
+          "link": "yaml",
+          "name": "tp",
+          "namespace": "shop"
+        },
+        "targets": [
+          {
+            "check": {
+              "outcome": "found",
+              "source": "inferred"
+            },
+            "group": "gateway.networking.k8s.io",
+            "index": 0,
+            "kind": "HTTPRoute",
+            "name": "cart",
+            "source": "declared"
+          },
+          {
+            "check": {
+              "outcome": "not-found",
+              "source": "inferred"
+            },
+            "group": "gateway.networking.k8s.io",
+            "index": 1,
+            "kind": "HTTPRoute",
+            "name": "gone",
+            "source": "declared"
+          }
+        ]
+      }
+    ],
+    "total": 2
+  },
+  "headers": {
+    "Cache-Control": "no-store",
+    "Content-Type": "application/json"
+  },
+  "status": 200
+}
