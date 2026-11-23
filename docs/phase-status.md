@@ -8,7 +8,17 @@ Status: design approved (user, 2026-11-23); D-121 … D-129 accepted; runtime vi
 Author: claude (Opus 5.5)
 
 ## Sub-phase
-Sub-phase: none
+Sub-phase: 8.1 — Policy model, pack hook and API (planned)
+Base: c837869
+Brief: docs/phases/phase-8/phase-8.1-brief.md
+Queue (plan steps):
+- [ ] 1 `pkg/policy.Read` ← CURRENT
+- [ ] 2 `PolicyInterpreter` hook and kgateway interpreter
+- [ ] 3 target checks
+- [ ] 4 parent joins and `Relations`
+- [ ] 5 list and detail API, audit, visibility tests
+- [ ] 6 DirectResponse ancestor findings
+- [ ] 7 external-package and boundary tests
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md (read 2026-11-22 at `bd1f17d`; merged on main at `090fd7e`, which adds M-4 and U12: P-008, P-009, M-1, M-2, E7, E13, E14).
