@@ -295,3 +295,89 @@ func TestPackBoundaryCatchesViolations(t *testing.T) {
 		t.Errorf("stale: got %q", stale)
 	}
 }
+
+// policyBanned are the packages pkg/policy must not reach, directly or through
+// another module package (Phase 8 design §5.1, E7): kgwctl builds the model without them.
+var policyBanned = []string{"pkg/api", "pkg/health"}
+
+// reaches walks the module packages start imports, transitively, from non-test
+// files, and lists each banned package reached as "chain: a -> b -> banned".
+func reaches(root, start string, banned []string) ([]string, error) {
+	isBanned := func(p string) bool {
+		return slices.ContainsFunc(banned, func(b string) bool { return p == b || strings.HasPrefix(p, b+"/") })
+	}
+	type item struct{ pkg, chain string }
+	seen := map[string]bool{start: true}
+	queue := []item{{start, start}}
+	var bad []string
+	for len(queue) > 0 {
+		it := queue[0]
+		queue = queue[1:]
+		entries, err := os.ReadDir(filepath.Join(root, filepath.FromSlash(it.pkg)))
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			n := e.Name()
+			if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
+				continue
+			}
+			f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, filepath.FromSlash(it.pkg), n), nil, parser.ImportsOnly)
+			if err != nil {
+				return nil, err
+			}
+			for _, imp := range f.Imports {
+				p, _ := strconv.Unquote(imp.Path.Value)
+				rest, ok := strings.CutPrefix(p, module)
+				if !ok || seen[rest] {
+					continue
+				}
+				seen[rest] = true
+				chain := it.chain + " -> " + rest
+				if isBanned(rest) {
+					bad = append(bad, chain)
+					continue
+				}
+				queue = append(queue, item{rest, chain})
+			}
+		}
+	}
+	slices.Sort(bad)
+	return bad, nil
+}
+
+// pkg/policy reaches neither pkg/api nor pkg/health.
+func TestPolicyImportsNeitherAPINorHealth(t *testing.T) {
+	bad, err := reaches(filepath.Join("..", ".."), "pkg/policy", policyBanned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range bad {
+		t.Errorf("%s\n\tpkg/policy must not import pkg/api or pkg/health, directly or not (E7); pass what it needs as an input", b)
+	}
+}
+
+// The reach check follows imports through other packages and ignores test files.
+func TestReachCatchesViolations(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, src string) {
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	imp := func(pkg, path string) string { return "package " + pkg + "\n\nimport _ \"" + module + path + "\"\n" }
+	write("pkg/policy/a.go", imp("policy", "pkg/mid"))
+	write("pkg/policy/b_test.go", imp("policy", "pkg/api"))
+	write("pkg/mid/m.go", imp("mid", "pkg/health/own"))
+	bad, err := reaches(root, "pkg/policy", policyBanned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"pkg/policy -> pkg/mid -> pkg/health/own"}; !slices.Equal(bad, want) {
+		t.Errorf("bad: got %q, want %q", bad, want)
+	}
+}
