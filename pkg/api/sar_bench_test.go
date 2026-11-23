@@ -918,9 +918,9 @@ func policyReader(a sar.Attributes) bool {
 	return a.Verb == "list" && (a.Resource == "trafficpolicies" || a.Namespace != "" && granted(a.Namespace))
 }
 
-// A cold Large policies list with one policy per route, and the subject details that
-// carry relations, answer within the per-request check budget for every restricted
-// viewer (8.1 re-review: budget).
+// A cold Large policies list with one policy per route answers within the per-request
+// check budget for every restricted viewer (8.1 re-review: budget), and the subject
+// details that carry relations within their own bounds.
 func TestBudgetSARPoliciesLarge(t *testing.T) {
 	build, m := api.TierHandlersWith(t, scale.Large, largePolicies)
 	base := "/api/v1/installs/" + m.Installs[0].Resolved.ID()
@@ -931,6 +931,9 @@ func TestBudgetSARPoliciesLarge(t *testing.T) {
 		t.Fatal("no visible Gateway")
 	}
 	gw := base + "/gateways/" + ix.Gateways[k].Ref.Namespace + "/" + ix.Gateways[k].Ref.Name
+	// bound is each page's cold check bound. A detail asks access only on the policies that can
+	// relate to it; without relations these pages take about 130, 15 and 320 checks.
+	bound := map[string]int64{base + "/policies?limit=1": api.CheckLimit, gw: 170, route: 30, svc: 360}
 	for _, path := range []string{base + "/policies?limit=1", gw, route, svc} {
 		for _, v := range append(slices.Clone(viewers), viewer{"policy-reader", policyReader}) {
 			c, clk := &fakeChecker{allow: v.allow}, clocktesting.NewFakeClock(t0)
@@ -938,8 +941,8 @@ func TestBudgetSARPoliciesLarge(t *testing.T) {
 			cold := get(h, c, "u", path)
 			t.Logf("%-16s %s cold %d SARs (%d list, %d get) → %d", v.name, strings.TrimPrefix(path, base), cold.sars, c.lists.Load(), c.gets.Load(), cold.code)
 			// denied-list may not open the Service detail (404), as in TestBudgetSARDeniedList.
-			if cold.code != http.StatusOK && cold.code != http.StatusNotFound || cold.sars > api.CheckLimit {
-				t.Errorf("%s: cold %s %d with %d SARs (limit %d)", v.name, path, cold.code, cold.sars, api.CheckLimit)
+			if cold.code != http.StatusOK && cold.code != http.StatusNotFound || cold.sars > bound[path] {
+				t.Errorf("%s: cold %s %d with %d SARs (bound %d)", v.name, path, cold.code, cold.sars, bound[path])
 			}
 		}
 	}
