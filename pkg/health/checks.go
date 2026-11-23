@@ -451,6 +451,7 @@ func (c conditionsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 	fs = append(fs, runOwn(ctx, status, slices.Concat(in.Owned.Gateways, in.Owned.ListenerSets))[0]...)
 	fs = append(fs, routeFs[1]...)
 	fs = append(fs, runOwn(ctx, status, objectsOf(in.Owned.Policies))[0]...)
+	fs = append(fs, runOwn(ctx, status, in.listedPolicies())[0]...)
 	fs = append(fs, routeFs[2]...)
 	fs = append(fs, routeFs[3]...)
 	// Declared candidates: KGWUI-011's status trigger. Inside its grace the

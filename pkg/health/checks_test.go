@@ -486,6 +486,94 @@ func TestPolicyAncestorOfUnownedGatewayIsIgnored(t *testing.T) {
 	}
 }
 
+// policyFindings are r's findings on shop/name with resource and ID cleared, to compare two kinds.
+func policyFindings(r Report, name string) []Finding {
+	var out []Finding
+	for _, f := range r.Findings {
+		if f.Resource != nil && f.Resource.Namespace == "shop" && f.Resource.Name == name {
+			f.Resource, f.ID = nil, ""
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// A DirectResponse's current ancestors raise the findings a TrafficPolicy's
+// would in the same state; other ancestors raise none (design §6.6).
+func TestDirectResponseAncestorFindings(t *testing.T) {
+	gw, other := testutil.GwRef("infra", "edge"), testutil.GwRef("infra", "elsewhere")
+	invalid := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}
+	partial := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionTrue, "PartiallyValid"),
+		testutil.Cond("Attached", metav1.ConditionTrue, "Overridden")}
+	for _, c := range []struct {
+		name      string
+		ancestors []testutil.PolicyAncestor
+		want      int
+	}{
+		{"rejected on owned Gateway", []testutil.PolicyAncestor{{Ref: gw, Controller: testutil.Controller, Conds: invalid}}, 1},
+		{"partially valid and overridden", []testutil.PolicyAncestor{{Ref: gw, Controller: testutil.Controller, Conds: partial}}, 2},
+		{"owned Gateway and another install's Gateway", []testutil.PolicyAncestor{
+			{Ref: gw, Controller: testutil.Controller, Conds: invalid}, {Ref: other, Controller: testutil.Controller, Conds: invalid}}, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := healthyWorld()
+			w.objs = append(w.objs, testutil.Policy("gateway.kgateway.dev/v1alpha1", "DirectResponse", "shop", "dr", c.ancestors...))
+			got := policyFindings(w.report(t), "dr")
+			w = healthyWorld()
+			w.objs = append(w.objs, testutil.TrafficPolicy("shop", "dr", c.ancestors...))
+			want := policyFindings(w.report(t), "dr")
+			if len(got) != c.want || !reflect.DeepEqual(got, want) {
+				t.Fatalf("DirectResponse findings %+v, want %d equal to the TrafficPolicy's %+v", got, c.want, want)
+			}
+		})
+	}
+}
+
+// A DirectResponse with no status, a stale ancestor, an uncollected watch or
+// only other installs' ancestors raises nothing: it has no freshness of its own (design §6.6).
+func TestDirectResponseWithoutCurrentStatusRaisesNothing(t *testing.T) {
+	gw := testutil.GwRef("infra", "edge")
+	invalid := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}
+	stale := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}
+	stale[0].ObservedGeneration = 0
+	dr := func(cs []metav1.Condition) *unstructured.Unstructured {
+		return testutil.Policy("gateway.kgateway.dev/v1alpha1", "DirectResponse", "shop", "dr",
+			testutil.PolicyAncestor{Ref: gw, Controller: testutil.Controller, Conds: cs})
+	}
+	var drGVR schema.GroupVersionResource
+	for _, k := range testutil.ServedUpstream() {
+		if k.Kind == "DirectResponse" {
+			drGVR = k.GVR()
+		}
+	}
+	for _, c := range []struct {
+		name   string
+		dr     *unstructured.Unstructured
+		access map[schema.GroupVersionResource]cache.Access
+	}{
+		{"no status", testutil.DirectResponse("shop", "dr"), nil},
+		{"stale ancestor", dr(stale), nil},
+		{"watch not collected", dr(invalid), map[schema.GroupVersionResource]cache.Access{drGVR: {Err: "watch failed"}}},
+		{"another controller", testutil.Policy("gateway.kgateway.dev/v1alpha1", "DirectResponse", "shop", "dr",
+			testutil.PolicyAncestor{Ref: gw, Controller: "example.com/other", Conds: invalid}), nil},
+		{"unowned Gateway", testutil.Policy("gateway.kgateway.dev/v1alpha1", "DirectResponse", "shop", "dr",
+			testutil.PolicyAncestor{Ref: testutil.GwRef("infra", "elsewhere"), Controller: testutil.Controller, Conds: invalid}), nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := healthyWorld()
+			w.objs = append(w.objs, c.dr)
+			w.access = c.access
+			r := w.report(t)
+			if fs := policyFindings(r, "dr"); len(fs) != 0 {
+				t.Fatalf("findings on the DirectResponse: %+v", fs)
+			}
+			if r.State != StateHealthy {
+				t.Fatalf("state %s: %+v", r.State, r.Findings)
+			}
+		})
+	}
+}
+
 // Two installs share a controllerName with disjoint Gateway namespaces. A
 // policy in both scopes that targets only A's Gateway is healthy in A and
 // absent from B: no finding there and not owned.

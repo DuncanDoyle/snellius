@@ -295,6 +295,18 @@ func objectsOf(os []install.OwnedObject) []*unstructured.Unstructured {
 	return out
 }
 
+// listedPolicies returns the install's list-only policies (DirectResponse) whose
+// watch is collected in their namespace. Only their ancestor 002s are judged (design §6.6).
+func (in Input) listedPolicies() []*unstructured.Unstructured {
+	var out []*unstructured.Unstructured
+	for _, o := range in.Owned.Listed {
+		if o.Kind.Category == kinds.CategoryPolicy && in.collected(objects.GroupKind{Group: o.Kind.Group, Kind: o.Kind.Kind}, o.Obj.GetNamespace()) {
+			out = append(out, o.Obj)
+		}
+	}
+	return out
+}
+
 // ownRoutes returns the owned routes, then the unattached routes not owned,
 // each once: the resources of own.Parents.
 func ownRoutes(o *install.Owned) []*unstructured.Unstructured {
