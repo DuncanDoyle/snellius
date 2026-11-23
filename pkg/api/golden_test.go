@@ -238,7 +238,7 @@ func TestGoldenLinksAgreeWithEndpoints(t *testing.T) {
 		}
 	}
 	// Every link in every golden; update it when a golden gains or loses one.
-	const want = 565
+	const want = 578
 	if walked != want {
 		t.Errorf("walked %d links, want %d", walked, want)
 	}
@@ -253,6 +253,8 @@ func detailPath(r objects.Ref) (string, bool) {
 		return "/routes/" + r.Group + "/" + r.Kind + "/" + r.Namespace + "/" + r.Name, true
 	case "ListenerSet", "XListenerSet":
 		return "/listenersets/" + r.Group + "/" + r.Kind + "/" + r.Namespace + "/" + r.Name, true
+	case "BackendTLSPolicy", "TrafficPolicy", "ListenerPolicy", "HTTPListenerPolicy", "BackendConfigPolicy", "DirectResponse":
+		return "/policies/" + r.Group + "/" + r.Kind + "/" + r.Namespace + "/" + r.Name, true
 	}
 	return "", false
 }

@@ -50,7 +50,7 @@
         "ref": {
           "group": "gateway.kgateway.dev",
           "kind": "DirectResponse",
-          "link": "yaml",
+          "link": "detail",
           "name": "dr",
           "namespace": "shop"
         },
@@ -85,7 +85,7 @@
         "ref": {
           "group": "gateway.kgateway.dev",
           "kind": "TrafficPolicy",
-          "link": "yaml",
+          "link": "detail",
           "name": "tp",
           "namespace": "shop"
         },

@@ -1,0 +1,166 @@
+{
+  "body": {
+    "addresses": [
+      "10.0.0.1"
+    ],
+    "class": "kgateway",
+    "collectedAt": "2026-10-17T12:00:00Z",
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-10-17T11:00:00Z",
+        "message": "",
+        "observedGeneration": 1,
+        "reason": "Accepted",
+        "stale": false,
+        "status": "True",
+        "type": "Accepted"
+      },
+      {
+        "lastTransitionTime": "2026-10-17T11:00:00Z",
+        "message": "",
+        "observedGeneration": 1,
+        "reason": "Programmed",
+        "stale": false,
+        "status": "True",
+        "type": "Programmed"
+      }
+    ],
+    "dataPlane": {
+      "controllerLogs": "not-read",
+      "nextSteps": [],
+      "proxyStats": {
+        "available": false,
+        "reason": "Proxy stats are not collected yet",
+        "unavailable": "failing"
+      },
+      "recentlyChanged": [],
+      "rejecting": false,
+      "rejects": [],
+      "statusSaysHealthy": false
+    },
+    "generation": 1,
+    "health": "healthy",
+    "install": "kgw.kgateway",
+    "listenerSets": 1,
+    "listeners": [
+      {
+        "allowedRoutes": {
+          "kinds": [],
+          "namespaces": {
+            "from": "All"
+          }
+        },
+        "computed": {
+          "by": "ui",
+          "coverage": [
+            "count-agrees"
+          ],
+          "label": "kgateway 2.4",
+          "rule": "listener-count",
+          "rules": "kgateway-2.4",
+          "state": "checked"
+        },
+        "computedRoutes": 6,
+        "name": "http",
+        "port": 8080,
+        "protocol": "HTTP",
+        "status": {
+          "attachedRoutes": 6,
+          "conditions": [
+            {
+              "lastTransitionTime": "2026-10-17T11:00:00Z",
+              "message": "",
+              "observedGeneration": 1,
+              "reason": "Accepted",
+              "stale": false,
+              "status": "True",
+              "type": "Accepted"
+            },
+            {
+              "lastTransitionTime": "2026-10-17T11:00:00Z",
+              "message": "",
+              "observedGeneration": 1,
+              "reason": "Programmed",
+              "stale": false,
+              "status": "True",
+              "type": "Programmed"
+            }
+          ],
+          "supportedKinds": []
+        }
+      }
+    ],
+    "policyRelations": {
+      "attachedHere": [
+        {
+          "condition": {
+            "lastTransitionTime": "2026-10-17T11:00:00Z",
+            "message": "",
+            "observedGeneration": 1,
+            "reason": "Merged",
+            "stale": false,
+            "status": "True",
+            "type": "Attached"
+          },
+          "note": "gateway-wide",
+          "noteSource": "inferred",
+          "policy": {
+            "group": "gateway.kgateway.dev",
+            "kind": "TrafficPolicy",
+            "link": "detail",
+            "name": "tp",
+            "namespace": "shop"
+          },
+          "relation": "attached-on-ancestor",
+          "source": "controller-reported"
+        }
+      ],
+      "selectors": {
+        "kinds": [],
+        "namespace": "infra",
+        "source": "declared"
+      },
+      "targeting": [
+        {
+          "policy": {
+            "group": "gateway.kgateway.dev",
+            "kind": "TrafficPolicy",
+            "link": "detail",
+            "name": "tp-edge",
+            "namespace": "infra"
+          },
+          "relation": "targets",
+          "source": "declared"
+        }
+      ]
+    },
+    "proxies": {
+      "desired": 1,
+      "observed": false,
+      "processes": [],
+      "rollout": {
+        "progressing": false
+      }
+    },
+    "ref": {
+      "group": "gateway.networking.k8s.io",
+      "kind": "Gateway",
+      "link": "detail",
+      "name": "edge",
+      "namespace": "infra"
+    },
+    "routeCounts": {
+      "accepted": 5,
+      "notAccepted": 1,
+      "pending": 1,
+      "unwatched": 1
+    },
+    "ruleSet": "kgateway-2.4",
+    "ruleSetLabel": "kgateway 2.4"
+  },
+  "headers": {
+    "Cache-Control": "no-store",
+    "Content-Type": "application/json"
+  },
+  "status": 200
+}

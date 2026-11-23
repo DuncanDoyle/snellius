@@ -76,6 +76,8 @@ type BackendDetail struct {
 	// DelegationNotChecked says the caller gets no paths through parent routes (D-114).
 	DelegationNotChecked bool      `json:"delegationNotChecked,omitempty"`
 	CollectedAt          time.Time `json:"collectedAt"`
+	// PolicyRelations are the readable policies that name this object (Phase 8 design §6.5).
+	PolicyRelations PolicyRelationsDTO `json:"policyRelations"`
 }
 
 // ConsumerDTO is a non-route object that uses the backend (design §8.3):

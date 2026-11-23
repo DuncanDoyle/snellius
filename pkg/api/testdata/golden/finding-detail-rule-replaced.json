@@ -22,7 +22,7 @@
       "policy": {
         "group": "gateway.kgateway.dev",
         "kind": "TrafficPolicy",
-        "link": "yaml",
+        "link": "detail",
         "name": "auth",
         "namespace": "shop"
       },

@@ -989,6 +989,15 @@
       },
       "state": "error"
     },
+    "policyRelations": {
+      "selectors": {
+        "kinds": [],
+        "namespace": "shop",
+        "source": "declared"
+      },
+      "targeting": [],
+      "targetingParent": []
+    },
     "reason": {
       "code": "KGWUI-013",
       "finding": "f1-3wufqpqyklpby4glalwrwjzzqb",

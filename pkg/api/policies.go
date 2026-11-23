@@ -120,13 +120,18 @@ func (h *handler) policyReader(p *engine.Published, i *engine.InstallModel, v *v
 // its ownership rests on: the ancestor, and a ListenerSet's parent Gateway (design §7 item 3).
 func (pr policyReader) read(u *unstructured.Unstructured) policyEntry {
 	p := policy.Read(u, pr.interp, pr.guard)
+	pr.gate(&p)
+	return policyEntry{u: u, p: p, checks: policy.CheckTargets(p, pr.in)}
+}
+
+// gate makes every ancestor of p whose ownership the caller may not read not current.
+func (pr policyReader) gate(p *policy.Policy) {
 	for k := range p.Ancestors {
 		// The summary ancestor names no object; its guards read only the policy.
 		if a := &p.Ancestors[k]; !a.Summary && !pr.ownershipReadable(a.Ref.Ref()) {
 			a.Current, a.NotCurrent, a.Why = false, policy.NotCurrentUnreadable, ""
 		}
 	}
-	return policyEntry{u: u, p: p, checks: policy.CheckTargets(p, pr.in)}
 }
 
 // ownershipReadable reports whether ancestor ar is readable and, when ar is a collected

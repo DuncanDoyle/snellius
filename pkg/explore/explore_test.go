@@ -21,6 +21,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/ctrlmetrics"
 	"github.com/DuncanDoyle/snellius/pkg/health"
 	"github.com/DuncanDoyle/snellius/pkg/install"
+	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/scopeverify"
 )
@@ -687,7 +688,9 @@ func TestBuildWithoutPodsOrUIDs(t *testing.T) {
 func TestDetailKinds(t *testing.T) {
 	want := []objects.GroupKind{{Group: objects.GatewayAPIGroup, Kind: "Gateway"}, {Group: objects.GatewayAPIGroup, Kind: "ListenerSet"},
 		{Group: "gateway.networking.x-k8s.io", Kind: "XListenerSet"}, {Group: objects.GatewayAPIGroup, Kind: "HTTPRoute"},
-		{Group: objects.GatewayAPIGroup, Kind: "GRPCRoute"}, {Group: objects.GatewayAPIGroup, Kind: "TCPRoute"}, {Group: objects.GatewayAPIGroup, Kind: "TLSRoute"}}
+		{Group: objects.GatewayAPIGroup, Kind: "GRPCRoute"}, {Group: objects.GatewayAPIGroup, Kind: "TCPRoute"}, {Group: objects.GatewayAPIGroup, Kind: "TLSRoute"},
+		{Group: objects.GatewayAPIGroup, Kind: "BackendTLSPolicy"}, {Group: kinds.KgatewayGroup, Kind: "TrafficPolicy"}, {Group: kinds.KgatewayGroup, Kind: "ListenerPolicy"},
+		{Group: kinds.KgatewayGroup, Kind: "HTTPListenerPolicy"}, {Group: kinds.KgatewayGroup, Kind: "BackendConfigPolicy"}, {Group: kinds.KgatewayGroup, Kind: "DirectResponse"}}
 	if got := DetailKinds(testutil.ServedUpstream()); !slices.Equal(got, want) {
 		t.Fatalf("DetailKinds %v", got)
 	}
