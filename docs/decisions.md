@@ -1849,3 +1849,10 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** A policy ancestor block is pending only when `Accepted` is missing, Pending or Unknown; a Pending `Attached` neither makes it pending nor counts as a problem. Gateways, listeners and routes keep `BlockFreshness` (kgateway writes Pending only on policy ancestors). The model's non-current reason splits into `stale` and `pending` (amends D-130); `not-fresh` remains only for a `Guard` without a freshness function.
 
 **Consequences:** Rejected policies raise KGWUI-002 on every supported version; accepted policies with a Pending `Attached` no longer raise KGWUI-003. `explore.StatusTrueFor` counts an Accepted policy whose `Attached` is Pending. `docs/findings.md` and snellius.dev follow in 8.3.
+
+## D-136 — Policy links open the policy detail page (2026-11-23, Phase 8)
+**Status:** proposed (sub-phase 8.2); replaces D-131 item 6's interim YAML links.
+
+**Decision:** Every policy link in API v1 responses is a `detail` link to `/installs/:id/policies/:group/:kind/:ns/:name`, and `/meta` `views` lists the policy kinds. This changes existing `link` values (findings, diagnostics, finding details, the policies endpoints), not only adds fields. The web routes kinds of category `policy` to the policy page.
+
+**Consequences:** Ten API goldens change (link values; `/meta` views). A client that followed a policy's `yaml` link from those responses now gets a detail link; the YAML stays reachable from the detail page and the install-scoped YAML path.
