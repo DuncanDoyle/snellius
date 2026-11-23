@@ -48,7 +48,7 @@ type Owned struct {
 	ListenerSets   []*unstructured.Unstructured
 	Routes         []OwnedObject
 	Policies       []OwnedObject
-	// Listed are the in-scope objects of list-only kinds: counted and shown, never judged.
+	// Listed are the in-scope objects of list-only kinds: counted and shown; only a policy's ancestor status is judged.
 	Listed     []OwnedObject
 	Unattached []UnattachedRoute
 	// Declared holds one candidate per (route, parent HTTPRoute).

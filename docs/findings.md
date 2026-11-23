@@ -52,6 +52,8 @@ If the controller metrics cannot be read, the UI raises KGWUI-008 for the `xDS r
 
 **Cause.** A current condition on an object of this install is `False`, and no more specific code covers its reason. KGWUI-013, 014, 015 and 017 own their reasons, so one condition is always one finding. It covers GatewayClasses, Gateways, ListenerSets and their listeners, routes per parent, policies per ancestor, and Backends that routes use.
 
+DirectResponse, which the UI otherwise only lists, gets this finding per ancestor too, the same as a TrafficPolicy in the same state: a current ancestor written by this install's controller, for a Gateway or ListenerSet the install owns. A DirectResponse with no status, with only stale ancestors, or whose kind the UI could not read gets no finding, and no KGWUI-003. Routes that use it keep their signals.
+
 Severity is error, with three exceptions:
 
 - a policy ancestor with reason `PartiallyValid` is a warning;
@@ -68,7 +70,7 @@ kgateway 2.5 controllers write `TargetNotFound` for a missing policy target, and
 
 `route-unattached` · info, then warning · status
 
-**Cause.** The controller has not processed an object, or its status describes an older version. Despite the slug, it covers every kind with status: GatewayClasses, Gateways, ListenerSets, listeners, routes per parent, and policies.
+**Cause.** The controller has not processed an object, or its status describes an older version. Despite the slug, it covers every kind with status: GatewayClasses, Gateways, ListenerSets, listeners, routes per parent, and policies. It never covers a DirectResponse (see KGWUI-002).
 
 For 60 s after the UI first sees the object's current generation, the finding is info, "Being processed by the controller", and the install reads unknown. After 60 s it is a warning, "Not yet processed by the controller". A route whose parent does not exist reads "Not attached: parent not found".
 
@@ -143,7 +145,7 @@ A self-managed Gateway raises KGWUI-010 instead.
 
 - "No access to `<resource>`": the UI's ServiceAccount cannot list or watch a core kind.
 - "Could not check cluster access": the cache has not synced yet.
-- "Served kinds changed; restart the UI to watch them": a CRD was added or removed. A change limited to DirectResponse, GatewayExtension or ReferenceGrant, which the UI lists but never judges, is no finding: "What was checked" notes it on the served kinds check.
+- "Served kinds changed; restart the UI to watch them": a CRD was added or removed. A change limited to DirectResponse, GatewayExtension or ReferenceGrant, which the UI lists and does not otherwise judge, is no finding: "What was checked" notes it on the served kinds check.
 - "Could not check controller scope": the controller's namespace selectors could not be read, for example when they come from `valueFrom`.
 - "Could not check xDS rejects": controller metrics are missing, failing or stale, or lack `kgateway_resources_managed` while the install owns Gateways.
 - "Could not verify scope against the controller": scope verification could not run. This one is optional and never makes the install unknown.

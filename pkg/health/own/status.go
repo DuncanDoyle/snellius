@@ -60,9 +60,8 @@ func status(ic InstallContext, u *unstructured.Unstructured, named Named, o *out
 			o.add(f)
 		})
 	case kinds.CategoryPolicy:
-		if !k.ListOnly {
-			policyAncestors(ic, u, named, o)
-		}
+		// A list-only policy (DirectResponse) gets these ancestor findings and nothing else (design §6.6).
+		policyAncestors(ic, u, named, o)
 	}
 }
 
