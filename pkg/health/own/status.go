@@ -130,7 +130,7 @@ func policyAncestors(ic InstallContext, u *unstructured.Unstructured, named Name
 		if !AncestorOwned(ic, ar) {
 			continue
 		}
-		if why, _, _ := BlockFreshness(u, a.Conditions, required, optional); why != "" {
+		if why, _, _ := PolicyFreshness(u, a.Conditions); why != "" {
 			continue
 		}
 		// 016 owns TargetNotFound where the rule set reads it from status (D-030); it never
@@ -168,6 +168,8 @@ func AncestorOwned(ic InstallContext, ar objects.Ref) bool {
 // (design §5.2: Overridden is info, PartiallyValid a warning).
 func policySeverity(c metav1.Condition) (string, bool) {
 	switch c.Reason {
+	case "Pending": // an undecided Attached beside a definitive Accepted (PolicyFreshness)
+		return "", false
 	case "PartiallyValid":
 		return severityWarning, true
 	case "Overridden":

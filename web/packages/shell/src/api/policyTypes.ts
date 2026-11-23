@@ -15,7 +15,7 @@ export type PolicySource =
 export type PolicyCheckOutcome = "found" | "not-found" | "section-not-found" | "unknown";
 
 /** Why an ancestor entry is left out of the summaries (design §6.4). */
-export type PolicyNotCurrent = "other-controller" | "not-owned" | "not-fresh" | "unreadable";
+export type PolicyNotCurrent = "other-controller" | "not-owned" | "stale" | "pending" | "not-fresh" | "unreadable";
 
 /** One targetRef or targetSelector as written. ref and health are set on a detail's targetRefs only. */
 export interface PolicyTarget {
