@@ -526,6 +526,37 @@ func TestPolicyTargetNarrowedExistenceHidden(t *testing.T) {
 	}
 }
 
+// A readable ListenerSet ancestor whose parent Gateway is hidden: creating or
+// deleting that Gateway moves no byte for the restricted viewer, though it makes
+// the ListenerSet owned (8.1 re-review: ListenerSet ownership).
+func TestPolicyListenerSetHiddenParentUnchanged(t *testing.T) {
+	const pol, ls, hiddenGw = "tp-ls-ancestor", "ls-hidden-parent", "anc-ls-gw"
+	lsRef := objects.ParentRef{Group: gatewaysGroup, Kind: "ListenerSet", Namespace: ns0, Name: ls}
+	addWorld := func(s ruleSnap) {
+		s.add(testutil.ListenerSet(ns0, ls, hiddenGwRef(hiddenGw), nil))
+		s.add(tp(ns0, pol, []any{targetRef(gatewaysGroup, "HTTPRoute", namesHidden, "")},
+			ancestor(gw0()[0], testutil.Controller, metav1.ConditionTrue, metav1.ConditionTrue),
+			ancestor(lsRef, testutil.Controller, metav1.ConditionFalse, metav1.ConditionTrue)))
+	}
+	absent := policyServe(t, policyBase(t, ruleChange{name: "absent", apply: addWorld}), nil)
+	present := policyServe(t, policyBase(t, ruleChange{name: "present", apply: func(s ruleSnap) {
+		addWorld(s)
+		s.add(testutil.Gateway(hiddenNS, hiddenGw, scale.Class, nil))
+	}}), nil)
+	for _, path := range []string{policiesPath + "?limit=200", policiesPath + "?limit=200&hasProblems=true", policiesPath + "?limit=200&hasProblems=false",
+		tpPath(ns0, pol)} {
+		ac, ab := fetch(t, absent, restrictedUser, path)
+		pc, pb := fetch(t, present, restrictedUser, path)
+		if ac != pc || ab != pb {
+			t.Errorf("%s: the hidden parent Gateway shows:\n  %d %.600s\n  vs %d %.600s", path, ac, ab, pc, pb)
+		}
+	}
+	_, fa := fetch(t, absent, fullUser, tpPath(ns0, pol))
+	if _, fp := fetch(t, present, fullUser, tpPath(ns0, pol)); fa == fp {
+		t.Error("the hidden Gateway does not reach the full reader")
+	}
+}
+
 // Creating or deleting a hidden Gateway that a readable policy names as a
 // fresh ancestor of this install's controller moves no byte for the restricted
 // viewer; the full reader sees it become current (8.1 review #2).

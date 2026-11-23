@@ -103,6 +103,7 @@ type policyReader struct {
 	in     policy.Inputs
 	interp policy.Interpreter
 	guard  policy.Guard
+	served []kinds.Served
 }
 
 func (h *handler) policyReader(p *engine.Published, i *engine.InstallModel, v *view) policyReader {
@@ -110,21 +111,38 @@ func (h *handler) policyReader(p *engine.Published, i *engine.InstallModel, v *v
 	if h.interpFor != nil {
 		interp = h.interpFor(i.Resolved.Install)
 	}
-	return policyReader{interp: interp, guard: policyGuard(p.Model, i), in: policy.Inputs{Lookup: policyLookup{m: p.Model, v: v},
+	return policyReader{interp: interp, guard: policyGuard(p.Model, i), served: p.Model.Served, in: policy.Inputs{Lookup: policyLookup{m: p.Model, v: v},
 		Targeter: i.Rules.PolicyTargeter(), ScopeKnown: i.Resolved.Scope.Mode != install.ScopeUnknown}}
 }
 
-// read is u as the caller sees it. An ancestor the caller may not get is never
-// current and carries none of the install's judgments about it (design §7 item 3).
+// read is u as the caller sees it. An ancestor is never current, and carries none
+// of the install's judgments about it, unless the caller may get every object its
+// ownership rests on: the ancestor, and a ListenerSet's parent Gateway (design §7 item 3).
 func (pr policyReader) read(u *unstructured.Unstructured) policyEntry {
 	p := policy.Read(u, pr.interp, pr.guard)
 	for k := range p.Ancestors {
 		// The summary ancestor names no object; its guards read only the policy.
-		if a := &p.Ancestors[k]; !a.Summary && !pr.in.Lookup.CanGet(a.Ref.Ref()) {
+		if a := &p.Ancestors[k]; !a.Summary && !pr.ownershipReadable(a.Ref.Ref()) {
 			a.Current, a.NotCurrent, a.Why = false, policy.NotCurrentUnreadable, ""
 		}
 	}
 	return policyEntry{u: u, p: p, checks: policy.CheckTargets(p, pr.in)}
+}
+
+// ownershipReadable reports whether the caller may get ancestor ar and, when ar is a
+// collected ListenerSet, the Gateway its ownership comes from (D-107).
+func (pr policyReader) ownershipReadable(ar objects.Ref) bool {
+	l := pr.in.Lookup
+	if !l.CanGet(ar) {
+		return false
+	}
+	if !slices.ContainsFunc(pr.served, func(k kinds.Served) bool {
+		return k.Category == kinds.CategoryListenerSet && k.Group == ar.Group && k.Kind == ar.Kind
+	}) {
+		return true
+	}
+	ls, ok := l.Object(ar)
+	return !ok || l.CanGet(objects.ListenerSetParent(ls).Ref())
 }
 
 // problems reports whether e has problems (design §6.2).
@@ -461,8 +479,9 @@ func (h *handler) policyDetail(w http.ResponseWriter, r *http.Request) {
 			Conditions: conditions(e.u, a.Conditions), StaleSource: policy.SourceInferred, Current: a.Current, NotCurrent: a.NotCurrent, Why: a.Why,
 			CurrentSource: a.CurrentSource, Summary: a.Summary, SummarySource: a.SummarySource, Readings: make([]PolicyReadingDTO, 0, len(a.Readings)),
 			Source: a.Source}
-		// The summary ancestor names no object.
-		if !a.Summary {
+		// The summary ancestor names no object. One whose ownership the caller may not read
+		// stays plain: its admission follows that ownership (D-107).
+		if !a.Summary && a.NotCurrent != policy.NotCurrentUnreadable {
 			d.Ref.Link, d.Health = lh(a.Ref.Ref())
 			d.HealthSource = healthSource(d.Health)
 		}
