@@ -1817,3 +1817,19 @@ Measured on the reference machine, 5 runs per world:
 6. Until 8.2 adds policy pages, policy links in API responses use the YAML path; detail targets carry a full ref in the policy's namespace. "Has problems" counts a section not found, as KGWUI-016 does.
 
 **Consequences:** A restricted viewer can see more policy 002s than before (item 1) and fewer target verdicts (item 2). kgwctl builds a `Guard` and a `Lookup` with these rules (E7).
+
+## D-132 — A policy ancestor finding's ID hashes its ancestor (2026-11-23, Phase 8)
+**Status:** accepted (user, 2026-11-23: option 2, durable IDs; UID rejected after a Codex review, `phases/phase-8/reviews/8.1-ids-codex.md`); amends D-040 for policy-ancestor KGWUI-002 only.
+
+**Context:** D-040 ranked status-only owners among the owners with findings. A hidden ancestor gaining a finding then shifted a readable finding's ID (`reviews/8.1-fix-codex.md`, first P1), against D-085.
+
+**Decision:** A policy-ancestor KGWUI-002 ID hashes the install, the code, the policy (group, kind, namespace, name), the canonical ref of the ancestor whose condition was evaluated (section and port included) and the condition type. Since D-131 item 1 the finding is shown only to viewers who can read the policy and that ancestor, so every hashed value is visible to them (D-059's reasoning). Every other finding keeps D-040's ranks, including route parent KGWUI-002, whose shared basis withholds the set together. The ID uses namespace/name, not the object's UID: a finding names a diagnostic on a named resource, and it keeps its ID when the object is replaced or restored.
+
+**Consequences:** No hidden sibling and no reordering of status moves a policy-ancestor 002 ID. Existing links to these findings change once. If one controller writes two status entries for the same ancestor, both findings share an ID, as with the ranks before.
+
+## D-133 — Target and ancestor judgments need list first (2026-11-23, Phase 8)
+**Status:** accepted (user, 2026-11-23: "List before get"); amends design §7 items 3 and 4.
+
+**Decision:** A target check (found, section not found, not found) and an ancestor's currentness are judged only when the viewer may `list` the kind in that namespace, then named `get` as before. Otherwise the check is `unknown` and the ancestor `unreadable`. This keeps the policies list within the per-request check budget: a cold `/policies?limit=1` on the Large world with one policy per route takes 391 checks for a viewer who may list policies everywhere (was 1000, a 503).
+
+**Consequences:** A viewer allowed only by `resourceNames` sees unknown target checks and unreadable ancestors. kgwctl's `Lookup` (E7) asks list before get.
