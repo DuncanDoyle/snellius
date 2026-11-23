@@ -13,6 +13,7 @@ import { ResourceName } from "../../resource/ResourceName";
 import { YamlBlock } from "../../resource/ResourceYaml";
 import { useInstallId } from "../../shell/extension";
 import { useTwoColumns } from "../../shell/layout";
+import { PolicyRelationsSection } from "../policies/PolicyRelationsSection";
 import { DetailFrame, Facts, Section } from "./detailParts";
 import { ListenerTable } from "./gateway/ListenerTable";
 import { Muted } from "./listParts";
@@ -141,6 +142,7 @@ export function ListenerSetPage({ stylesOverride }: ListenerSetPageProps = {}) {
       {data ? (
         <>
           {wide ? null : related}
+          <PolicyRelationsSection installId={id} subject={ref} relations={data.policyRelations} />
           <Section aria-labelledby="ls-listeners">
             <h2 id="ls-listeners">
               {gatewayCopy.listeners} <span className="note">{data.listeners.length}</span>

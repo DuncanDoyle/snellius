@@ -1,13 +1,16 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes, useLocation } from "react-router-dom";
+import gatewayGolden from "../../../../../../pkg/api/testdata/golden/gateway-detail-policies.json";
 import listGolden from "../../../../../../pkg/api/testdata/golden/policies.json";
 import detailGolden from "../../../../../../pkg/api/testdata/golden/policy-detail.json";
-import type { PoliciesResponse, PolicyDetail, PolicyRow } from "../../api/types";
+import routeGolden from "../../../../../../pkg/api/testdata/golden/route-detail-policies.json";
+import type { GatewayDetail, LinkedRef, PoliciesResponse, PolicyDetail, PolicyRow, RouteDetail } from "../../api/types";
 import * as copy from "../../copy/policies";
 import { renderWithTheme } from "../../test/render";
 import { PoliciesPage } from "./PoliciesPage";
 import { PolicyPage } from "./PolicyPage";
+import { PolicyRelationsSection } from "./PolicyRelationsSection";
 
 const ID = "kgw.kgateway";
 const API = `/api/v1/installs/${ID}`;
@@ -85,6 +88,11 @@ function snelliusStrings(): string[] {
     copy.selectorText("HTTPRoute", { app: "cart" }, "rule"),
     copy.refTargetText("HTTPRoute", "cart", "rule"),
     copy.ancestorText({ kind: "Service", namespace: "shop", name: "checkout", port: 80 }),
+    copy.relationsCopy,
+    copy.relationsCopy.parentNote("route"),
+    copy.relationsCopy.selectorLink("shop"),
+    copy.relationsCopy.section("http"),
+    copy.relationsCopy.port(80),
   ]);
   return out;
 }
@@ -194,4 +202,86 @@ it("a hidden or absent policy shows the not-in-scope state", async () => {
   serve({});
   mount(`/i/${ID}/policies/gateway.kgateway.dev/TrafficPolicy/shop/nope`);
   expect(await screen.findByText("Not in this install's scope")).toBeInTheDocument();
+});
+
+// region Subject sections
+const asRef = (r: { group: string; kind: string; namespace?: string; name: string }): LinkedRef => ({
+  ...r,
+  link: "detail",
+});
+
+it("a Gateway lists policies targeting it and reported attached here, each linked to its policy page with a source", () => {
+  const d = gatewayGolden.body as unknown as GatewayDetail;
+  renderWithTheme(<PolicyRelationsSection installId={ID} subject={asRef(d.ref)} relations={d.policyRelations} />);
+  const targeting = screen.getByTestId("relations-targeting");
+  const attached = screen.getByTestId("relations-attached-here");
+  expect(screen.queryByTestId("relations-targeting-parent")).toBeNull();
+  for (const [group, rels] of [
+    [targeting, d.policyRelations.targeting],
+    [attached, d.policyRelations.attachedHere ?? []],
+  ] as const) {
+    const items = within(group).getAllByTestId("policy-relation");
+    expect(items).toHaveLength(rels.length);
+    for (const [i, r] of rels.entries()) {
+      const link = within(items[i] as HTMLElement).getByRole("link", {
+        name: `${r.policy.namespace}/${r.policy.name}`,
+      });
+      expect(link.getAttribute("href")).toBe(
+        `/i/${ID}/policies/${r.policy.group}/${r.policy.kind}/${r.policy.namespace}/${r.policy.name}`,
+      );
+      expect(within(items[i] as HTMLElement).getAllByTestId("source-tag")[0]).toHaveAttribute("data-source", r.source);
+    }
+  }
+  // Merged on a Gateway: the gateway-wide note under the item, inferred.
+  expect(within(attached).getByTestId("relation-note")).toHaveTextContent(
+    copy.readingNoteCopy["gateway-wide"] as string,
+  );
+  expect(within(attached).getByTestId("relation-condition")).toHaveTextContent("Attached: True");
+  // The selector note links to the Policies list filtered to the namespace.
+  const hint = screen.getByTestId("relations-selectors");
+  expect(hint).toHaveTextContent(copy.relationsCopy.selectorNote);
+  expect(within(hint).getByRole("link").getAttribute("href")).toBe(
+    `/i/${ID}/policies?namespace=${d.policyRelations.selectors.namespace}`,
+  );
+});
+
+it("a route shows policies naming a parent with the fixed note and the path walked, and links selectors by kind", () => {
+  const d = structuredClone(routeGolden.body) as unknown as RouteDetail;
+  d.policyRelations.selectors.kinds = [{ group: "gateway.kgateway.dev", kind: "TrafficPolicy" }];
+  renderWithTheme(<PolicyRelationsSection installId={ID} subject={asRef(d.ref)} relations={d.policyRelations} />);
+  const parent = screen.getByTestId("relations-targeting-parent");
+  expect(parent).toHaveTextContent(copy.relationsCopy.parentNote("route"));
+  const via = within(parent).getAllByTestId("relation-via")[0] as HTMLElement;
+  for (const h of d.policyRelations.targetingParent?.[0]?.via ?? [])
+    expect(via).toHaveTextContent(`${h.ref.kind} ${h.ref.namespace}/${h.ref.name}`);
+  expect(screen.queryByTestId("relations-attached-here")).toBeNull();
+  const href = within(screen.getByTestId("relations-selectors")).getByRole("link").getAttribute("href") ?? "";
+  const q = new URL(href, "http://ui").searchParams;
+  expect(q.get("namespace")).toBe(d.policyRelations.selectors.namespace);
+  expect(q.get("kind")).toBe("gateway.kgateway.dev/TrafficPolicy");
+});
+
+it("an empty group says so, and an older body without relations shows no section", () => {
+  const d = gatewayGolden.body as unknown as GatewayDetail;
+  const { unmount } = renderWithTheme(
+    <PolicyRelationsSection
+      installId={ID}
+      subject={asRef(d.ref)}
+      relations={{ ...d.policyRelations, targeting: [], attachedHere: [] }}
+    />,
+  );
+  expect(within(screen.getByTestId("relations-targeting")).getByText(copy.relationsCopy.none)).toBeInTheDocument();
+  unmount();
+  renderWithTheme(<PolicyRelationsSection installId={ID} subject={asRef(d.ref)} />);
+  expect(screen.queryByTestId("policy-relations")).toBeNull();
+});
+
+it("an ancestor waiting for status is marked so and left out of the summaries", async () => {
+  const d = detail();
+  const second = d.ancestors[1];
+  if (second) second.notCurrent = "pending";
+  serve({ [`${API}/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp`]: () => d });
+  mount(`/i/${ID}/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp`);
+  await screen.findByRole("heading", { name: copy.policyDetailCopy.summary });
+  expect(screen.getByTestId("not-current")).toHaveTextContent(copy.notCurrentCopy.pending as string);
 });

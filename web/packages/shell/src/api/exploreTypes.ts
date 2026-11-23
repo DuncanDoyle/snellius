@@ -1,5 +1,6 @@
 import type { HealthState } from "../theme/tokens";
 import type { DataPlane, ProcessSet, SuggestedFix } from "./diagTypes";
+import type { PolicyRelations } from "./policyTypes";
 import type { LabelSelector, Ref, RowReason } from "./types";
 
 /** Mirrors the explorer DTOs of pkg/api/explore_types.go as built (sub-phases 2.2 and 2.3, design §7.3). */
@@ -234,6 +235,8 @@ export interface GatewayDetail {
   dataPlane?: DataPlane;
   proxies?: ProcessSet;
   collectedAt: string;
+  /** The policies related to this object (Phase 8 design §6.5). */
+  policyRelations: PolicyRelations;
 }
 /**
  * The parent Gateway's spec.allowedListeners as written; crdHint is set whenever the field is absent.
@@ -265,6 +268,8 @@ export interface ListenerSetDetail {
   routeCounts: RouteCounts;
   parentAllowedListeners?: AllowedListeners;
   collectedAt: string;
+  /** The policies related to this object (Phase 8 design §6.5). */
+  policyRelations: PolicyRelations;
 }
 export interface PathMatch {
   type: string;
@@ -394,6 +399,8 @@ export interface RouteDetail {
   collectedAt: string;
   config: RouteConfigSignal;
   path: RoutePathSignal;
+  /** The policies related to this object (Phase 8 design §6.5). */
+  policyRelations: PolicyRelations;
 }
 
 // Views B and C (2.4). Task 66 renders them.
@@ -709,4 +716,6 @@ export interface BackendDetail {
   /** The caller gets no paths through parent routes (D-114). */
   delegationNotChecked?: boolean;
   collectedAt: string;
+  /** The policies related to this object (Phase 8 design §6.5). */
+  policyRelations: PolicyRelations;
 }

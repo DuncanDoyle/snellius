@@ -140,6 +140,18 @@ const pages: { name: string; open: (page: Page) => Promise<void> }[] = [
     },
   },
   {
+    name: "policy target with its policy sections",
+    open: async (page) => {
+      await nav(page, policiesCopy.title);
+      const rows = await dataRows(page.getByRole("table", { name: policiesCopy.title }));
+      await rows.first().locator('td[data-col="kind"]').click();
+      await expect(page.getByRole("heading", { name: policyDetailCopy.summary })).toBeVisible();
+      // A target the viewer may open; the page then shows its policy sections.
+      await page.getByTestId("policy-target").getByRole("link").first().click();
+      await expect(page.getByTestId("policy-relations")).toBeVisible();
+    },
+  },
+  {
     name: "Findings",
     open: async (page) => {
       await nav(page, navCopy.findings);

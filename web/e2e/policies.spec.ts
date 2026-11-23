@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import type { PoliciesResponse, PolicyDetail, PolicyRow } from "../packages/shell/src/api/types";
 import { navCopy } from "../packages/shell/src/copy/explorer";
-import { policiesCopy, policyDetailCopy } from "../packages/shell/src/copy/policies";
+import { policiesCopy, policyDetailCopy, relationsCopy } from "../packages/shell/src/copy/policies";
 import { policyPath } from "../packages/shell/src/explore/objectPath";
 import { featureName, targetText } from "../packages/shell/src/pages/policies/policyText";
 
@@ -98,4 +98,40 @@ test("a policy row opens its detail: targets, status per ancestor as written, co
   await page.getByRole("tab", { name: "YAML" }).click();
   await expect(page).toHaveURL(/tab=yaml/);
   await expect(page.getByTestId("yaml")).toContainText(`name: ${first.ref.name}`);
+});
+
+test("a policy's target page lists the policy under Targeting this object, linked back to its detail", async ({
+  page,
+}) => {
+  const all = await get<PoliciesResponse>(page, "policies");
+  // The first policy whose target the viewer may open.
+  let found: { row: PolicyRow; detail: PolicyDetail } | undefined;
+  for (const row of all.items) {
+    const g = row.ref.group || "-";
+    const detail = await get<PolicyDetail>(page, `policies/${g}/${row.ref.kind}/${row.ref.namespace}/${row.ref.name}`);
+    if (detail.targets.some((t) => !t.selector && t.ref?.link === "detail")) {
+      found = { row, detail };
+      break;
+    }
+  }
+  test.skip(!found, "no policy targets an object with a detail page");
+  if (!found) return;
+  const { row, detail } = found;
+  const target = detail.targets.find((t) => !t.selector && t.ref?.link === "detail");
+  await page.goto(policyPath(id, row.ref));
+  await page
+    .getByTestId("policy-target")
+    .getByRole("link", { name: `${target?.ref?.namespace}/${target?.ref?.name}` })
+    .first()
+    .click();
+  const sections = page.getByTestId("policy-relations");
+  await expect(sections).toBeVisible();
+  await expect(sections.getByTestId("relations-selectors")).toContainText(relationsCopy.selectorNote);
+  const link = sections
+    .getByTestId("relations-targeting")
+    .getByRole("link", { name: `${row.ref.namespace}/${row.ref.name}`, exact: true })
+    .first();
+  await expect(link).toHaveAttribute("href", new RegExp(`^${policyPath(id, row.ref).replace(/[.]/g, "\\.")}(\\?|$)`));
+  await link.click();
+  await expect(page.getByRole("heading", { name: policyDetailCopy.summary })).toBeVisible();
 });

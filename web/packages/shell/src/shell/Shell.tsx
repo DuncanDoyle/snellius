@@ -6,6 +6,7 @@ import { useMeta } from "../api/hooks";
 import { useSignInBlock } from "../auth/AuthGate";
 import { SIGNIN_FAILED_PATH } from "../auth/authState";
 import { SignInFailedPage } from "../auth/SignInPages";
+import { setPolicyKinds } from "../explore/objectPath";
 import { AboutPage } from "../pages/AboutPage";
 import { defaultPages } from "../pages/defaultPages";
 import { PageState } from "../states/PageState";
@@ -68,6 +69,8 @@ export function Shell({ extension = noExtension, pages, stylesOverride }: ShellP
   const [intro] = useState(shouldPlayIntro);
   // The server's packs: undefined while /meta loads, null from an older server, which runs them all.
   const { data: meta } = useMeta();
+  // Policy kinds open the policy page; recorded before the pages below render their links.
+  if (meta) setPolicyKinds(meta.kinds);
   const served = meta ? (meta.packs?.join("\n") ?? null) : undefined;
   const ext = useMemo<ResolvedShellExtension>(() => {
     const themes = extension.themes ?? defaultThemes;

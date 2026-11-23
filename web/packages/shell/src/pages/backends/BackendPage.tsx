@@ -8,6 +8,7 @@ import { detailCopy } from "../../copy/explorer";
 import { ConditionList } from "../../explore/ConditionList";
 import { useInstallId, useVocabulary } from "../../shell/extension";
 import { DetailFrame, Facts, Section } from "../explore/detailParts";
+import { PolicyRelationsSection } from "../policies/PolicyRelationsSection";
 import { EndpointsSection } from "./EndpointsSection";
 import { Explanations } from "./Explanations";
 import { ExposureSection } from "./ExposureSection";
@@ -67,6 +68,7 @@ export function BackendPage({ stylesOverride }: BackendPageProps = {}) {
         <>
           <StatusLine detail={data} />
           <ExposureSection installId={id} backend={ref} exposure={data.exposure} consumers={data.consumers} />
+          <PolicyRelationsSection installId={id} subject={ref} relations={data.policyRelations} />
           <EndpointsSection
             sources={data.sources}
             noSuchPorts={data.portChain.filter((c) => c.noSuchPort).map((c) => c.refPort)}

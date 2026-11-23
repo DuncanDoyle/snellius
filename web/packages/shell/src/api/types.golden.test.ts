@@ -25,6 +25,7 @@ import findingsRestrictedGolden from "../../../../../pkg/api/testdata/golden/fin
 import gatewayDetailGolden from "../../../../../pkg/api/testdata/golden/gateway-detail.json";
 import gatewayDetailDataPlaneGolden from "../../../../../pkg/api/testdata/golden/gateway-detail-data-plane.json";
 import gatewayDetailDataPlaneRestrictedGolden from "../../../../../pkg/api/testdata/golden/gateway-detail-data-plane-restricted.json";
+import gatewayDetailPoliciesGolden from "../../../../../pkg/api/testdata/golden/gateway-detail-policies.json";
 import gatewayDetailProxiesGolden from "../../../../../pkg/api/testdata/golden/gateway-detail-proxies.json";
 import gatewayDetailProxiesRestrictedGolden from "../../../../../pkg/api/testdata/golden/gateway-detail-proxies-restricted.json";
 import gatewayDetailRestrictedGolden from "../../../../../pkg/api/testdata/golden/gateway-detail-restricted.json";
@@ -56,6 +57,7 @@ import routeDetailCandidateGolden from "../../../../../pkg/api/testdata/golden/r
 import routeDetailDelegationRestrictedGolden from "../../../../../pkg/api/testdata/golden/route-detail-delegation-restricted.json";
 import routeDetailEffectiveGolden from "../../../../../pkg/api/testdata/golden/route-detail-effective.json";
 import routeDetailGrpcGolden from "../../../../../pkg/api/testdata/golden/route-detail-grpc.json";
+import routeDetailPoliciesGolden from "../../../../../pkg/api/testdata/golden/route-detail-policies.json";
 import routeDetailRestrictedGolden from "../../../../../pkg/api/testdata/golden/route-detail-restricted.json";
 import routeDetailSelectedGolden from "../../../../../pkg/api/testdata/golden/route-detail-selected.json";
 import routeDetailTcpGolden from "../../../../../pkg/api/testdata/golden/route-detail-tcp.json";
@@ -171,7 +173,11 @@ import type {
   PolicyFeature,
   PolicyProblems,
   PolicyReading,
+  PolicyRelation,
+  PolicyRelationHop,
+  PolicyRelations,
   PolicyRow,
+  PolicySelectorsHint,
   PolicyTarget,
   PortChain,
   ProbeFacts,
@@ -773,6 +779,50 @@ const condition = shape<Condition>({
   stale: "!",
 });
 const gk = shape<GroupKind>({ group: "!", kind: "!" });
+const policySource = {
+  declared: 1,
+  "controller-reported": 1,
+  "controller-reported-contribution": 1,
+  inferred: 1,
+  unknown: 1,
+} as const;
+// Policy relations on subject details (sub-phase 8.2).
+const policyRelation = shape<PolicyRelation>(
+  {
+    policy: "!",
+    relation: "!",
+    source: "!",
+    sectionName: "?",
+    port: "?",
+    via: "?",
+    condition: "?",
+    note: "?",
+    noteSource: "?",
+  },
+  {
+    policy: linkedRef,
+    via: shape<PolicyRelationHop>({ ref: "!", sectionName: "?", port: "?" }, { ref: linkedRef }),
+    condition,
+  },
+  {
+    relation: { targets: 1, "targets-parent": 1, "attached-on-ancestor": 1 },
+    source: policySource,
+    noteSource: policySource,
+  },
+);
+const policyRelations = shape<PolicyRelations>(
+  { targeting: "!", targetingParent: "?", attachedHere: "?", selectors: "!" },
+  {
+    targeting: policyRelation,
+    targetingParent: policyRelation,
+    attachedHere: policyRelation,
+    selectors: shape<PolicySelectorsHint>(
+      { namespace: "!", kinds: "!", source: "!" },
+      { kinds: shape<PolicySelectorsHint["kinds"][number]>({ group: "!", kind: "!" }) },
+      { source: policySource },
+    ),
+  },
+);
 const parentRef = shape<ParentRef>({
   group: "!",
   kind: "!",
@@ -842,9 +892,11 @@ const listenerSetDetail = shape<ListenerSetDetail>(
     experimentalHint: "?",
     routeCounts: "!",
     parentAllowedListeners: "?",
+    policyRelations: "!",
     collectedAt: "!",
   },
   {
+    policyRelations,
     ref: linkedRef,
     reason: detailReason,
     candidate,
@@ -1053,11 +1105,13 @@ const routeDetail = shape<RouteDetail>(
     childCount: "!",
     declaredCount: "!",
     delegationNotChecked: "?",
+    policyRelations: "!",
     collectedAt: "!",
     config: "!",
     path: "!",
   },
   {
+    policyRelations,
     ref: linkedRef,
     reason: detailReason,
     config: routeConfigSignal,
@@ -1303,9 +1357,11 @@ const gatewayDetail = shape<GatewayDetail>(
     routeCounts: "!",
     dataPlane: "?",
     proxies: "?",
+    policyRelations: "!",
     collectedAt: "!",
   },
   {
+    policyRelations,
     ref: linkedRef,
     reason: detailReason,
     candidate,
@@ -1460,9 +1516,11 @@ const backendDetail = shape<BackendDetail>(
     service: "?",
     conditions: "?",
     delegationNotChecked: "?",
+    policyRelations: "!",
     collectedAt: "!",
   },
   {
+    policyRelations,
     ref: linkedRef,
     problem: pathProblem,
     status: pathSignal,
@@ -1490,13 +1548,6 @@ const backendDetail = shape<BackendDetail>(
 );
 /** problems lists keys the types do not declare, required keys the wire omits and values outside a union, recursing. */
 // Policies (sub-phase 8.1 API, 8.2 pages).
-const policySource = {
-  declared: 1,
-  "controller-reported": 1,
-  "controller-reported-contribution": 1,
-  inferred: 1,
-  unknown: 1,
-} as const;
 const policyCheck = shape<NonNullable<PolicyTarget["check"]>>(
   { outcome: "!", source: "!" },
   {},
@@ -1764,6 +1815,8 @@ describe("types.ts matches the golden v1 wire format", () => {
     ["policies", policiesGolden.body satisfies Wide<PoliciesResponse>, policiesResponse],
     ["policies-filtered", policiesFilteredGolden.body satisfies Wide<PoliciesResponse>, policiesResponse],
     ["policy-detail", policyDetailGolden.body satisfies Wide<PolicyDetail>, policyDetail],
+    ["gateway-detail-policies", gatewayDetailPoliciesGolden.body satisfies Wide<GatewayDetail>, gatewayDetail],
+    ["route-detail-policies", routeDetailPoliciesGolden.body satisfies Wide<RouteDetail>, routeDetail],
   ] as const)("%s", (_, body, s) => {
     expect(problems(s, body, "body")).toEqual([]);
   });

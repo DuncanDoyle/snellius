@@ -138,6 +138,8 @@ export const notCurrentCopy: Record<string, string> = {
   "not-owned": "Not this install's",
   stale: "Stale", // (fixed)
   "not-fresh": "Stale", // (fixed)
+  // Accepted is missing, Pending or Unknown (D-135); the app's word for a route in that state.
+  pending: "Waiting for status",
   unreadable: "You cannot view this ancestor",
 };
 
@@ -145,4 +147,24 @@ export const notCurrentCopy: Record<string, string> = {
 export const readingNoteCopy: Record<string, string> = {
   "gateway-wide": "kgateway reports this for the whole Gateway. It does not say which routes or fields are affected.",
   "backend-port": "kgateway reports this for this backend port.",
+};
+
+// region Subject pages
+/** The policy sections on Gateway, ListenerSet, route and backend pages (design §6.5). */
+export const relationsCopy = {
+  title: "Policies",
+  targeting: "Targeting this object", // (fixed)
+  targetingParent: "Targeting a parent", // (fixed)
+  attachedHere: "Reported attached here", // (fixed)
+  /** (fixed for a route, design §6.5) noun is "route" or "ListenerSet". */
+  parentNote: (noun: string) =>
+    `These policies name a parent of this ${noun}. kgateway decides whether and how they apply.`,
+  none: "None.",
+  // (fixed, design §5.4)
+  selectorNote: "Policies that select by label are not listed here.",
+  selectorLink: (namespace: string) => `Open Policies in ${namespace}`,
+  /** The parentRefs walked to the parent a policy names. */
+  via: "via",
+  section: (name: string) => `section ${name}`,
+  port: (port: number) => `port ${port}`,
 };

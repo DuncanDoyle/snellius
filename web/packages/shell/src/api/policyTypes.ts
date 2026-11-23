@@ -136,3 +136,41 @@ export interface PolicyDetail {
   problems: PolicyProblems;
   collectedAt: string;
 }
+
+/** One hop of a targets-parent relation: a parentRef as written, its link computed by name. */
+export interface PolicyRelationHop {
+  ref: LinkedRef;
+  sectionName?: string;
+  port?: number;
+}
+
+/** A policy related to a subject (design §6.5); groups are sorted by namespace and name, never precedence. */
+export interface PolicyRelation {
+  policy: LinkedRef;
+  relation: "targets" | "targets-parent" | "attached-on-ancestor";
+  source: PolicySource;
+  sectionName?: string;
+  port?: number;
+  /** targets-parent only: the parentRefs walked; the policy names the last hop. */
+  via?: PolicyRelationHop[];
+  /** attached-on-ancestor only: the ancestor's Attached condition as written. */
+  condition?: Condition;
+  /** attached-on-ancestor only: the pack's granularity note key. */
+  note?: "gateway-wide" | "backend-port" | string;
+  noteSource?: PolicySource;
+}
+
+/** The selectors hint: policy kinds in the namespace whose targetSelectors name the subject's kind. */
+export interface PolicySelectorsHint {
+  namespace: string;
+  kinds: { group: string; kind: string }[];
+  source: PolicySource;
+}
+
+/** policyRelations on a Gateway, ListenerSet, route or backend detail; a group that does not apply is omitted. */
+export interface PolicyRelations {
+  targeting: PolicyRelation[];
+  targetingParent?: PolicyRelation[];
+  attachedHere?: PolicyRelation[];
+  selectors: PolicySelectorsHint;
+}

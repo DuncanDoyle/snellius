@@ -27,6 +27,14 @@ export function policyPath(installId: string, r: Ref): string {
 // region Helpers
 const GATEWAY_API = "gateway.networking.k8s.io";
 const ROUTE_KINDS = new Set(["HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"]);
+/** Policy kinds as "group/Kind", from /meta's category "policy"; BackendTLSPolicy is Gateway API's own. */
+const policyKinds = new Set<string>([`${GATEWAY_API}/BackendTLSPolicy`]);
+const kindKey = (r: { group: string; kind: string }) => `${r.group}/${r.kind}`;
+
+/** Records the served kinds whose /meta category is "policy", so their detail links open the policy page. */
+export function setPolicyKinds(kinds: readonly { group: string; kind: string; category?: string }[]) {
+  for (const k of kinds) if (k.category === "policy") policyKinds.add(kindKey(k));
+}
 
 /**
  * Where r opens, from its server-computed link only (design §7.1): detail → its detail page, yaml → the YAML view,
@@ -39,7 +47,8 @@ export function objectPath(installId: string, r: LinkedRef): string | undefined 
   const ns = encodeURIComponent(r.namespace ?? "");
   const name = encodeURIComponent(r.name);
   if (r.group === GATEWAY_API && r.kind === "Gateway") return installPath(installId, `gateways/${ns}/${name}`);
-  // The server sends detail only for its DetailKinds, so any kind besides Gateway and a route kind is a ListenerSet kind.
+  if (policyKinds.has(kindKey(r))) return policyPath(installId, r);
+  // The server sends detail only for its DetailKinds, so any other kind besides Gateway and a route is a ListenerSet kind.
   const page = r.group === GATEWAY_API && ROUTE_KINDS.has(r.kind) ? "routes" : "listenersets";
   return installPath(installId, `${page}/${encodeURIComponent(r.group)}/${encodeURIComponent(r.kind)}/${ns}/${name}`);
 }

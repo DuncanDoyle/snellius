@@ -1,5 +1,5 @@
 import type { LinkedRef } from "../api/types";
-import { linkTarget, objectPath, withVia } from "./objectPath";
+import { linkTarget, objectPath, setPolicyKinds, withVia } from "./objectPath";
 
 const gw = "gateway.networking.k8s.io";
 const ref: LinkedRef = { group: gw, kind: "HTTPRoute", namespace: "shop", name: "x", link: "detail" };
@@ -59,4 +59,27 @@ test("linkTarget adds the trail and params to where the link opens", () => {
   expect(linkTarget("a.b", ref)).toBe("/i/a.b/routes/gateway.networking.k8s.io/HTTPRoute/shop/x");
   expect(linkTarget("a.b", { ...ref, link: "none" }, "a.b/x")).toBeUndefined();
   expect(withVia("/i/a.b/routes?q=1", "v")).toBe("/i/a.b/routes?q=1&via=v");
+});
+
+test("a policy kind's detail link opens the policy page, with its group; /meta names the kinds", () => {
+  const tp = {
+    group: "gateway.kgateway.dev",
+    kind: "TrafficPolicy",
+    namespace: "shop",
+    name: "tp",
+    link: "detail",
+  } as const;
+  // Gateway API's own policy kind is known before /meta loads.
+  expect(objectPath("a.b", { ...tp, group: gw, kind: "BackendTLSPolicy" })).toBe(
+    "/i/a.b/policies/gateway.networking.k8s.io/BackendTLSPolicy/shop/tp",
+  );
+  setPolicyKinds([
+    { group: "gateway.kgateway.dev", kind: "TrafficPolicy", category: "policy" },
+    { group: "acme.io", kind: "EdgeSet", category: "listenerset" },
+  ]);
+  expect(objectPath("a.b", tp)).toBe("/i/a.b/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp");
+  // A kind of another category keeps its page.
+  expect(objectPath("a.b", { ...tp, group: "acme.io", kind: "EdgeSet" })).toBe(
+    "/i/a.b/listenersets/acme.io/EdgeSet/shop/tp",
+  );
 });

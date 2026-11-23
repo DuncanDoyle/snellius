@@ -13,6 +13,7 @@ import { useInstallId } from "../../shell/extension";
 import { useTwoColumns } from "../../shell/layout";
 import { installPath } from "../../shell/paths";
 import { InlineLink } from "../../states/controls";
+import { PolicyRelationsSection } from "../policies/PolicyRelationsSection";
 import { DetailFrame, Facts, refParam, Section } from "./detailParts";
 import { Muted } from "./listParts";
 import { ChildRoutes } from "./route/ChildRoutes";
@@ -189,6 +190,7 @@ export function RoutePage({ stylesOverride }: RoutePageProps = {}) {
             </Facts>
           </Section>
           {wide ? null : parentsBlock}
+          <PolicyRelationsSection installId={id} subject={ref} relations={data.policyRelations} />
           {data.serves ? (
             <Section aria-labelledby="route-serves">
               <h2 id="route-serves">
