@@ -428,6 +428,61 @@ func TestUnprocessedEvidenceIsNeverHealthy(t *testing.T) {
 	}
 }
 
+// kgateway v2.3.11, v2.4.8 and v2.5.2 leave Attached=False/Pending beside a
+// definitive Accepted (translator goldens policy-extauth-extension-ref-invalid-out.yaml,
+// directresponse/invalid-backendref-filter.yaml). Accepted decides the ancestor;
+// only a Pending Accepted or a stale block is "not yet processed".
+func TestPolicyAncestorAttachedPending(t *testing.T) {
+	gw := testutil.GwRef("infra", "edge")
+	attachedPending := testutil.Cond("Attached", metav1.ConditionFalse, "Pending")
+	rejected := testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")
+	rejected.Message = "extauth: shop/no-such-authz: gateway extension not found"
+	valid := testutil.Cond("Accepted", metav1.ConditionTrue, "Valid")
+	stale := func(cs ...metav1.Condition) []metav1.Condition {
+		for i := range cs {
+			cs[i].ObservedGeneration = 0
+		}
+		return cs
+	}
+	cases := []struct {
+		name  string
+		conds []metav1.Condition
+		code  string // the policy's only finding; "" for none
+		sev   Severity
+		state State
+	}{
+		{"rejected", []metav1.Condition{rejected, attachedPending}, CodeConditionFalse, SeverityError, StateError},
+		{"accepted, attachment undecided", []metav1.Condition{valid, attachedPending}, "", "", StateHealthy},
+		{"pending", []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Pending"), attachedPending}, CodeRouteUnattached, SeverityWarning, StateWarning},
+		{"rejected, stale", stale(rejected, attachedPending), CodeRouteUnattached, SeverityWarning, StateWarning},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := healthyWorld()
+			w.objs = append(w.objs, testutil.TrafficPolicy("shop", "tp", testutil.PolicyAncestor{Ref: gw, Controller: testutil.Controller, Conds: tc.conds}))
+			r := w.report(t)
+			var got []Finding
+			for _, f := range r.Findings {
+				if f.Resource != nil && f.Resource.String() == "shop/tp" {
+					got = append(got, f)
+				}
+			}
+			if tc.code == "" {
+				if len(got) != 0 || r.State != tc.state {
+					t.Fatalf("want no finding, state %s: state=%s findings=%+v", tc.state, r.State, got)
+				}
+				return
+			}
+			if len(got) != 1 || got[0].Code != tc.code || got[0].Severity != tc.sev || r.State != tc.state {
+				t.Fatalf("want one %s/%s, state %s: state=%s findings=%+v", tc.code, tc.sev, tc.state, r.State, got)
+			}
+			if tc.code == CodeConditionFalse && !strings.HasPrefix(got[0].Detail, "Accepted=False, reason Invalid") {
+				t.Fatalf("detail %q, want the Accepted condition", got[0].Detail)
+			}
+		})
+	}
+}
+
 // Only status entries for current parentRefs of this install count.
 // An entry left behind for a removed parentRef is ignored.
 func TestStatusForRemovedParentIsIgnored(t *testing.T) {
