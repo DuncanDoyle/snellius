@@ -517,6 +517,8 @@ func (c conditionsCheck) Run(ctx RunContext) ([]Finding, CheckResult) {
 	rankOwners(fs, ownerStatusParent, ownerParent, ctx.sink.ownedSet())
 	ordinalKeys(fs, func(f *Finding) (int, bool) {
 		switch {
+		case policyAncestor002(f): // hashed as written, condition type included
+			return 0, false
 		case f.Code == CodeConditionFalse:
 			return len(f.Key) - 1, true
 		case f.Code == CodeRuleReplaced: // the match index is status data

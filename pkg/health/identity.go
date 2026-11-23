@@ -184,11 +184,12 @@ const ownerLen = 7
 // rankOwners replaces each status-only owner of fs, a key's first ownerLen elements
 // led by tag, with label and "#k": its rank by ref among the distinct such owners of
 // one code on one resource. Status is hidden from a restricted row (design §14 rule 11).
+// A policy ancestor's KGWUI-002 keeps its owner as written (policyAncestor002).
 // owned follows each own-object finding's new key.
 func rankOwners(fs []Finding, tag, label string, owned *ownedSet) {
 	var is []int
 	for i := range fs {
-		if k := fs[i].Key; len(k) >= ownerLen && k[0] == tag {
+		if k := fs[i].Key; len(k) >= ownerLen && k[0] == tag && !policyAncestor002(&fs[i]) {
 			is = append(is, i)
 		}
 	}
@@ -219,6 +220,13 @@ func rankOwners(fs []Finding, tag, label string, owned *ownedSet) {
 		f := &fs[i]
 		owned.rekey(f, func() { f.Key = append([]string{label + ordinal(rank[j])}, f.Key[ownerLen:]...) })
 	}
+}
+
+// policyAncestor002 reports whether f is a KGWUI-002 on a policy ancestor. Its id hashes the
+// ancestor ref and the condition type, unranked: a viewer shown it reads the policy and that
+// ancestor (D-131), so no ordinal hides anything, and a sibling's finding never moves it.
+func policyAncestor002(f *Finding) bool {
+	return f.Code == CodeConditionFalse && len(f.Key) > 0 && f.Key[0] == ownerAncestor
 }
 
 // ordinals are the "#n" key elements; ordinal builds the rare ones past them.

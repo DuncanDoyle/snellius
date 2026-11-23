@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -522,6 +523,51 @@ func TestPolicyTargetNarrowedExistenceHidden(t *testing.T) {
 		d := decode[api.PolicyDetail](t, absent, user, tpPath(ns0, pol))
 		if got := outcomes(d.Targets); !slices.Equal(got, []string{computed.TargetUnknown}) {
 			t.Errorf("%s: absent narrowed target %v, want unknown", user, got)
+		}
+	}
+}
+
+// A readable policy's KGWUI-002 about its readable ListenerSet ancestor keeps its ID,
+// and its detail URL resolves, when a hidden Gateway ancestor that sorts before it
+// starts or stops a finding of its own (8.1 re-review: renumbered 002).
+func TestPolicyAncestorFindingIDHiddenSibling(t *testing.T) {
+	const pol, hiddenGw = "tp-two-ancestors", "anc-first"
+	lsRef := objects.ParentRef{Group: gatewaysGroup, Kind: "ListenerSet", Namespace: ns0, Name: lsAllName}
+	addPolicy := func(s ruleSnap) {
+		s.add(tp(ns0, pol, []any{targetRef(gatewaysGroup, "HTTPRoute", namesHidden, "")},
+			ancestor(hiddenGwRef(hiddenGw), testutil.Controller, metav1.ConditionFalse, metav1.ConditionTrue),
+			ancestor(lsRef, testutil.Controller, metav1.ConditionFalse, metav1.ConditionTrue)))
+	}
+	absent := policyServe(t, policyBase(t, ruleChange{name: "absent", apply: addPolicy}), nil)
+	present := policyServe(t, policyBase(t, ruleChange{name: "present", apply: func(s ruleSnap) {
+		addPolicy(s)
+		s.add(testutil.Gateway(hiddenNS, hiddenGw, scale.Class, nil))
+	}}), nil)
+	// ids are the restricted viewer's 002 IDs on the policy, by detail.
+	ids := func(srv *httptest.Server, user string) map[string]string {
+		out := map[string]string{}
+		page := decode[map[string]any](t, srv, user, ruleBase+"/findings?limit=200&code=KGWUI-002")
+		for _, x := range page["items"].([]any) {
+			f := x.(map[string]any)
+			if res, _ := f["resource"].(map[string]any); res != nil && res["name"] == pol {
+				d, _ := f["detail"].(string)
+				out[d] = f["id"].(string)
+			}
+		}
+		return out
+	}
+	before, after := ids(absent, restrictedUser), ids(present, restrictedUser)
+	if len(before) != 1 || !maps.Equal(before, after) {
+		t.Fatalf("restricted IDs without the hidden Gateway %v, with it %v", before, after)
+	}
+	if full := ids(present, fullUser); len(full) <= len(ids(absent, fullUser)) {
+		t.Errorf("the hidden Gateway's finding does not reach the full reader: %v", full)
+	}
+	for _, id := range before {
+		for _, srv := range []*httptest.Server{absent, present} {
+			if code, body := fetch(t, srv, restrictedUser, ruleBase+"/findings/"+id); code != http.StatusOK {
+				t.Errorf("detail %s: %d %.200s", id, code, body)
+			}
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -653,6 +654,74 @@ func TestDirectResponseFindingsPerNamespaceWatch(t *testing.T) {
 	}
 	if has(r, CodeConditionFalse, "", "other/dr") {
 		t.Fatal("a finding on the DirectResponse in the denied namespace")
+	}
+}
+
+// ancestorIDs are the IDs of the KGWUI-002s on policy shop/p in r, by the ancestor their detail names.
+func ancestorIDs(r Report) map[string]string {
+	out := map[string]string{}
+	for _, f := range r.Findings {
+		if f.Code == CodeConditionFalse && f.Resource != nil && f.Resource.Name == "p" {
+			out[f.Detail] = f.ID
+		}
+	}
+	return out
+}
+
+// The 002 about a readable ancestor keeps its ID when a hidden ancestor that
+// sorts before it gains a finding of its own, for a TrafficPolicy and a
+// DirectResponse (8.1 re-review: renumbered 002).
+func TestPolicyAncestorFindingIDStable(t *testing.T) {
+	edge, hidden := testutil.GwRef("infra", "edge"), testutil.GwRef("aaa", "hidden")
+	invalid := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}
+	ancestors := []testutil.PolicyAncestor{{Ref: edge, Controller: testutil.Controller, Conds: invalid},
+		{Ref: hidden, Controller: testutil.Controller, Conds: invalid}}
+	for _, kind := range []string{"TrafficPolicy", "DirectResponse"} {
+		t.Run(kind, func(t *testing.T) {
+			pol := func() *unstructured.Unstructured {
+				return testutil.Policy("gateway.kgateway.dev/v1alpha1", kind, "shop", "p", ancestors...)
+			}
+			rd := readSet{objects.RefOf(pol()): true, edge.Ref(): true}
+			run := func(withHidden bool) (full int, shown map[string]string) {
+				w := healthyWorld()
+				w.nss = append(w.nss, testutil.Namespace("aaa", nil))
+				w.objs = append(w.objs, pol())
+				if withHidden {
+					w.objs = append(w.objs, testutil.Gateway("aaa", "hidden", "kgateway", nil))
+				}
+				r := w.report(t)
+				return len(ancestorIDs(r)), ancestorIDs(Project(r, rd))
+			}
+			fullAbsent, absent := run(false)
+			fullPresent, present := run(true)
+			if fullAbsent != 1 || fullPresent != 2 || len(absent) != 1 || !maps.Equal(absent, present) {
+				t.Fatalf("full %d/%d; shown IDs without hidden %v, with hidden %v", fullAbsent, fullPresent, absent, present)
+			}
+		})
+	}
+}
+
+// A new ancestor written first in status, with its own finding, moves no
+// existing ancestor finding's ID (8.1 re-review: durable IDs).
+func TestPolicyAncestorFindingIDDurable(t *testing.T) {
+	edge, first := testutil.GwRef("infra", "edge"), testutil.GwRef("infra", "aaa")
+	invalid := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid"),
+		testutil.Cond("Attached", metav1.ConditionFalse, "Invalid")}
+	run := func(ancestors ...testutil.PolicyAncestor) map[string]string {
+		w := healthyWorld()
+		w.objs = append(w.objs, testutil.Gateway("infra", "aaa", "kgateway", nil), testutil.TrafficPolicy("shop", "p", ancestors...))
+		return ancestorIDs(w.report(t))
+	}
+	before := run(testutil.PolicyAncestor{Ref: edge, Controller: testutil.Controller, Conds: invalid})
+	after := run(testutil.PolicyAncestor{Ref: first, Controller: testutil.Controller, Conds: invalid},
+		testutil.PolicyAncestor{Ref: edge, Controller: testutil.Controller, Conds: invalid})
+	if len(before) != 2 || len(after) != 4 {
+		t.Fatalf("findings before %v, after %v", before, after)
+	}
+	for detail, id := range before {
+		if after[detail] != id {
+			t.Errorf("%s: ID %s became %s", detail, id, after[detail])
+		}
 	}
 }
 
