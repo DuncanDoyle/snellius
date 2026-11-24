@@ -118,7 +118,11 @@ func (l linker) admitWith(ref objects.Ref, named bool) Link {
 		return LinkNone
 	}
 	gk := objects.GroupKind{Group: ref.Group, Kind: ref.Kind}
+	// A policy link opens its detail, which needs named get (8.2 re-review).
 	if candidate && l.policy[gk] {
+		if !l.v.canNamed(ref) {
+			return LinkNone
+		}
 		return policyLink(l.i.Resolved.ID(), ref)
 	}
 	if candidate && l.detail[gk] {

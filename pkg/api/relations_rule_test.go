@@ -787,3 +787,41 @@ func TestPolicyAncestorFindingNeedsListAndName(t *testing.T) {
 		t.Errorf("ancestor %+v, want unreadable", d.Ancestors)
 	}
 }
+
+// A policy link anywhere needs named get on the policy, as its detail does: a finding on a
+// policy the viewer may not get by name keeps its resource but links nowhere (8.2 re-review: links).
+func TestPolicyFindingLinkNeedsName(t *testing.T) {
+	rejected := tp(ns0, "tp-rejected-link", []any{targetGW("")}, ancestor(gw0()[0], testutil.Controller, metav1.ConditionFalse, metav1.ConditionFalse))
+	e := relEngine(t, ruleChange{name: "rejected", apply: func(s ruleSnap) { s.add(rejected) }})
+	for _, c := range []struct {
+		narrow func(api.Authorizer) api.Authorizer
+		want   api.Link
+	}{
+		{nil, api.Link(tpPath(ns0, rejected.GetName()))},
+		{func(a api.Authorizer) api.Authorizer {
+			return api.Narrowed{Base: a, Policy: denyNamed{name: rejected.GetName()}}
+		}, api.LinkNone},
+	} {
+		srv := policyServeWith(t, e, relChecker{}, c.narrow)
+		var id string
+		for _, f := range decode[api.Page[api.FindingRow]](t, srv, restrictedUser, ruleBase+"/findings?limit=200").Items {
+			if f.Resource != nil && f.Resource.Name == rejected.GetName() {
+				id = f.ID
+				if f.Resource.Link != c.want {
+					t.Errorf("findings list: link %q, want %q", f.Resource.Link, c.want)
+				}
+			}
+		}
+		if id == "" {
+			t.Fatal("no finding on tp-rejected-link")
+		}
+		// The finding detail reads its resource by name, so a policy denied by name has none.
+		code, body := fetch(t, srv, restrictedUser, ruleBase+"/findings/"+id)
+		switch {
+		case c.want == api.LinkNone && code != http.StatusNotFound:
+			t.Errorf("finding detail %d for a policy denied by name", code)
+		case c.want != api.LinkNone && (code != http.StatusOK || !strings.Contains(body, `"link":"`+string(c.want)+`"`)):
+			t.Errorf("finding detail %d does not link %q: %.300s", code, c.want, body)
+		}
+	}
+}
