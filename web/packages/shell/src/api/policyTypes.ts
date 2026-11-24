@@ -70,10 +70,10 @@ export interface PolicyRow {
   targets: PolicyTarget[];
   accepted?: PolicyAccepted;
   /** The source of the Accepted summary, also when there is none (8.2 re-review). */
-  acceptedSource?: PolicySource;
+  acceptedSource: PolicySource;
   attachedOn: PolicyAttached[];
   /** The source of the Reported attached on summary, also when it is empty. */
-  attachedOnSource?: PolicySource;
+  attachedOnSource: PolicySource;
   features: PolicyFeature[];
   problems: PolicyProblems;
 }
@@ -134,9 +134,9 @@ export interface PolicyDetail {
   targets: PolicyTarget[];
   ancestors: PolicyAncestor[];
   accepted?: PolicyAccepted;
-  acceptedSource?: PolicySource;
+  acceptedSource: PolicySource;
   attachedOn: PolicyAttached[];
-  attachedOnSource?: PolicySource;
+  attachedOnSource: PolicySource;
   features: PolicyFeature[];
   annotations: PolicyAnnotation[];
   problems: PolicyProblems;
