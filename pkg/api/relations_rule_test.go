@@ -898,3 +898,21 @@ func TestPolicyNeverBackendLink(t *testing.T) {
 		t.Fatal("no finding on tp-as-backend: the test is vacuous")
 	}
 }
+
+// The strict basis asks what the policy page asks: list on the kind in the namespace and get
+// by name. A viewer whose authoriser refuses the Gateway list in ns0, while it allows the member
+// and the name, sees gw-000 unreadable and no KGWUI-002 about it (8.2 re-review 2: strict basis).
+func TestPolicyAncestorFindingNeedsList(t *testing.T) {
+	rejected := tp(ns0, "tp-gw-unlisted", []any{targetGW("")}, ancestor(gw0()[0], testutil.Controller, metav1.ConditionFalse, metav1.ConditionFalse))
+	srv := policyServeWith(t, relEngine(t, ruleChange{name: "rejected", apply: func(s ruleSnap) { s.add(rejected) }}), relChecker{}, func(a api.Authorizer) api.Authorizer {
+		return api.Narrowed{Base: a, Policy: denyList{ns: ns0, kinds: []string{"Gateway"}}}
+	})
+	if d := decode[api.PolicyDetail](t, srv, restrictedUser, tpPath(ns0, rejected.GetName())); len(d.Ancestors) != 1 || d.Ancestors[0].NotCurrent != policy.NotCurrentUnreadable {
+		t.Fatalf("ancestor %+v, want unreadable", d.Ancestors)
+	}
+	for _, f := range decode[api.Page[api.FindingRow]](t, srv, restrictedUser, ruleBase+"/findings?limit=200").Items {
+		if f.Code == health.CodeConditionFalse && f.Resource != nil && f.Resource.Name == rejected.GetName() {
+			t.Error("a KGWUI-002 about gw-000 is shown to a viewer who may not list Gateways in ns-000")
+		}
+	}
+}

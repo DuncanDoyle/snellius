@@ -315,6 +315,12 @@ type NamedReadable interface {
 	Named(objects.Ref) bool
 }
 
+// ListReadable is a Readable that also says whether a viewer may list a kind in a
+// namespace. A strict basis asks it, as the policy page does (D-133).
+type ListReadable interface {
+	List(gk objects.GroupKind, namespace string) bool
+}
+
 // Finding is one problem or notable fact about an install.
 type Finding struct {
 	// ID is stable across recomputes and restarts and unique within the
