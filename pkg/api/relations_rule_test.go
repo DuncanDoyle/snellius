@@ -873,3 +873,28 @@ func TestDownstreamDeniedPolicyChangesNothing(t *testing.T) {
 		t.Errorf("tp-down moves only %d surfaces without the downstream authoriser: the test is weak", moved)
 	}
 }
+
+// A policy ref never falls back to a backend link: a readable route that writes the policy
+// as a backendRef does not make a policy denied by name link anywhere (8.2 re-review 2: backend link).
+func TestPolicyNeverBackendLink(t *testing.T) {
+	rejected := tp(ns0, "tp-as-backend", []any{targetGW("")}, ancestor(gw0()[0], testutil.Controller, metav1.ConditionFalse, metav1.ConditionFalse))
+	route := accepted(ns0, "rel-to-policy", gw0()...)
+	route.Object["spec"].(map[string]any)["rules"] = []any{map[string]any{"backendRefs": []any{
+		map[string]any{"group": kgwGroup, "kind": "TrafficPolicy", "name": rejected.GetName()}}}}
+	e := relEngine(t, ruleChange{name: "as-backend", apply: func(s ruleSnap) { s.add(rejected, route) }})
+	srv := policyServeWith(t, e, relChecker{}, func(a api.Authorizer) api.Authorizer {
+		return api.Narrowed{Base: a, Policy: denyNamed{name: rejected.GetName()}}
+	})
+	found := false
+	for _, f := range decode[api.Page[api.FindingRow]](t, srv, restrictedUser, ruleBase+"/findings?limit=200").Items {
+		if f.Resource != nil && f.Resource.Name == rejected.GetName() {
+			found = true
+			if f.Resource.Link != api.LinkNone {
+				t.Errorf("finding %s links %q, want none", f.Code, f.Resource.Link)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no finding on tp-as-backend: the test is vacuous")
+	}
+}
