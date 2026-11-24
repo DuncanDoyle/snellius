@@ -70,14 +70,14 @@ func Relations(s Subject, in Inputs) []Relation {
 			}
 		}
 		for _, a := range p.Ancestors {
-			if a.Current && a.Ref.Ref() == s.Ref && sectionMatches(s, a.Ref.SectionName, a.Ref.Port) && attached(a) {
+			if a.Current && a.Ref.Ref() == s.Ref && sectionMatches(s, a.Ref.SectionName, a.Ref.Port) && Attached(a, p.Generation) {
 				out = append(out, Relation{Policy: p.Ref, Subject: Subject{Ref: s.Ref, SectionName: a.Ref.SectionName, Port: a.Ref.Port},
 					Kind: RelationAttachedOnAncestor, Source: SourceControllerReported})
 			}
 		}
 	}
 	if u, ok := l.Object(s.Ref); ok {
-		for _, path := range parentPaths(u, l) {
+		for _, path := range parentPaths(u, l, in.IsListenerSet) {
 			out = append(out, parentRelations(s, path, in.Policies)...)
 		}
 	}
@@ -90,10 +90,11 @@ func sectionMatches(s Subject, section string, port int32) bool {
 	return s.SectionName == "" && s.Port == 0 || s.SectionName == section && s.Port == port
 }
 
-// attached reports whether a's Attached condition is True, whatever its reason.
-func attached(a Ancestor) bool {
+// Attached reports whether a's Attached condition is True, whatever its reason, and
+// describes generation gen of the policy: an older one is no attachment evidence (D-135).
+func Attached(a Ancestor, gen int64) bool {
 	c := objects.FindCondition(a.Conditions, "Attached")
-	return c != nil && c.Status == metav1.ConditionTrue
+	return c != nil && c.Status == metav1.ConditionTrue && c.ObservedGeneration >= gen
 }
 
 // hop is one parentRef walked; unsectioned means only targetRefs without a section relate.
@@ -105,11 +106,12 @@ type hop struct {
 // parentPaths returns the parent hops of u that exist in l and are readable: each
 // parentRef of a route, a ListenerSet's own parentRef, and for a route's ListenerSet
 // parent also its Gateway (design §7 item 5).
-func parentPaths(u *unstructured.Unstructured, l Lookup) []hop {
+func parentPaths(u *unstructured.Unstructured, l Lookup, listenerSet func(objects.GroupKind) bool) []hop {
 	ref := objects.RefOf(u)
+	isLS := func(group, kind string) bool { return listenerSet(objects.GroupKind{Group: group, Kind: kind}) }
 	var parents []objects.ParentRef
 	switch {
-	case listenerSet(ref.Group, ref.Kind):
+	case isLS(ref.Group, ref.Kind):
 		parents = []objects.ParentRef{objects.ListenerSetParent(u)}
 	default:
 		parents = objects.RouteParentRefs(u)
@@ -130,7 +132,7 @@ func parentPaths(u *unstructured.Unstructured, l Lookup) []hop {
 		}
 		out = append(out, hop{via: []Subject{first}, unsectioned: p.SectionName == ""})
 		// The only two-hop join: a route's ListenerSet parent to the ListenerSet's Gateway.
-		if listenerSet(ref.Group, ref.Kind) || !listenerSet(p.Group, p.Kind) {
+		if isLS(ref.Group, ref.Kind) || !isLS(p.Group, p.Kind) {
 			continue
 		}
 		second := Subject{Ref: objects.ListenerSetParent(parent).Ref()}
@@ -160,9 +162,15 @@ func parentRelations(s Subject, path hop, policies []Policy) []Relation {
 	return out
 }
 
-// listenerSet reports whether group and kind name a ListenerSet.
-func listenerSet(group, kind string) bool {
-	return group == objects.GatewayAPIGroup && kind == "ListenerSet" || group == "gateway.networking.x-k8s.io" && kind == "XListenerSet"
+// upstreamListenerSets are Gateway API's ListenerSet kinds, the default of Inputs.ListenerSetKinds.
+var upstreamListenerSets = []objects.GroupKind{{Group: objects.GatewayAPIGroup, Kind: "ListenerSet"}, {Group: "gateway.networking.x-k8s.io", Kind: "XListenerSet"}}
+
+// IsListenerSet reports whether gk is one of in's ListenerSet kinds.
+func (in Inputs) IsListenerSet(gk objects.GroupKind) bool {
+	if in.ListenerSetKinds == nil {
+		return slices.Contains(upstreamListenerSets, gk)
+	}
+	return slices.Contains(in.ListenerSetKinds, gk)
 }
 
 // sortRelations sorts rs by policy namespace, name, group and kind, then relation

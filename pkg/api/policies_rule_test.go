@@ -370,7 +370,7 @@ func TestPoliciesReaders(t *testing.T) {
 	for k, rs := range []api.PoliciesResponse{full, restricted} {
 		row := policyRowOf(t, rs, kgwGroup, ns0, tpAncestors)
 		if row.Accepted == nil || row.Accepted.Status != metav1.ConditionTrue || row.Accepted.Source != policy.SourceInferred || row.Problems.Has ||
-			len(row.AttachedOn) != 2-k || row.AttachedOn[0].Source != policy.SourceControllerReported || row.Ref.Link != api.LinkDetail {
+			len(row.AttachedOn) != 2-k || row.AttachedOn[0].Source != policy.SourceControllerReported || row.Ref.Link != api.Link(tpPath(ns0, tpAncestors)) {
 			t.Errorf("viewer %d: tp-ancestors row %+v", k, row)
 		}
 	}
@@ -786,11 +786,15 @@ func TestPolicyDetailLinks(t *testing.T) {
 	for _, user := range []string{fullUser, restrictedUser} {
 		d := decode[api.PolicyDetail](t, srv, user, tpPath(ns0, tpVisible))
 		want := ruleBase + "/resources/" + kgwGroup + "/TrafficPolicy/" + ns0 + "/" + tpVisible
-		if d.YAML != want || d.Ref.Link != api.LinkDetail {
-			t.Fatalf("%s: yaml %q link %q, want %q and detail", user, d.YAML, d.Ref.Link, want)
+		// The link is the policy detail endpoint's own path (D-136, 8.2 review #8).
+		if d.YAML != want || d.Ref.Link != api.Link(tpPath(ns0, tpVisible)) {
+			t.Fatalf("%s: yaml %q link %q, want %q and %q", user, d.YAML, d.Ref.Link, want, tpPath(ns0, tpVisible))
 		}
-		if row := policyRowOf(t, decode[api.PoliciesResponse](t, srv, user, policiesPath+"?limit=200"), kgwGroup, ns0, tpVisible); row.Ref.Link != api.LinkDetail {
-			t.Errorf("%s: row link %q, want detail", user, row.Ref.Link)
+		if row := policyRowOf(t, decode[api.PoliciesResponse](t, srv, user, policiesPath+"?limit=200"), kgwGroup, ns0, tpVisible); row.Ref.Link != api.Link(tpPath(ns0, tpVisible)) {
+			t.Errorf("%s: row link %q, want %q", user, row.Ref.Link, tpPath(ns0, tpVisible))
+		}
+		if code, _ := fetch(t, srv, user, string(d.Ref.Link)); code != http.StatusOK {
+			t.Errorf("%s: the link answers %d", user, code)
 		}
 		code, body := fetch(t, srv, user, d.YAML)
 		var obj map[string]any

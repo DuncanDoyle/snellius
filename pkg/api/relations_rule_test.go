@@ -3,19 +3,25 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	sigsyaml "sigs.k8s.io/yaml"
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/pkg/api"
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/auth/sar"
 	"github.com/DuncanDoyle/snellius/pkg/engine"
+	"github.com/DuncanDoyle/snellius/pkg/health"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/policy"
@@ -301,7 +307,7 @@ func TestPolicyRelationsPerSubject(t *testing.T) {
 				t.Errorf("%s as %s: selectors %+v, want kinds %v", tc.path, user, rel.Selectors, want)
 			}
 			for _, r := range slices.Concat(rel.Targeting, deref(rel.TargetingParent), deref(rel.AttachedHere)) {
-				if r.Policy.Link != api.LinkDetail || r.Policy.Group == "" {
+				if r.Policy.Link != api.Link(policyPath(r.Policy.Group, r.Policy.Kind, r.Policy.Namespace, r.Policy.Name)) || r.Policy.Group == "" {
 					t.Errorf("%s as %s: policy %+v does not link its detail with its group", tc.path, user, r.Policy)
 				}
 			}
@@ -417,5 +423,199 @@ func TestPolicyRelationsLabelsCopy(t *testing.T) {
 	}
 	if len(ls) < 100 {
 		t.Fatalf("only %d labels checked", len(ls))
+	}
+}
+
+// A policy link is given only to a viewer who may get the policy by name, as its detail
+// asks; the row and the relation stay for a member the authoriser denies by name (8.2 review #3).
+func TestPolicyLinkOnlyByName(t *testing.T) {
+	srv := policyServeWith(t, relEngine(t, ruleChange{name: "base"}), relChecker{}, func(a api.Authorizer) api.Authorizer {
+		return api.Narrowed{Base: a, Policy: denyNamed{name: "tp-gw"}}
+	})
+	rel := decode[relBody](t, srv, fullUser, gwPath(ns0, relGW.Name)).PolicyRelations
+	if rel == nil || rel.AttachedHere == nil {
+		t.Fatal("no relations")
+	}
+	links := map[string]api.Link{}
+	for _, r := range slices.Concat(rel.Targeting, *rel.AttachedHere) {
+		links[r.Policy.Name] = r.Policy.Link
+	}
+	if l, ok := links["tp-gw"]; !ok || l != "" {
+		t.Errorf("tp-gw relation present %v with link %q, want present without a link", ok, l)
+	}
+	if l := links["tp-listener"]; l != api.Link(tpPath(ns0, "tp-listener")) {
+		t.Errorf("tp-listener link %q", l)
+	}
+	code, body := fetch(t, srv, fullUser, policiesPath+"?limit=200")
+	if code != http.StatusOK || !strings.Contains(body, `"name":"tp-gw"}`) {
+		t.Errorf("tp-gw row is missing or linked: %d %.300s", code, body)
+	}
+	if row := policyRowOf(t, decode[api.PoliciesResponse](t, srv, fullUser, policiesPath+"?limit=200"), kgwGroup, ns0, "tp-listener"); row.Ref.Link != api.Link(tpPath(ns0, "tp-listener")) {
+		t.Errorf("tp-listener row link %q", row.Ref.Link)
+	}
+	if code, _ := fetch(t, srv, fullUser, tpPath(ns0, "tp-gw")); code != http.StatusNotFound {
+		t.Errorf("tp-gw detail %d, want 404: the test does not deny the name", code)
+	}
+}
+
+// fixtureDirectResponse is kgateway 2.3's DirectResponse fixture with a live-like status:
+// in ns0, reported Accepted and Attached on gw-000 by the install's controller.
+func fixtureDirectResponse(t *testing.T) *unstructured.Unstructured {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "policy", "testdata", "kgateway-2.3.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for doc := range strings.SplitSeq(string(b), "\n---\n") {
+		j, err := sigsyaml.YAMLToJSON([]byte(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		u := &unstructured.Unstructured{}
+		if err := u.UnmarshalJSON(j); err != nil {
+			t.Fatal(err)
+		}
+		if u.GetKind() != "DirectResponse" {
+			continue
+		}
+		u.SetNamespace(ns0)
+		as, _, _ := unstructured.NestedSlice(u.Object, "status", "ancestors")
+		ref := as[0].(map[string]any)["ancestorRef"].(map[string]any)
+		ref["namespace"], ref["name"] = ns0, relGW.Name
+		_ = unstructured.SetNestedSlice(u.Object, as, "status", "ancestors")
+		return u
+	}
+	t.Fatal("no DirectResponse in the 2.3 fixture")
+	return nil
+}
+
+// A list-only policy's ancestors feed only its findings (D-129, design §6.6): a
+// DirectResponse reported Attached on gw-000 is not "reported attached here" (8.2 review #2).
+func TestListOnlyPolicyMakesNoAttachedRelation(t *testing.T) {
+	dr := fixtureDirectResponse(t)
+	srv := policyServeWith(t, relEngine(t, ruleChange{name: "dr", apply: func(s ruleSnap) { s.add(dr) }}), relChecker{}, nil)
+	row := policyRowOf(t, decode[api.PoliciesResponse](t, srv, fullUser, policiesPath+"?limit=200"), kgwGroup, ns0, dr.GetName())
+	if len(row.AttachedOn) != 1 {
+		t.Fatalf("DirectResponse attached on %v: the ancestor is not current, so the test is vacuous", row.AttachedOn)
+	}
+	for _, user := range []string{fullUser, restrictedUser} {
+		rel := decode[relBody](t, srv, user, gwPath(ns0, relGW.Name)).PolicyRelations
+		for _, r := range slices.Concat(rel.Targeting, deref(rel.AttachedHere)) {
+			if r.Policy.Kind == "DirectResponse" {
+				t.Errorf("%s: DirectResponse relation %+v on gw-000", user, r)
+			}
+		}
+	}
+}
+
+// failingTP is relChecker, except that a list of TrafficPolicies in the hidden namespace fails.
+type failingTP struct{}
+
+func (failingTP) Check(ctx context.Context, id oidc.Identity, a sar.Attributes) (bool, error) {
+	if a.Resource == "trafficpolicies" && a.Namespace == hiddenNS {
+		return false, errors.New("SAR unavailable")
+	}
+	return relChecker{}.Check(ctx, id, a)
+}
+
+// denyHiddenTP is a downstream authoriser that refuses TrafficPolicies in the hidden namespace.
+type denyHiddenTP struct{}
+
+func (denyHiddenTP) Authorize(_ *http.Request, ref objects.Ref) bool {
+	return ref.Kind != "TrafficPolicy" || ref.Namespace != hiddenNS
+}
+
+func (d denyHiddenTP) AuthorizeNamedErr(r *http.Request, ref objects.Ref) (bool, error) {
+	return d.Authorize(r, ref), nil
+}
+
+func (denyHiddenTP) CanList(_ *http.Request, gk objects.GroupKind, ns string) (bool, error) {
+	return gk.Kind != "TrafficPolicy" || ns != hiddenNS, nil
+}
+
+// A policy the downstream authoriser denies asks no access check, so a failing one in its
+// otherwise unqueried bucket cannot turn a readable subject detail into a 503 (8.2 review #1).
+func TestDeniedPolicyAsksNoCheck(t *testing.T) {
+	denied := tp(hiddenNS, "tp-denied-anc", []any{targetRef(gatewaysGroup, "HTTPRoute", "hidden-route", "")}, attachedAncestor(gw0()[0], "Merged"))
+	narrow := func(a api.Authorizer) api.Authorizer { return api.Narrowed{Base: a, Policy: denyHiddenTP{}} }
+	absent := policyServeWith(t, relEngine(t, ruleChange{name: "base"}), failingTP{}, narrow)
+	present := policyServeWith(t, relEngine(t, ruleChange{name: "denied", apply: func(s ruleSnap) { s.add(denied) }}), failingTP{}, narrow)
+	for _, path := range []string{gwPath(ns0, relGW.Name), svcPath(ns0, "shared"), lsPath(ns0, lsAllName)} {
+		ac, ab := fetch(t, absent, restrictedUser, path)
+		pc, pb := fetch(t, present, restrictedUser, path)
+		if ac != http.StatusOK || pc != ac || pb != ab {
+			t.Errorf("%s: %d without the denied policy, %d with it:\n%.300s", path, ac, pc, pb)
+		}
+	}
+}
+
+// genPolicy is a TrafficPolicy ns0/name at generation 2 on gw-000, reported with
+// Accepted (reason) at generation 2 and Attached (status) at generation 1.
+func genPolicy(name string, accepted metav1.ConditionStatus, reason string, attached metav1.ConditionStatus) *unstructured.Unstructured {
+	acc, att := testutil.Cond("Accepted", accepted, reason), testutil.Cond("Attached", attached, "Pending")
+	acc.ObservedGeneration = 2
+	if attached == metav1.ConditionTrue {
+		att.Reason = "Attached"
+	}
+	u := tp(ns0, name, []any{targetGW("")}, testutil.PolicyAncestor{Ref: gw0()[0], Controller: testutil.Controller, Conds: []metav1.Condition{acc, att}})
+	u.SetGeneration(2)
+	return u
+}
+
+// A policy ancestor's freshness follows Accepted's generation alone (D-135): a current
+// rejection beside an older Attached raises KGWUI-002, not "not yet processed", and counts
+// in the summary; an older Attached=True is no attachment evidence (8.2 review #5).
+func TestPolicyFreshnessOnAcceptedAlone(t *testing.T) {
+	rejected, olderAttached := genPolicy("tp-rejected", metav1.ConditionFalse, "Invalid", metav1.ConditionFalse),
+		genPolicy("tp-older-attached", metav1.ConditionTrue, "Accepted", metav1.ConditionTrue)
+	srv := policyServeWith(t, relEngine(t, ruleChange{name: "gen", apply: func(s ruleSnap) { s.add(rejected, olderAttached) }}), relChecker{}, nil)
+	codes := map[string]string{}
+	for _, f := range decode[api.Page[api.FindingRow]](t, srv, fullUser, ruleBase+"/findings?limit=200").Items {
+		if f.Resource != nil && f.Resource.Kind == "TrafficPolicy" && f.Resource.Namespace == ns0 {
+			codes[f.Resource.Name] += f.Code + " "
+		}
+	}
+	if codes["tp-rejected"] != health.CodeConditionFalse+" " || codes["tp-older-attached"] != "" {
+		t.Errorf("findings %v, want KGWUI-002 on tp-rejected only", codes)
+	}
+	rows := decode[api.PoliciesResponse](t, srv, fullUser, policiesPath+"?limit=200")
+	if r := policyRowOf(t, rows, kgwGroup, ns0, "tp-rejected"); r.Accepted == nil || r.Accepted.Status != metav1.ConditionFalse || !r.Problems.Has {
+		t.Errorf("tp-rejected row %+v: want Accepted False with problems", r)
+	}
+	if r := policyRowOf(t, rows, kgwGroup, ns0, "tp-older-attached"); r.Accepted == nil || r.Accepted.Status != metav1.ConditionTrue || len(r.AttachedOn) != 0 {
+		t.Errorf("tp-older-attached row %+v: want current Accepted True and no attachedOn", r)
+	}
+	rel := decode[relBody](t, srv, fullUser, gwPath(ns0, relGW.Name)).PolicyRelations
+	for _, r := range deref(rel.AttachedHere) {
+		if r.Policy.Name == "tp-older-attached" || r.Policy.Name == "tp-rejected" {
+			t.Errorf("%s reported attached on gw-000", r.Policy.Name)
+		}
+	}
+}
+
+// A KGWUI-002 about a ListenerSet ancestor rests on its parent Gateway too, as the policy
+// page's currentness does (D-134): a viewer who may not read that Gateway is not shown it (8.2 review #6).
+func TestListenerSetAncestorFindingNeedsItsGateway(t *testing.T) {
+	hop := objects.ParentRef{Group: objects.GatewayAPIGroup, Kind: "ListenerSet", Namespace: ns0, Name: lsHop}
+	rejected := tp(ns0, "tp-ls-hop-rejected", []any{targetRef(gatewaysGroup, "ListenerSet", lsHop, "")},
+		ancestor(hop, testutil.Controller, metav1.ConditionFalse, metav1.ConditionFalse))
+	srv := policyServeWith(t, relEngine(t, ruleChange{name: "rejected", apply: func(s ruleSnap) { s.add(rejected) }}), relChecker{}, nil)
+	shown := func(user string) bool {
+		for _, f := range decode[api.Page[api.FindingRow]](t, srv, user, ruleBase+"/findings?limit=200").Items {
+			if f.Code == health.CodeConditionFalse && f.Resource != nil && f.Resource.Name == rejected.GetName() {
+				return true
+			}
+		}
+		return false
+	}
+	if !shown(fullUser) {
+		t.Fatal("the full reader sees no KGWUI-002 on tp-ls-hop-rejected: the test is vacuous")
+	}
+	if shown(restrictedUser) {
+		t.Error("the restricted viewer, who may not read ls-hop's Gateway, is shown the KGWUI-002 about ls-hop")
+	}
+	d := decode[api.PolicyDetail](t, srv, restrictedUser, tpPath(ns0, rejected.GetName()))
+	if len(d.Ancestors) != 1 || d.Ancestors[0].NotCurrent != policy.NotCurrentUnreadable {
+		t.Errorf("restricted ancestor %+v, want unreadable", d.Ancestors)
 	}
 }

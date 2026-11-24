@@ -116,7 +116,7 @@
     "ref": {
       "group": "gateway.kgateway.dev",
       "kind": "TrafficPolicy",
-      "link": "detail",
+      "link": "/api/v1/installs/kgw.kgateway/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp",
       "name": "tp",
       "namespace": "shop"
     },

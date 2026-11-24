@@ -16,7 +16,7 @@
       "resource": {
         "group": "gateway.kgateway.dev",
         "kind": "TrafficPolicy",
-        "link": "detail",
+        "link": "/api/v1/installs/kgw.kgateway/policies/gateway.kgateway.dev/TrafficPolicy/infra/tp-two",
         "name": "tp-two",
         "namespace": "infra"
       },

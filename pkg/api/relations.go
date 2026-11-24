@@ -3,7 +3,6 @@ package api
 import (
 	"slices"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/DuncanDoyle/snellius/pkg/computed"
@@ -35,7 +34,12 @@ type relatedPolicy struct {
 // (design §6.5), made by policy.Relations with the policies endpoints' guard and Lookup. Only
 // policies the caller may view as members take part (design §7 items 1 and 5).
 func (h *handler) policyRelations(p *engine.Published, i *engine.InstallModel, v *view, l linker, s objects.Ref, g relationGroups) PolicyRelationsDTO {
-	all := candidatePolicies(p.Model, installPolicies(i), s)
+	// A candidate the downstream authoriser denies asks no check: a failing one must not
+	// answer the request for a policy it never shows (8.2 review #1).
+	lsKinds := policy.Inputs{ListenerSetKinds: listenerSetKinds(p.Model.Served)}
+	all := slices.DeleteFunc(candidatePolicies(p.Model, installPolicies(i), s, lsKinds), func(u *unstructured.Unstructured) bool {
+		return !v.readsAll() && !v.policyAllows(objects.RefOf(u), false)
+	})
 	v.prefetch(func(add func(objects.Ref)) {
 		for _, u := range all {
 			add(objects.RefOf(u))
@@ -52,8 +56,10 @@ func (h *handler) policyRelations(p *engine.Published, i *engine.InstallModel, v
 			continue
 		}
 		pol := policy.Read(u, pr.interp, pr.guard)
-		// Only an ancestor that is s can relate, so no other is judged.
-		pol.Ancestors = slices.DeleteFunc(pol.Ancestors, func(a policy.Ancestor) bool { return a.Ref.Ref() != s })
+		// Only an ancestor that is s can relate, so no other is judged. A list-only kind's
+		// ancestors feed only its findings (D-129, design §6.6).
+		listOnly := slices.ContainsFunc(p.Model.Served, func(k kinds.Served) bool { return k.ListOnly && k.Group == ref.Group && k.Kind == ref.Kind })
+		pol.Ancestors = slices.DeleteFunc(pol.Ancestors, func(a policy.Ancestor) bool { return listOnly || a.Ref.Ref() != s })
 		pr.gate(&pol)
 		gk := objects.GroupKind{Group: ref.Group, Kind: ref.Kind}
 		if ref.Namespace == s.Namespace && !slices.Contains(out.Selectors.Kinds, gk) &&
@@ -67,8 +73,8 @@ func (h *handler) policyRelations(p *engine.Published, i *engine.InstallModel, v
 		return compareAffected(objects.Ref{Group: a.Group, Kind: a.Kind}, objects.Ref{Group: b.Group, Kind: b.Kind})
 	})
 	parent, attached := []PolicyRelationDTO{}, []PolicyRelationDTO{}
-	for _, r := range policy.Relations(policy.Subject{Ref: s}, policy.Inputs{Policies: in, Lookup: pr.in.Lookup}) {
-		d := PolicyRelationDTO{Policy: l.linked(r.Policy), Relation: r.Kind, Source: r.Source, SectionName: r.Subject.SectionName, Port: r.Subject.Port}
+	for _, r := range policy.Relations(policy.Subject{Ref: s}, policy.Inputs{Policies: in, Lookup: pr.in.Lookup, ListenerSetKinds: lsKinds.ListenerSetKinds}) {
+		d := PolicyRelationDTO{Policy: linkedPolicy(v, i.Resolved.ID(), r.Policy), Relation: r.Kind, Source: r.Source, SectionName: r.Subject.SectionName, Port: r.Subject.Port}
 		switch r.Kind {
 		case policy.RelationTargets:
 			out.Targeting = append(out.Targeting, d)
@@ -96,9 +102,9 @@ func (h *handler) policyRelations(p *engine.Published, i *engine.InstallModel, v
 // policy.Relations may walk, an ancestor that is s, or a targetSelector of s's kind in s's namespace.
 // Any other policy makes no relation and no selector kind for any viewer, so leaving it out
 // changes no response; only the checks asked shrink.
-func candidatePolicies(m *engine.Model, all []*unstructured.Unstructured, s objects.Ref) []*unstructured.Unstructured {
+func candidatePolicies(m *engine.Model, all []*unstructured.Unstructured, s objects.Ref, ls policy.Inputs) []*unstructured.Unstructured {
 	named := map[objects.Ref]bool{s: true}
-	for _, r := range declaredParents(m, s) {
+	for _, r := range declaredParents(m, s, ls) {
 		named[r] = true
 	}
 	return slices.DeleteFunc(slices.Clone(all), func(u *unstructured.Unstructured) bool {
@@ -113,17 +119,13 @@ func candidatePolicies(m *engine.Model, all []*unstructured.Unstructured, s obje
 
 // declaredParents are the parents policy.Relations may walk from s (design §5.3): a route's
 // parentRefs and, for a ListenerSet among them, its parent Gateway; a ListenerSet's own parentRef.
-// It may name more than Relations walks, never fewer.
-func declaredParents(m *engine.Model, s objects.Ref) []objects.Ref {
+// ls classifies ListenerSets as Relations does. It may name more than Relations walks, never fewer.
+func declaredParents(m *engine.Model, s objects.Ref, ls policy.Inputs) []objects.Ref {
 	u, _ := stored(m, s)
 	if u == nil {
 		return nil
 	}
-	isLS := func(r objects.Ref) bool {
-		return slices.ContainsFunc(m.Served, func(k kinds.Served) bool {
-			return k.Category == kinds.CategoryListenerSet && k.Group == r.Group && k.Kind == r.Kind
-		})
-	}
+	isLS := func(r objects.Ref) bool { return ls.IsListenerSet(objects.GroupKind{Group: r.Group, Kind: r.Kind}) }
 	if isLS(s) {
 		return []objects.Ref{objects.ListenerSetParent(u).Ref()}
 	}
@@ -137,14 +139,25 @@ func declaredParents(m *engine.Model, s objects.Ref) []objects.Ref {
 	return out
 }
 
+// listenerSetKinds are the served ListenerSet kinds, upstream and downstream (E7).
+func listenerSetKinds(served []kinds.Served) []objects.GroupKind {
+	out := []objects.GroupKind{}
+	for _, k := range served {
+		if k.Category == kinds.CategoryListenerSet {
+			out = append(out, objects.GroupKind{Group: k.Group, Kind: k.Kind})
+		}
+	}
+	return out
+}
+
 // attachedCondition sets d's Attached condition, verbatim, and the pack's note on it,
 // from rp's first current ancestor that is sub and reports Attached=True.
 func attachedCondition(d *PolicyRelationDTO, rp relatedPolicy, sub policy.Subject) {
 	for _, a := range rp.p.Ancestors {
-		c := objects.FindCondition(a.Conditions, "Attached")
-		if !a.Current || c == nil || c.Status != metav1.ConditionTrue || a.Ref.SectionName != sub.SectionName || a.Ref.Port != sub.Port {
+		if !a.Current || !policy.Attached(a, rp.p.Generation) || a.Ref.SectionName != sub.SectionName || a.Ref.Port != sub.Port {
 			continue
 		}
+		c := objects.FindCondition(a.Conditions, "Attached")
 		dc := condition(rp.u, *c)
 		d.Condition = &dc
 		if k := slices.IndexFunc(a.Readings, func(r policy.Reading) bool { return r.Type == "Attached" && r.Note != "" }); k >= 0 {

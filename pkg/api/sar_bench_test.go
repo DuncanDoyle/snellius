@@ -940,9 +940,13 @@ func TestBudgetSARPoliciesLarge(t *testing.T) {
 			h := build(newAuthz(c, clk, nil, lifted), api.WithSecureMode(), api.WithCommitClock(clk.Now))
 			cold := get(h, c, "u", path)
 			t.Logf("%-16s %s cold %d SARs (%d list, %d get) → %d", v.name, strings.TrimPrefix(path, base), cold.sars, c.lists.Load(), c.gets.Load(), cold.code)
-			// denied-list may not open the Service detail (404), as in TestBudgetSARDeniedList.
-			if cold.code != http.StatusOK && cold.code != http.StatusNotFound || cold.sars > bound[path] {
-				t.Errorf("%s: cold %s %d with %d SARs (bound %d)", v.name, path, cold.code, cold.sars, bound[path])
+			// Every viewer opens every page, but denied-list the Service detail, as in TestBudgetSARDeniedList.
+			want := http.StatusOK
+			if v.name == "denied-list" && path == svc {
+				want = http.StatusNotFound
+			}
+			if cold.code != want || cold.sars > bound[path] {
+				t.Errorf("%s: cold %s %d (want %d) with %d SARs (bound %d)", v.name, path, cold.code, want, cold.sars, bound[path])
 			}
 		}
 	}

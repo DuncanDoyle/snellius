@@ -41,6 +41,10 @@ type Inputs struct {
 	Targeter computed.PolicyTargeter
 	// ScopeKnown is false when the install's discovery scope is unknown (D-024).
 	ScopeKnown bool
+	// ListenerSetKinds are the kinds Relations treats as ListenerSets: a route's ListenerSet
+	// parent is its two-hop join, and a ListenerSet subject walks its own parentRef. Nil
+	// means Gateway API's ListenerSet and XListenerSet.
+	ListenerSetKinds []objects.GroupKind
 }
 
 // TargetCheck is the outcome of one targetRef (design §5.2).

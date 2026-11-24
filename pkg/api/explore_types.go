@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,6 +28,11 @@ const (
 	// LinkNone: denied, absent, never served or not admitted (D-013).
 	LinkNone Link = "none"
 )
+
+// A policy's link is neither: it is its detail endpoint path, which policyLink builds (D-136).
+
+// isPolicy reports whether l is a policy link: the policy detail endpoint path (D-136).
+func (l Link) isPolicy() bool { return strings.HasPrefix(string(l), "/") }
 
 // LinkedRef is a reference with its link.
 type LinkedRef struct {
