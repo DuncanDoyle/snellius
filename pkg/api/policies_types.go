@@ -28,8 +28,12 @@ type PolicyRow struct {
 	Targets []PolicyTargetDTO `json:"targets"`
 	// Accepted is the worst Accepted over the current ancestors; nil when none reports one.
 	Accepted *PolicyAcceptedDTO `json:"accepted,omitempty"`
+	// AcceptedSource is Accepted's source, also when it is nil: inferred.
+	AcceptedSource policy.Source `json:"acceptedSource"`
 	// AttachedOn are the current ancestors that report Attached=True.
 	AttachedOn []PolicyAttachedDTO `json:"attachedOn"`
+	// AttachedOnSource is controller-reported when AttachedOn lists ancestors, inferred when it is empty.
+	AttachedOnSource policy.Source `json:"attachedOnSource"`
 	// Features are the spec sections other than the targets, by key.
 	Features []PolicyFeatureDTO `json:"features"`
 	Problems PolicyProblemsDTO  `json:"problems"`
@@ -128,15 +132,18 @@ type PolicyDetail struct {
 	YAML       string `json:"yaml,omitempty"`
 	Generation int64  `json:"generation"`
 	// Interpreted is true when the install's pack reads this kind.
-	Interpreted bool                  `json:"interpreted"`
-	Targets     []PolicyTargetDTO     `json:"targets"`
-	Ancestors   []PolicyAncestorDTO   `json:"ancestors"`
-	Accepted    *PolicyAcceptedDTO    `json:"accepted,omitempty"`
-	AttachedOn  []PolicyAttachedDTO   `json:"attachedOn"`
-	Features    []PolicyFeatureDTO    `json:"features"`
-	Annotations []PolicyAnnotationDTO `json:"annotations"`
-	Problems    PolicyProblemsDTO     `json:"problems"`
-	CollectedAt time.Time             `json:"collectedAt"`
+	Interpreted bool                `json:"interpreted"`
+	Targets     []PolicyTargetDTO   `json:"targets"`
+	Ancestors   []PolicyAncestorDTO `json:"ancestors"`
+	Accepted    *PolicyAcceptedDTO  `json:"accepted,omitempty"`
+	// AcceptedSource and AttachedOnSource are as on PolicyRow.
+	AcceptedSource   policy.Source         `json:"acceptedSource"`
+	AttachedOn       []PolicyAttachedDTO   `json:"attachedOn"`
+	AttachedOnSource policy.Source         `json:"attachedOnSource"`
+	Features         []PolicyFeatureDTO    `json:"features"`
+	Annotations      []PolicyAnnotationDTO `json:"annotations"`
+	Problems         PolicyProblemsDTO     `json:"problems"`
+	CollectedAt      time.Time             `json:"collectedAt"`
 }
 
 // PolicyAncestorDTO is one status.ancestors entry with its conditions

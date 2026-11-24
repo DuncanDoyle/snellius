@@ -99,6 +99,9 @@ type Basis struct {
 	Collection bool
 	// Refs are the objects an own-object analyzer named, present or absent.
 	Refs []objects.Ref
+	// Strict says a viewer must read each of Refs as a population member and by name,
+	// not either: a policy ancestor's finding, as the policy page judges the ancestor.
+	Strict bool
 	// text is a collection finding's fixed Detail, which names no object, for Project.
 	text string
 }

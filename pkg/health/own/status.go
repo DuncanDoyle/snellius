@@ -143,15 +143,16 @@ func policyAncestors(ic InstallContext, u *unstructured.Unstructured, named Name
 		owner := append([]string{OwnerAncestor}, RefKey(ar)...)
 		owner = append(owner, a.AncestorRef.SectionName, strconv.Itoa(int(a.AncestorRef.Port)))
 		for _, t := range append(slices.Clone(required), optional...) {
+			// A condition older than the policy says nothing about it now (D-135).
 			cond := objects.FindCondition(a.Conditions, t)
-			if cond == nil || fromStatus && cond.Reason == "TargetNotFound" {
+			if cond == nil || objects.IsStale(u, *cond) || fromStatus && cond.Reason == "TargetNotFound" {
 				continue
 			}
 			if sev, report := policySeverity(*cond); report {
 				// Each ancestor's finding rests on that ancestor only, so another one never withholds it;
 				// a ListenerSet's also on its parent Gateway, which its ownership comes from (D-134).
 				f := conditionFinding(sev, *cond, extra, owner)
-				f.basis = []objects.Ref{ar}
+				f.basis, f.strict = []objects.Ref{ar}, true
 				if ls, ok := named.Object(ar); ok && inCategory(ic, ar.Group, ar.Kind, kinds.CategoryListenerSet) {
 					gw := objects.ListenerSetParent(ls).Ref()
 					named.Object(gw)
