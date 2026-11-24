@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -502,6 +503,47 @@ func TestListOnlyPolicyMakesNoAttachedRelation(t *testing.T) {
 			if r.Policy.Kind == "DirectResponse" {
 				t.Errorf("%s: DirectResponse relation %+v on gw-000", user, r)
 			}
+		}
+	}
+}
+
+// failingTP is relChecker, except that a list of TrafficPolicies in the hidden namespace fails.
+type failingTP struct{}
+
+func (failingTP) Check(ctx context.Context, id oidc.Identity, a sar.Attributes) (bool, error) {
+	if a.Resource == "trafficpolicies" && a.Namespace == hiddenNS {
+		return false, errors.New("SAR unavailable")
+	}
+	return relChecker{}.Check(ctx, id, a)
+}
+
+// denyHiddenTP is a downstream authoriser that refuses TrafficPolicies in the hidden namespace.
+type denyHiddenTP struct{}
+
+func (denyHiddenTP) Authorize(_ *http.Request, ref objects.Ref) bool {
+	return ref.Kind != "TrafficPolicy" || ref.Namespace != hiddenNS
+}
+
+func (d denyHiddenTP) AuthorizeNamedErr(r *http.Request, ref objects.Ref) (bool, error) {
+	return d.Authorize(r, ref), nil
+}
+
+func (denyHiddenTP) CanList(_ *http.Request, gk objects.GroupKind, ns string) (bool, error) {
+	return gk.Kind != "TrafficPolicy" || ns != hiddenNS, nil
+}
+
+// A policy the downstream authoriser denies asks no access check, so a failing one in its
+// otherwise unqueried bucket cannot turn a readable subject detail into a 503 (8.2 review #1).
+func TestDeniedPolicyAsksNoCheck(t *testing.T) {
+	denied := tp(hiddenNS, "tp-denied-anc", []any{targetRef(gatewaysGroup, "HTTPRoute", "hidden-route", "")}, attachedAncestor(gw0()[0], "Merged"))
+	narrow := func(a api.Authorizer) api.Authorizer { return api.Narrowed{Base: a, Policy: denyHiddenTP{}} }
+	absent := policyServeWith(t, relEngine(t, ruleChange{name: "base"}), failingTP{}, narrow)
+	present := policyServeWith(t, relEngine(t, ruleChange{name: "denied", apply: func(s ruleSnap) { s.add(denied) }}), failingTP{}, narrow)
+	for _, path := range []string{gwPath(ns0, relGW.Name), svcPath(ns0, "shared"), lsPath(ns0, lsAllName)} {
+		ac, ab := fetch(t, absent, restrictedUser, path)
+		pc, pb := fetch(t, present, restrictedUser, path)
+		if ac != http.StatusOK || pc != ac || pb != ab {
+			t.Errorf("%s: %d without the denied policy, %d with it:\n%.300s", path, ac, pc, pb)
 		}
 	}
 }

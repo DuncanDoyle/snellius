@@ -35,7 +35,11 @@ type relatedPolicy struct {
 // (design §6.5), made by policy.Relations with the policies endpoints' guard and Lookup. Only
 // policies the caller may view as members take part (design §7 items 1 and 5).
 func (h *handler) policyRelations(p *engine.Published, i *engine.InstallModel, v *view, l linker, s objects.Ref, g relationGroups) PolicyRelationsDTO {
-	all := candidatePolicies(p.Model, installPolicies(i), s)
+	// A candidate the downstream authoriser denies asks no check: a failing one must not
+	// answer the request for a policy it never shows (8.2 review #1).
+	all := slices.DeleteFunc(candidatePolicies(p.Model, installPolicies(i), s), func(u *unstructured.Unstructured) bool {
+		return !v.readsAll() && !v.policyAllows(objects.RefOf(u), false)
+	})
 	v.prefetch(func(add func(objects.Ref)) {
 		for _, u := range all {
 			add(objects.RefOf(u))
