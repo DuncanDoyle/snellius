@@ -52,8 +52,10 @@ func (h *handler) policyRelations(p *engine.Published, i *engine.InstallModel, v
 			continue
 		}
 		pol := policy.Read(u, pr.interp, pr.guard)
-		// Only an ancestor that is s can relate, so no other is judged.
-		pol.Ancestors = slices.DeleteFunc(pol.Ancestors, func(a policy.Ancestor) bool { return a.Ref.Ref() != s })
+		// Only an ancestor that is s can relate, so no other is judged. A list-only kind's
+		// ancestors feed only its findings (D-129, design §6.6).
+		listOnly := slices.ContainsFunc(p.Model.Served, func(k kinds.Served) bool { return k.ListOnly && k.Group == ref.Group && k.Kind == ref.Kind })
+		pol.Ancestors = slices.DeleteFunc(pol.Ancestors, func(a policy.Ancestor) bool { return listOnly || a.Ref.Ref() != s })
 		pr.gate(&pol)
 		gk := objects.GroupKind{Group: ref.Group, Kind: ref.Kind}
 		if ref.Namespace == s.Namespace && !slices.Contains(out.Selectors.Kinds, gk) &&

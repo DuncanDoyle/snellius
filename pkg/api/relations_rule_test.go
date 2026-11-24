@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	sigsyaml "sigs.k8s.io/yaml"
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/pkg/api"
@@ -450,5 +453,55 @@ func TestPolicyLinkOnlyByName(t *testing.T) {
 	}
 	if code, _ := fetch(t, srv, fullUser, tpPath(ns0, "tp-gw")); code != http.StatusNotFound {
 		t.Errorf("tp-gw detail %d, want 404: the test does not deny the name", code)
+	}
+}
+
+// fixtureDirectResponse is kgateway 2.3's DirectResponse fixture with a live-like status:
+// in ns0, reported Accepted and Attached on gw-000 by the install's controller.
+func fixtureDirectResponse(t *testing.T) *unstructured.Unstructured {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "policy", "testdata", "kgateway-2.3.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for doc := range strings.SplitSeq(string(b), "\n---\n") {
+		j, err := sigsyaml.YAMLToJSON([]byte(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		u := &unstructured.Unstructured{}
+		if err := u.UnmarshalJSON(j); err != nil {
+			t.Fatal(err)
+		}
+		if u.GetKind() != "DirectResponse" {
+			continue
+		}
+		u.SetNamespace(ns0)
+		as, _, _ := unstructured.NestedSlice(u.Object, "status", "ancestors")
+		ref := as[0].(map[string]any)["ancestorRef"].(map[string]any)
+		ref["namespace"], ref["name"] = ns0, relGW.Name
+		_ = unstructured.SetNestedSlice(u.Object, as, "status", "ancestors")
+		return u
+	}
+	t.Fatal("no DirectResponse in the 2.3 fixture")
+	return nil
+}
+
+// A list-only policy's ancestors feed only its findings (D-129, design §6.6): a
+// DirectResponse reported Attached on gw-000 is not "reported attached here" (8.2 review #2).
+func TestListOnlyPolicyMakesNoAttachedRelation(t *testing.T) {
+	dr := fixtureDirectResponse(t)
+	srv := policyServeWith(t, relEngine(t, ruleChange{name: "dr", apply: func(s ruleSnap) { s.add(dr) }}), relChecker{}, nil)
+	row := policyRowOf(t, decode[api.PoliciesResponse](t, srv, fullUser, policiesPath+"?limit=200"), kgwGroup, ns0, dr.GetName())
+	if len(row.AttachedOn) != 1 {
+		t.Fatalf("DirectResponse attached on %v: the ancestor is not current, so the test is vacuous", row.AttachedOn)
+	}
+	for _, user := range []string{fullUser, restrictedUser} {
+		rel := decode[relBody](t, srv, user, gwPath(ns0, relGW.Name)).PolicyRelations
+		for _, r := range slices.Concat(rel.Targeting, deref(rel.AttachedHere)) {
+			if r.Policy.Kind == "DirectResponse" {
+				t.Errorf("%s: DirectResponse relation %+v on gw-000", user, r)
+			}
+		}
 	}
 }
