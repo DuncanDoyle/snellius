@@ -359,20 +359,24 @@ func BlockFreshness(u *unstructured.Unstructured, cs []metav1.Condition, require
 }
 
 // PolicyFreshness is BlockFreshness for one status.ancestors entry of policy u.
-// A Pending reason holds the block only on Accepted: kgateway keeps
-// Attached=False/Pending beside a definitive Accepted, so Accepted decides.
+// Accepted alone decides (D-135): kgateway keeps Attached=False/Pending beside a
+// definitive Accepted, and an older Attached does not make the block stale.
 func PolicyFreshness(u *unstructured.Unstructured, cs []metav1.Condition) (why, kind string, observed int64) {
 	return blockFreshness(u, cs, PolicyRequired(), PolicyOptional(), false)
 }
 
-// blockFreshness is BlockFreshness; pendingOptional makes a Pending optional condition hold the block too.
+// blockFreshness is BlockFreshness; pendingOptional makes an optional condition judged too, stale or Pending.
 func blockFreshness(u *unstructured.Unstructured, cs []metav1.Condition, required, optional []string, pendingOptional bool) (why, kind string, observed int64) {
 	if crdDefaultOnly(cs) {
 		return NoControllerStatus, FreshnessNeverWritten, 0
 	}
 	types := [2][]string{required, optional}
+	judged := types[:1]
+	if pendingOptional {
+		judged = types[:]
+	}
 	stale, gen := false, u.GetGeneration() // objects.IsStale's comparison, with the generation read once
-	for _, ts := range types {
+	for _, ts := range judged {
 		for _, t := range ts {
 			if c := objects.FindCondition(cs, t); c != nil && c.ObservedGeneration < gen && (!stale || c.ObservedGeneration < observed) {
 				stale, observed = true, c.ObservedGeneration
@@ -387,11 +391,7 @@ func blockFreshness(u *unstructured.Unstructured, cs []metav1.Condition, require
 			return fmt.Sprintf("No %s condition", t), FreshnessPending, 0
 		}
 	}
-	pendingTypes := types[:1]
-	if pendingOptional {
-		pendingTypes = types[:]
-	}
-	for _, ts := range pendingTypes {
+	for _, ts := range judged {
 		for _, t := range ts {
 			if c := objects.FindCondition(cs, t); c != nil && c.Reason == "Pending" {
 				return t + " is Pending", FreshnessPending, 0

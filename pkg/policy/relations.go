@@ -70,7 +70,7 @@ func Relations(s Subject, in Inputs) []Relation {
 			}
 		}
 		for _, a := range p.Ancestors {
-			if a.Current && a.Ref.Ref() == s.Ref && sectionMatches(s, a.Ref.SectionName, a.Ref.Port) && attached(a) {
+			if a.Current && a.Ref.Ref() == s.Ref && sectionMatches(s, a.Ref.SectionName, a.Ref.Port) && Attached(a, p.Generation) {
 				out = append(out, Relation{Policy: p.Ref, Subject: Subject{Ref: s.Ref, SectionName: a.Ref.SectionName, Port: a.Ref.Port},
 					Kind: RelationAttachedOnAncestor, Source: SourceControllerReported})
 			}
@@ -90,10 +90,11 @@ func sectionMatches(s Subject, section string, port int32) bool {
 	return s.SectionName == "" && s.Port == 0 || s.SectionName == section && s.Port == port
 }
 
-// attached reports whether a's Attached condition is True, whatever its reason.
-func attached(a Ancestor) bool {
+// Attached reports whether a's Attached condition is True, whatever its reason, and
+// describes generation gen of the policy: an older one is no attachment evidence (D-135).
+func Attached(a Ancestor, gen int64) bool {
 	c := objects.FindCondition(a.Conditions, "Attached")
-	return c != nil && c.Status == metav1.ConditionTrue
+	return c != nil && c.Status == metav1.ConditionTrue && c.ObservedGeneration >= gen
 }
 
 // hop is one parentRef walked; unsectioned means only targetRefs without a section relate.

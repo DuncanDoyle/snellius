@@ -21,6 +21,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/auth/sar"
 	"github.com/DuncanDoyle/snellius/pkg/engine"
+	"github.com/DuncanDoyle/snellius/pkg/health"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/policy"
@@ -544,6 +545,50 @@ func TestDeniedPolicyAsksNoCheck(t *testing.T) {
 		pc, pb := fetch(t, present, restrictedUser, path)
 		if ac != http.StatusOK || pc != ac || pb != ab {
 			t.Errorf("%s: %d without the denied policy, %d with it:\n%.300s", path, ac, pc, pb)
+		}
+	}
+}
+
+// genPolicy is a TrafficPolicy ns0/name at generation 2 on gw-000, reported with
+// Accepted (reason) at generation 2 and Attached (status) at generation 1.
+func genPolicy(name string, accepted metav1.ConditionStatus, reason string, attached metav1.ConditionStatus) *unstructured.Unstructured {
+	acc, att := testutil.Cond("Accepted", accepted, reason), testutil.Cond("Attached", attached, "Pending")
+	acc.ObservedGeneration = 2
+	if attached == metav1.ConditionTrue {
+		att.Reason = "Attached"
+	}
+	u := tp(ns0, name, []any{targetGW("")}, testutil.PolicyAncestor{Ref: gw0()[0], Controller: testutil.Controller, Conds: []metav1.Condition{acc, att}})
+	u.SetGeneration(2)
+	return u
+}
+
+// A policy ancestor's freshness follows Accepted's generation alone (D-135): a current
+// rejection beside an older Attached raises KGWUI-002, not "not yet processed", and counts
+// in the summary; an older Attached=True is no attachment evidence (8.2 review #5).
+func TestPolicyFreshnessOnAcceptedAlone(t *testing.T) {
+	rejected, olderAttached := genPolicy("tp-rejected", metav1.ConditionFalse, "Invalid", metav1.ConditionFalse),
+		genPolicy("tp-older-attached", metav1.ConditionTrue, "Accepted", metav1.ConditionTrue)
+	srv := policyServeWith(t, relEngine(t, ruleChange{name: "gen", apply: func(s ruleSnap) { s.add(rejected, olderAttached) }}), relChecker{}, nil)
+	codes := map[string]string{}
+	for _, f := range decode[api.Page[api.FindingRow]](t, srv, fullUser, ruleBase+"/findings?limit=200").Items {
+		if f.Resource != nil && f.Resource.Kind == "TrafficPolicy" && f.Resource.Namespace == ns0 {
+			codes[f.Resource.Name] += f.Code + " "
+		}
+	}
+	if codes["tp-rejected"] != health.CodeConditionFalse+" " || codes["tp-older-attached"] != "" {
+		t.Errorf("findings %v, want KGWUI-002 on tp-rejected only", codes)
+	}
+	rows := decode[api.PoliciesResponse](t, srv, fullUser, policiesPath+"?limit=200")
+	if r := policyRowOf(t, rows, kgwGroup, ns0, "tp-rejected"); r.Accepted == nil || r.Accepted.Status != metav1.ConditionFalse || !r.Problems.Has {
+		t.Errorf("tp-rejected row %+v: want Accepted False with problems", r)
+	}
+	if r := policyRowOf(t, rows, kgwGroup, ns0, "tp-older-attached"); r.Accepted == nil || r.Accepted.Status != metav1.ConditionTrue || len(r.AttachedOn) != 0 {
+		t.Errorf("tp-older-attached row %+v: want current Accepted True and no attachedOn", r)
+	}
+	rel := decode[relBody](t, srv, fullUser, gwPath(ns0, relGW.Name)).PolicyRelations
+	for _, r := range deref(rel.AttachedHere) {
+		if r.Policy.Name == "tp-older-attached" || r.Policy.Name == "tp-rejected" {
+			t.Errorf("%s reported attached on gw-000", r.Policy.Name)
 		}
 	}
 }

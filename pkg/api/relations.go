@@ -3,7 +3,6 @@ package api
 import (
 	"slices"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/DuncanDoyle/snellius/pkg/computed"
@@ -147,10 +146,10 @@ func declaredParents(m *engine.Model, s objects.Ref) []objects.Ref {
 // from rp's first current ancestor that is sub and reports Attached=True.
 func attachedCondition(d *PolicyRelationDTO, rp relatedPolicy, sub policy.Subject) {
 	for _, a := range rp.p.Ancestors {
-		c := objects.FindCondition(a.Conditions, "Attached")
-		if !a.Current || c == nil || c.Status != metav1.ConditionTrue || a.Ref.SectionName != sub.SectionName || a.Ref.Port != sub.Port {
+		if !a.Current || !policy.Attached(a, rp.p.Generation) || a.Ref.SectionName != sub.SectionName || a.Ref.Port != sub.Port {
 			continue
 		}
+		c := objects.FindCondition(a.Conditions, "Attached")
 		dc := condition(rp.u, *c)
 		d.Condition = &dc
 		if k := slices.IndexFunc(a.Readings, func(r policy.Reading) bool { return r.Type == "Attached" && r.Note != "" }); k >= 0 {

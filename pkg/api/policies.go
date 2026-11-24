@@ -194,7 +194,7 @@ func (e *policyEntry) accepted() *PolicyAcceptedDTO {
 func (e *policyEntry) attachedOn() []PolicyAttachedDTO {
 	out := []PolicyAttachedDTO{}
 	for _, a := range e.p.Ancestors {
-		if c := objects.FindCondition(a.Conditions, "Attached"); a.Current && c != nil && c.Status == metav1.ConditionTrue {
+		if a.Current && policy.Attached(a, e.p.Generation) {
 			out = append(out, PolicyAttachedDTO{ParentRef: a.Ref, Source: policy.SourceControllerReported})
 		}
 	}
