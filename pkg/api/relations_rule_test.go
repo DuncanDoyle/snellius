@@ -840,10 +840,11 @@ func (d denyPolicy) AuthorizeNamedErr(r *http.Request, ref objects.Ref) (bool, e
 func (denyPolicy) CanList(*http.Request, objects.GroupKind, string) (bool, error) { return true, nil }
 
 // With every check answering, a policy the downstream authoriser denies changes no byte or
-// status of the policy list, the policy detail or a subject detail (D-085, D-137).
+// status of the policy list, any policy detail, a subject detail or the findings (D-085, D-137).
 func TestDownstreamDeniedPolicyChangesNothing(t *testing.T) {
+	// tp-down is attached on gw-000 and rejected on ls-all, a current KGWUI-002.
 	down := tp(ns0, "tp-down", []any{targetGW("http"), targetRef(gatewaysGroup, "ListenerSet", lsAllName, ""), targetRef(gatewaysGroup, "HTTPRoute", relSect, "")},
-		attachedAncestor(gw0()[0], "Merged"), attachedAncestor(lsAllRef, "Attached"))
+		attachedAncestor(gw0()[0], "Merged"), ancestor(lsAllRef, testutil.Controller, metav1.ConditionFalse, metav1.ConditionFalse))
 	down.Object["spec"].(map[string]any)["targetSelectors"] = []any{map[string]any{"group": gatewaysGroup, "kind": "HTTPRoute", "matchLabels": map[string]any{"app": "x"}}}
 	add := ruleChange{name: "down", apply: func(s ruleSnap) { s.add(down) }}
 	narrow := func(a api.Authorizer) api.Authorizer {
@@ -851,7 +852,11 @@ func TestDownstreamDeniedPolicyChangesNothing(t *testing.T) {
 	}
 	absent := policyServeWith(t, relEngine(t, ruleChange{name: "base"}), relChecker{}, narrow)
 	present := policyServeWith(t, relEngine(t, add), relChecker{}, narrow)
-	surfaces := append(slices.Clone(relSubjects), slices.Concat(policySurfaces[:6], []string{tpPath(ns0, "tp-down")})...)
+	// The subject details, the policy lists, the denied policy's detail, readable policies'
+	// details and the findings, where tp-down's KGWUI-002 would appear.
+	surfaces := append(slices.Clone(relSubjects), slices.Concat(policySurfaces[:6], []string{tpPath(ns0, "tp-down"), tpPath(ns0, "tp-gw"),
+		tpPath(ns0, "tp-ls"), tpPath(ns0, tpAncestors), ruleBase + "/findings?limit=200", ruleBase + "/findings?view=groups&limit=200",
+		ruleBase + "/health", ruleBase + "/overview"})...)
 	for _, path := range surfaces {
 		ac, ab := fetch(t, absent, restrictedUser, path)
 		pc, pb := fetch(t, present, restrictedUser, path)
@@ -862,15 +867,15 @@ func TestDownstreamDeniedPolicyChangesNothing(t *testing.T) {
 	// Without the downstream authoriser the policy reaches the restricted viewer.
 	plainAbsent := policyServeWith(t, relEngine(t, ruleChange{name: "base"}), relChecker{}, nil)
 	plainPresent := policyServeWith(t, relEngine(t, add), relChecker{}, nil)
-	moved := 0
+	var moved []string
 	for _, path := range surfaces {
 		_, a := fetch(t, plainAbsent, restrictedUser, path)
 		if _, p := fetch(t, plainPresent, restrictedUser, path); a != p {
-			moved++
+			moved = append(moved, path)
 		}
 	}
-	if moved < 5 {
-		t.Errorf("tp-down moves only %d surfaces without the downstream authoriser: the test is weak", moved)
+	if len(moved) < 5 || !slices.Contains(moved, ruleBase+"/findings?limit=200") {
+		t.Errorf("without the downstream authoriser tp-down moves only %v: the test is weak", moved)
 	}
 }
 
