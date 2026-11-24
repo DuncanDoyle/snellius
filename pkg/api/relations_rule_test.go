@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -755,5 +756,34 @@ func TestPolicyDetailNamedBeforeFullRead(t *testing.T) {
 		if code, body := fetch(t, srv, restrictedUser, policyPath(kgwGroup, "HTTPListenerPolicy", hiddenNS, name)); code != http.StatusNotFound {
 			t.Errorf("%s: %d %.200s, want 404", name, code, body)
 		}
+	}
+}
+
+// A policy-ancestor KGWUI-002 needs list and named access to each object it rests on, as
+// the policy page's currentness does: a viewer who may list gw-000 but not get it by name sees
+// the ancestor unreadable and is not shown the finding (8.2 re-review: 002 basis).
+func TestPolicyAncestorFindingNeedsListAndName(t *testing.T) {
+	rejected := tp(ns0, "tp-gw-rejected", []any{targetGW("")}, ancestor(gw0()[0], testutil.Controller, metav1.ConditionFalse, metav1.ConditionFalse))
+	e := relEngine(t, ruleChange{name: "rejected", apply: func(s ruleSnap) { s.add(rejected) }})
+	plain := policyServeWith(t, e, relChecker{}, nil)
+	narrowed := policyServeWith(t, e, relChecker{}, func(a api.Authorizer) api.Authorizer {
+		return api.Narrowed{Base: a, Policy: denyNamed{name: relGW.Name}}
+	})
+	shown := func(srv *httptest.Server) bool {
+		for _, f := range decode[api.Page[api.FindingRow]](t, srv, restrictedUser, ruleBase+"/findings?limit=200").Items {
+			if f.Code == health.CodeConditionFalse && f.Resource != nil && f.Resource.Name == rejected.GetName() {
+				return true
+			}
+		}
+		return false
+	}
+	if !shown(plain) {
+		t.Fatal("the restricted viewer sees no KGWUI-002 on tp-gw-rejected without the narrowing: the test is vacuous")
+	}
+	if shown(narrowed) {
+		t.Error("a viewer denied gw-000 by name is shown the KGWUI-002 about it")
+	}
+	if d := decode[api.PolicyDetail](t, narrowed, restrictedUser, tpPath(ns0, rejected.GetName())); len(d.Ancestors) != 1 || d.Ancestors[0].NotCurrent != policy.NotCurrentUnreadable {
+		t.Errorf("ancestor %+v, want unreadable", d.Ancestors)
 	}
 }

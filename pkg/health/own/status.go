@@ -152,7 +152,7 @@ func policyAncestors(ic InstallContext, u *unstructured.Unstructured, named Name
 				// Each ancestor's finding rests on that ancestor only, so another one never withholds it;
 				// a ListenerSet's also on its parent Gateway, which its ownership comes from (D-134).
 				f := conditionFinding(sev, *cond, extra, owner)
-				f.basis = []objects.Ref{ar}
+				f.basis, f.strict = []objects.Ref{ar}, true
 				if ls, ok := named.Object(ar); ok && inCategory(ic, ar.Group, ar.Kind, kinds.CategoryListenerSet) {
 					gw := objects.ListenerSetParent(ls).Ref()
 					named.Object(gw)
