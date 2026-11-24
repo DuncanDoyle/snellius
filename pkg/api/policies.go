@@ -432,7 +432,6 @@ func (h *handler) policies(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	l := h.linker(v, p, i, nil, nil)
 	items := make([]PolicyRow, 0, len(pg.refs))
 	start := 0
 	if len(pg.refs) > 0 {
@@ -440,7 +439,7 @@ func (h *handler) policies(w http.ResponseWriter, r *http.Request) {
 	}
 	for k := range pg.refs {
 		e := &entries[start+k]
-		items = append(items, PolicyRow{Ref: l.linked(e.p.Ref), Targets: e.targets(nil), Accepted: e.accepted(), AttachedOn: e.attachedOn(),
+		items = append(items, PolicyRow{Ref: linkedPolicy(v, i.Resolved.ID(), e.p.Ref), Targets: e.targets(nil), Accepted: e.accepted(), AttachedOn: e.attachedOn(),
 			Features: e.features(false), Problems: PolicyProblemsDTO{Has: problems[e.p.Ref], Source: policy.SourceInferred}})
 	}
 	denied := v.deniedInInstall(len(all), func(id explore.RowID) objects.Ref { return objects.RefOf(all[id]) })
@@ -508,13 +507,33 @@ func (h *handler) policyDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// policyLink is the link of policy ref: the path of its detail endpoint, "-" for the empty group (D-136).
+func policyLink(installID string, ref objects.Ref) Link {
+	return Link(installPath(installID, "policies", ref))
+}
+
+// linkedPolicy is policy ref as a list row or relation names it: linked to its detail
+// only when the caller may get it by name, as the detail asks (8.2 review #3).
+func linkedPolicy(v *view, installID string, ref objects.Ref) PolicyRefDTO {
+	out := PolicyRefDTO{Ref: ref}
+	if v.canNamed(ref) {
+		out.Link = policyLink(installID, ref)
+	}
+	return out
+}
+
 // yamlPath is the install-scoped YAML path of ref; "-" stands for the empty group or namespace.
 func yamlPath(installID string, ref objects.Ref) string {
+	return installPath(installID, "resources", ref)
+}
+
+// installPath is the install-scoped path of ref under section; "-" stands for the empty group or namespace.
+func installPath(installID, section string, ref objects.Ref) string {
 	dash := func(s string) string {
 		if s == "" {
 			return "-"
 		}
 		return url.PathEscape(s)
 	}
-	return "/api/v1/installs/" + url.PathEscape(installID) + "/resources/" + dash(ref.Group) + "/" + url.PathEscape(ref.Kind) + "/" + dash(ref.Namespace) + "/" + url.PathEscape(ref.Name)
+	return "/api/v1/installs/" + url.PathEscape(installID) + "/" + section + "/" + dash(ref.Group) + "/" + url.PathEscape(ref.Kind) + "/" + dash(ref.Namespace) + "/" + url.PathEscape(ref.Name)
 }

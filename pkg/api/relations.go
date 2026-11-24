@@ -68,7 +68,7 @@ func (h *handler) policyRelations(p *engine.Published, i *engine.InstallModel, v
 	})
 	parent, attached := []PolicyRelationDTO{}, []PolicyRelationDTO{}
 	for _, r := range policy.Relations(policy.Subject{Ref: s}, policy.Inputs{Policies: in, Lookup: pr.in.Lookup}) {
-		d := PolicyRelationDTO{Policy: l.linked(r.Policy), Relation: r.Kind, Source: r.Source, SectionName: r.Subject.SectionName, Port: r.Subject.Port}
+		d := PolicyRelationDTO{Policy: linkedPolicy(v, i.Resolved.ID(), r.Policy), Relation: r.Kind, Source: r.Source, SectionName: r.Subject.SectionName, Port: r.Subject.Port}
 		switch r.Kind {
 		case policy.RelationTargets:
 			out.Targeting = append(out.Targeting, d)

@@ -169,7 +169,7 @@
           "policy": {
             "group": "gateway.kgateway.dev",
             "kind": "TrafficPolicy",
-            "link": "detail",
+            "link": "/api/v1/installs/kgw.kgateway/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp",
             "name": "tp",
             "namespace": "shop"
           },
@@ -182,7 +182,7 @@
           "policy": {
             "group": "gateway.kgateway.dev",
             "kind": "TrafficPolicy",
-            "link": "detail",
+            "link": "/api/v1/installs/kgw.kgateway/policies/gateway.kgateway.dev/TrafficPolicy/infra/tp-edge",
             "name": "tp-edge",
             "namespace": "infra"
           },

@@ -217,7 +217,7 @@ func TestGoldenLinksAgreeWithEndpoints(t *testing.T) {
 			dp, hasDetail := detailPath(l.ref)
 			switch l.link {
 			case LinkDetail:
-				if !hasDetail {
+				if !hasDetail || strings.HasPrefix(dp, "/policies/") {
 					t.Errorf("%s: detail link on %v, a kind without a detail view", tc.golden, l.ref)
 					continue
 				}
@@ -226,6 +226,12 @@ func TestGoldenLinksAgreeWithEndpoints(t *testing.T) {
 				wantStatus(t, tc, res, 200)
 			case LinkBackend:
 				wantStatus(t, tc, installBase+backendDetailPath(l.ref), 200)
+			case Link(installBase + dp):
+				// A policy link is its detail endpoint path (D-136).
+				if !strings.HasPrefix(dp, "/policies/") {
+					t.Errorf("%s: path link %q on %v, a kind that is not a policy", tc.golden, l.link, l.ref)
+				}
+				wantStatus(t, tc, string(l.link), 200)
 			case LinkNone:
 				wantStatus(t, tc, res, 404)
 				wantStatus(t, tc, installBase+backendDetailPath(l.ref), 404)

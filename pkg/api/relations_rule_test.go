@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -301,7 +302,7 @@ func TestPolicyRelationsPerSubject(t *testing.T) {
 				t.Errorf("%s as %s: selectors %+v, want kinds %v", tc.path, user, rel.Selectors, want)
 			}
 			for _, r := range slices.Concat(rel.Targeting, deref(rel.TargetingParent), deref(rel.AttachedHere)) {
-				if r.Policy.Link != api.LinkDetail || r.Policy.Group == "" {
+				if r.Policy.Link != api.Link(policyPath(r.Policy.Group, r.Policy.Kind, r.Policy.Namespace, r.Policy.Name)) || r.Policy.Group == "" {
 					t.Errorf("%s as %s: policy %+v does not link its detail with its group", tc.path, user, r.Policy)
 				}
 			}
@@ -417,5 +418,37 @@ func TestPolicyRelationsLabelsCopy(t *testing.T) {
 	}
 	if len(ls) < 100 {
 		t.Fatalf("only %d labels checked", len(ls))
+	}
+}
+
+// A policy link is given only to a viewer who may get the policy by name, as its detail
+// asks; the row and the relation stay for a member the authoriser denies by name (8.2 review #3).
+func TestPolicyLinkOnlyByName(t *testing.T) {
+	srv := policyServeWith(t, relEngine(t, ruleChange{name: "base"}), relChecker{}, func(a api.Authorizer) api.Authorizer {
+		return api.Narrowed{Base: a, Policy: denyNamed{name: "tp-gw"}}
+	})
+	rel := decode[relBody](t, srv, fullUser, gwPath(ns0, relGW.Name)).PolicyRelations
+	if rel == nil || rel.AttachedHere == nil {
+		t.Fatal("no relations")
+	}
+	links := map[string]api.Link{}
+	for _, r := range slices.Concat(rel.Targeting, *rel.AttachedHere) {
+		links[r.Policy.Name] = r.Policy.Link
+	}
+	if l, ok := links["tp-gw"]; !ok || l != "" {
+		t.Errorf("tp-gw relation present %v with link %q, want present without a link", ok, l)
+	}
+	if l := links["tp-listener"]; l != api.Link(tpPath(ns0, "tp-listener")) {
+		t.Errorf("tp-listener link %q", l)
+	}
+	code, body := fetch(t, srv, fullUser, policiesPath+"?limit=200")
+	if code != http.StatusOK || !strings.Contains(body, `"name":"tp-gw"}`) {
+		t.Errorf("tp-gw row is missing or linked: %d %.300s", code, body)
+	}
+	if row := policyRowOf(t, decode[api.PoliciesResponse](t, srv, fullUser, policiesPath+"?limit=200"), kgwGroup, ns0, "tp-listener"); row.Ref.Link != api.Link(tpPath(ns0, "tp-listener")) {
+		t.Errorf("tp-listener row link %q", row.Ref.Link)
+	}
+	if code, _ := fetch(t, srv, fullUser, tpPath(ns0, "tp-gw")); code != http.StatusNotFound {
+		t.Errorf("tp-gw detail %d, want 404: the test does not deny the name", code)
 	}
 }

@@ -23,7 +23,7 @@ type PoliciesResponse struct {
 // PolicyRow is one policy in the list.
 type PolicyRow struct {
 	// Ref is the policy, kind with group; its link opens the policy detail.
-	Ref LinkedRef `json:"ref"`
+	Ref PolicyRefDTO `json:"ref"`
 	// Targets are the targetRefs, then the targetSelectors, as written; refs carry their check.
 	Targets []PolicyTargetDTO `json:"targets"`
 	// Accepted is the worst Accepted over the current ancestors; nil when none reports one.
@@ -199,12 +199,19 @@ type PolicyRelationsDTO struct {
 	Selectors PolicySelectorsDTO `json:"selectors"`
 }
 
+// PolicyRefDTO is a policy in a list row or relation. Link is the policy detail endpoint path,
+// set only when the caller may get the policy by name; a member it may not open has none.
+type PolicyRefDTO struct {
+	objects.Ref
+	Link Link `json:"link,omitempty"`
+}
+
 // PolicyRelationDTO is one relation between a policy and the subject. SectionName and
 // Port are the section or port the targetRef or ancestor names; Via is the declared
 // parentRef path a targets-parent relation walked, the policy naming its last hop.
 // Condition, Note and NoteSource are set on attached-on-ancestor relations only.
 type PolicyRelationDTO struct {
-	Policy      LinkedRef           `json:"policy"`
+	Policy      PolicyRefDTO        `json:"policy"`
 	Relation    policy.RelationKind `json:"relation"`
 	Source      policy.Source       `json:"source"`
 	SectionName string              `json:"sectionName,omitempty"`

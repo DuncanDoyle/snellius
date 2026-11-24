@@ -50,7 +50,7 @@
         "ref": {
           "group": "gateway.kgateway.dev",
           "kind": "DirectResponse",
-          "link": "detail",
+          "link": "/api/v1/installs/kgw.kgateway/policies/gateway.kgateway.dev/DirectResponse/shop/dr",
           "name": "dr",
           "namespace": "shop"
         },
@@ -85,7 +85,7 @@
         "ref": {
           "group": "gateway.kgateway.dev",
           "kind": "TrafficPolicy",
-          "link": "detail",
+          "link": "/api/v1/installs/kgw.kgateway/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp",
           "name": "tp",
           "namespace": "shop"
         },
