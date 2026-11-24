@@ -36,7 +36,8 @@ type relatedPolicy struct {
 func (h *handler) policyRelations(p *engine.Published, i *engine.InstallModel, v *view, l linker, s objects.Ref, g relationGroups) PolicyRelationsDTO {
 	// A candidate the downstream authoriser denies asks no check: a failing one must not
 	// answer the request for a policy it never shows (8.2 review #1).
-	all := slices.DeleteFunc(candidatePolicies(p.Model, installPolicies(i), s), func(u *unstructured.Unstructured) bool {
+	lsKinds := policy.Inputs{ListenerSetKinds: listenerSetKinds(p.Model.Served)}
+	all := slices.DeleteFunc(candidatePolicies(p.Model, installPolicies(i), s, lsKinds), func(u *unstructured.Unstructured) bool {
 		return !v.readsAll() && !v.policyAllows(objects.RefOf(u), false)
 	})
 	v.prefetch(func(add func(objects.Ref)) {
@@ -72,7 +73,7 @@ func (h *handler) policyRelations(p *engine.Published, i *engine.InstallModel, v
 		return compareAffected(objects.Ref{Group: a.Group, Kind: a.Kind}, objects.Ref{Group: b.Group, Kind: b.Kind})
 	})
 	parent, attached := []PolicyRelationDTO{}, []PolicyRelationDTO{}
-	for _, r := range policy.Relations(policy.Subject{Ref: s}, policy.Inputs{Policies: in, Lookup: pr.in.Lookup}) {
+	for _, r := range policy.Relations(policy.Subject{Ref: s}, policy.Inputs{Policies: in, Lookup: pr.in.Lookup, ListenerSetKinds: lsKinds.ListenerSetKinds}) {
 		d := PolicyRelationDTO{Policy: linkedPolicy(v, i.Resolved.ID(), r.Policy), Relation: r.Kind, Source: r.Source, SectionName: r.Subject.SectionName, Port: r.Subject.Port}
 		switch r.Kind {
 		case policy.RelationTargets:
@@ -101,9 +102,9 @@ func (h *handler) policyRelations(p *engine.Published, i *engine.InstallModel, v
 // policy.Relations may walk, an ancestor that is s, or a targetSelector of s's kind in s's namespace.
 // Any other policy makes no relation and no selector kind for any viewer, so leaving it out
 // changes no response; only the checks asked shrink.
-func candidatePolicies(m *engine.Model, all []*unstructured.Unstructured, s objects.Ref) []*unstructured.Unstructured {
+func candidatePolicies(m *engine.Model, all []*unstructured.Unstructured, s objects.Ref, ls policy.Inputs) []*unstructured.Unstructured {
 	named := map[objects.Ref]bool{s: true}
-	for _, r := range declaredParents(m, s) {
+	for _, r := range declaredParents(m, s, ls) {
 		named[r] = true
 	}
 	return slices.DeleteFunc(slices.Clone(all), func(u *unstructured.Unstructured) bool {
@@ -118,17 +119,13 @@ func candidatePolicies(m *engine.Model, all []*unstructured.Unstructured, s obje
 
 // declaredParents are the parents policy.Relations may walk from s (design §5.3): a route's
 // parentRefs and, for a ListenerSet among them, its parent Gateway; a ListenerSet's own parentRef.
-// It may name more than Relations walks, never fewer.
-func declaredParents(m *engine.Model, s objects.Ref) []objects.Ref {
+// ls classifies ListenerSets as Relations does. It may name more than Relations walks, never fewer.
+func declaredParents(m *engine.Model, s objects.Ref, ls policy.Inputs) []objects.Ref {
 	u, _ := stored(m, s)
 	if u == nil {
 		return nil
 	}
-	isLS := func(r objects.Ref) bool {
-		return slices.ContainsFunc(m.Served, func(k kinds.Served) bool {
-			return k.Category == kinds.CategoryListenerSet && k.Group == r.Group && k.Kind == r.Kind
-		})
-	}
+	isLS := func(r objects.Ref) bool { return ls.IsListenerSet(objects.GroupKind{Group: r.Group, Kind: r.Kind}) }
 	if isLS(s) {
 		return []objects.Ref{objects.ListenerSetParent(u).Ref()}
 	}
@@ -137,6 +134,17 @@ func declaredParents(m *engine.Model, s objects.Ref) []objects.Ref {
 		out = append(out, pr.Ref())
 		if ls, _ := stored(m, pr.Ref()); ls != nil && isLS(pr.Ref()) {
 			out = append(out, objects.ListenerSetParent(ls).Ref())
+		}
+	}
+	return out
+}
+
+// listenerSetKinds are the served ListenerSet kinds, upstream and downstream (E7).
+func listenerSetKinds(served []kinds.Served) []objects.GroupKind {
+	out := []objects.GroupKind{}
+	for _, k := range served {
+		if k.Category == kinds.CategoryListenerSet {
+			out = append(out, objects.GroupKind{Group: k.Group, Kind: k.Kind})
 		}
 	}
 	return out

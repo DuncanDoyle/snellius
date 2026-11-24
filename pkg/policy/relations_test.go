@@ -197,3 +197,38 @@ func TestRelationsGroupCollision(t *testing.T) {
 		t.Errorf("relations %+v, want both groups, ordered by group after namespace and name", got)
 	}
 }
+
+// The caller names the ListenerSet kinds (E7): a downstream ListenerSet kind gets its own
+// parent relation and is a route's second hop, as an upstream one is (8.2 review #7).
+func TestRelationsCallerListenerSetKinds(t *testing.T) {
+	const acme = "listeners.acme.example"
+	w, us := relationWorld()
+	als := obj(acme, "v1", "AcmeListenerSet", "infra", "als", map[string]any{"parentRef": map[string]any{"group": gw, "kind": "Gateway", "name": "gw"}})
+	r := route("shop", "r-als", map[string]any{"group": acme, "kind": "AcmeListenerSet", "namespace": "infra", "name": "als"})
+	w.objs[objects.RefOf(als)], w.objs[objects.RefOf(r)] = als, r
+	us = append(us, trafficPolicy("infra", "p-als", []map[string]any{targetRef(acme, "AcmeListenerSet", "als", "")}))
+	var ps []policy.Policy
+	for _, u := range us {
+		ps = append(ps, policy.Read(u, nil, guard()))
+	}
+	in := policy.Inputs{Policies: ps, Lookup: w, ListenerSetKinds: []objects.GroupKind{{Group: gw, Kind: "ListenerSet"}, {Group: acme, Kind: "AcmeListenerSet"}}}
+	for _, c := range []struct {
+		subject objects.Ref
+		want    []string
+	}{
+		{objects.RefOf(r), []string{
+			"targets-parent infra/p-als declared -> HTTPRoute shop/r-als via AcmeListenerSet infra/als",
+			"targets-parent infra/p-gw declared -> HTTPRoute shop/r-als via AcmeListenerSet infra/als, Gateway infra/gw"}},
+		{objects.RefOf(als), []string{
+			"targets infra/p-als declared -> AcmeListenerSet infra/als",
+			"targets-parent infra/p-gw declared -> AcmeListenerSet infra/als via Gateway infra/gw"}},
+	} {
+		var got []string
+		for _, x := range policy.Relations(policy.Subject{Ref: c.subject}, in) {
+			got = append(got, rel(x))
+		}
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s:\n got %q\nwant %q", c.subject, got, c.want)
+		}
+	}
+}
