@@ -38,7 +38,7 @@ func (h *handler) policyRelations(p *engine.Published, i *engine.InstallModel, v
 	// answer the request for a policy it never shows (8.2 review #1).
 	lsKinds := policy.Inputs{ListenerSetKinds: listenerSetKinds(p.Model.Served)}
 	all := slices.DeleteFunc(candidatePolicies(p.Model, installPolicies(i), s, lsKinds), func(u *unstructured.Unstructured) bool {
-		return !v.readsAll() && !v.policyAllows(objects.RefOf(u), false)
+		return v.downstreamDenies(objects.RefOf(u), false)
 	})
 	v.prefetch(func(add func(objects.Ref)) {
 		for _, u := range all {
