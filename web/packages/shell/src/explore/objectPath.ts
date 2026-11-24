@@ -24,6 +24,13 @@ export function policyPath(installId: string, r: Ref): string {
   );
 }
 
+/** The policy page of a policy link (D-136), which is the policy endpoint's path; undefined for any other link. */
+function policyLinkPath(installId: string, link: string): string | undefined {
+  const m = /^\/api\/v1\/installs\/[^/]+\/policies\/([^/]+\/[^/]+\/[^/]+\/[^/]+)$/.exec(link);
+  // The segments are already escaped as the endpoint takes them; the page uses the same four.
+  return m ? installPath(installId, `policies/${m[1]}`) : undefined;
+}
+
 // region Helpers
 const GATEWAY_API = "gateway.networking.k8s.io";
 const ROUTE_KINDS = new Set(["HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"]);
@@ -41,6 +48,8 @@ export function setPolicyKinds(kinds: readonly { group: string; kind: string; ca
  * backend → its backend page (D-079), none or an unknown value → undefined.
  */
 export function objectPath(installId: string, r: LinkedRef): string | undefined {
+  const policy = r.link ? policyLinkPath(installId, r.link) : undefined;
+  if (policy) return policy;
   if (r.link === "yaml") return resourcePath(installId, r);
   if (r.link === "backend") return backendPath(installId, r);
   if (r.link !== "detail") return undefined;

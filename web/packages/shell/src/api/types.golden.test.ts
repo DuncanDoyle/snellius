@@ -243,6 +243,8 @@ interface Shape {
   enums: Record<string, Record<string, 1>>;
   /** A tagged union: the member shape named by the value of key. */
   tagged?: { key: string; by: Record<string, Shape> };
+  /** Values a key also admits besides its enum, e.g. a template-literal type. */
+  patterns?: Record<string, RegExp>;
 }
 const shape = <T>(
   keys: Spec<T>,
@@ -276,7 +278,11 @@ const delegationRefEnums = {
 } as const;
 
 const ref = shape<Ref>({ group: "!", kind: "!", namespace: "?", name: "!" });
-const linkedRef = shape<LinkedRef>({ group: "!", kind: "!", namespace: "?", name: "!", link: "!" }, {}, link);
+// A policy link is the policy endpoint's path (D-136); the pattern admits it beside the named links.
+const linkedRef: Shape = {
+  ...shape<LinkedRef>({ group: "!", kind: "!", namespace: "?", name: "!", link: "?" }, {}, link),
+  patterns: { link: /^\/api\/v1\/installs\/[^/]+\/policies\/[^/]+\/[^/]+\/[^/]+\/[^/]+$/ },
+};
 const trailRefs = shape<TrailRefs>({ install: "!", refs: "!" }, { refs: linkedRef });
 // Typed evidence (sub-phase 3.2): one shape per kind, chosen by the kind tag.
 const termination = shape<TerminationFacts>({
@@ -1692,7 +1698,7 @@ function problems(s: Shape, v: unknown, path: string): string[] {
     const e = s.enums[k];
     if (e)
       for (const [i, x] of (Array.isArray(o[k]) ? o[k] : [o[k]]).entries())
-        if (typeof x !== "string" || !Object.hasOwn(e, x))
+        if (typeof x !== "string" || (!Object.hasOwn(e, x) && !s.patterns?.[k]?.test(x)))
           out.push(`${path}.${k}${Array.isArray(o[k]) ? `[${i}]` : ""}: ${JSON.stringify(x)} not in types.ts`);
   }
   return out;
@@ -1828,6 +1834,20 @@ describe("types.ts matches the golden v1 wire format", () => {
     expect(problems(page(delegationRow), body, "body")).toEqual([
       'body.items[0].computed.state: "bogus" not in types.ts',
     ]);
+  });
+
+  it("admits a policy link as the policy endpoint path and nothing else (8.2 review #8)", () => {
+    const body = structuredClone(policiesGolden.body);
+    const row = body.items[0] as { ref: { link?: string } };
+    row.ref.link = "/api/v1/installs/kgw.kgateway/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp";
+    expect(problems(policiesResponse, body, "body")).toEqual([]);
+    row.ref.link = "/api/v1/installs/kgw.kgateway/routes/x";
+    expect(problems(policiesResponse, body, "body")).toEqual([
+      'body.items[0].ref.link: "/api/v1/installs/kgw.kgateway/routes/x" not in types.ts',
+    ]);
+    // A policy the viewer may not get by name carries no link.
+    delete row.ref.link;
+    expect(problems(policiesResponse, body, "body")).toEqual([]);
   });
 
   it("checks evidence against the member its kind names", () => {

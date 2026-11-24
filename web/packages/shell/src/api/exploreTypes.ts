@@ -6,10 +6,15 @@ import type { LabelSelector, Ref, RowReason } from "./types";
 /** Mirrors the explorer DTOs of pkg/api/explore_types.go as built (sub-phases 2.2 and 2.3, design §7.3). */
 
 /** How a reference may be opened; rendered as given, never derived from a kind (design §7.1, D-079). An unknown value opens nothing. */
-export type Link = "detail" | "yaml" | "backend" | "none";
-/** A reference with its server-computed link; the link sits flat beside the ref fields. */
+export type Link = "detail" | "yaml" | "backend" | "none" | PolicyLinkPath;
+/** A policy's link (D-136): the policy endpoint's path, /api/v1/installs/{id}/policies/{group}/{kind}/{ns}/{name}. */
+export type PolicyLinkPath = `/api/v1/installs/${string}`;
+/**
+ * A reference with its server-computed link; the link sits flat beside the ref fields. A policy the viewer may not
+ * get by name has no link (8.2 review #3).
+ */
 export interface LinkedRef extends Ref {
-  link: Link;
+  link?: Link;
 }
 /** GET …/refs: the trail's objects with their links, in request order (design §17.6). */
 export interface TrailRefs {

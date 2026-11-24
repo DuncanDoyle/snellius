@@ -83,3 +83,21 @@ test("a policy kind's detail link opens the policy page, with its group; /meta n
     "/i/a.b/listenersets/acme.io/EdgeSet/shop/tp",
   );
 });
+
+test("a policy link carries the policies endpoint path and opens the policy page without /meta (8.2 review #8)", () => {
+  // An unregistered kind in another group: only the link itself can say where it goes.
+  const r = { group: "acme.io", kind: "AcmePolicy", namespace: "shop", name: "p" };
+  expect(objectPath("kgw.a", { ...r, link: "/api/v1/installs/kgw.a/policies/acme.io/AcmePolicy/shop/p" })).toBe(
+    "/i/kgw.a/policies/acme.io/AcmePolicy/shop/p",
+  );
+  // An empty group is "-" in the path, as the endpoint takes it.
+  expect(objectPath("kgw.a", { ...r, group: "", link: "/api/v1/installs/kgw.a/policies/-/AcmePolicy/shop/p" })).toBe(
+    "/i/kgw.a/policies/-/AcmePolicy/shop/p",
+  );
+  // An install ID that needs escaping is encoded once.
+  expect(objectPath("a/b c", { ...r, link: "/api/v1/installs/a%2Fb%20c/policies/acme.io/AcmePolicy/shop/p" })).toBe(
+    "/i/a%2Fb%20c/policies/acme.io/AcmePolicy/shop/p",
+  );
+  // A link without a destination stays text.
+  expect(objectPath("kgw.a", { ...r } as LinkedRef)).toBeUndefined();
+});

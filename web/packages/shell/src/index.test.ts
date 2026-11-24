@@ -256,6 +256,7 @@ it("keeps the public export surface", () => {
         "PolicyDetail",
         "PolicyFacets",
         "PolicyFeature",
+        "PolicyLinkPath",
         "PolicyNotCurrent",
         "PolicyProblems",
         "PolicyReading",
