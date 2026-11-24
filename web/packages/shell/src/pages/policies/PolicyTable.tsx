@@ -5,7 +5,6 @@ import type { Page, PolicyRow } from "../../api/types";
 import { ancestorText, attachedCopy, policiesCopy, policyColumnCopy, policyDetailCopy } from "../../copy/policies";
 import type { SortState } from "../../explore/listQuery";
 import { type ObjectColumn, ObjectTable } from "../../explore/ObjectTable";
-import { policyPath } from "../../explore/objectPath";
 import { SourceTag } from "../../explore/SourceTag";
 import { HealthIcon } from "../../health/HealthIcon";
 import { Muted, NameCell, OneLine } from "../explore/listParts";
@@ -29,7 +28,8 @@ function columns(installId: string): ObjectColumn<PolicyRow>[] {
     {
       id: "name",
       header: policyColumnCopy.policy,
-      cell: (r) => <NameCell r={r.ref} installId={installId} to={policyPath(installId, r.ref)} />,
+      // The API links only a policy the viewer may open by name; otherwise the name is text (8.2 review #3).
+      cell: (r) => <NameCell r={r.ref} installId={installId} />,
     },
     {
       id: "kind",
@@ -45,11 +45,13 @@ function columns(installId: string): ObjectColumn<PolicyRow>[] {
       cell: (r) => {
         if (!r.targets.length) return <Muted>{policyDetailCopy.noTargets}</Muted>;
         const text = r.targets.map(targetCellText).join(" · ");
-        const missing = r.targets.some(checkFails);
+        const failed = r.targets.find(checkFails);
+        // The header tags the targets as written; a failing check is a verdict with its own source (8.2 review #9).
         return (
           <IconLine>
-            {missing ? <HealthIcon state="error" /> : null}
+            {failed ? <HealthIcon state="error" /> : null}
             <OneLine text={text} />
+            {failed?.check ? <SourceTag source={failed.check.source} /> : null}
           </IconLine>
         );
       },
@@ -76,7 +78,11 @@ function columns(installId: string): ObjectColumn<PolicyRow>[] {
         r.attachedOn.length ? (
           <OneLine text={r.attachedOn.map(ancestorText).join(" · ")} />
         ) : (
-          <Muted>{attachedCopy.none}</Muted>
+          // No current ancestor reports it attached: Snellius's summary, not a report (8.2 review #9).
+          <IconLine>
+            <Muted>{attachedCopy.none}</Muted>
+            <SourceTag source="inferred" />
+          </IconLine>
         ),
     },
     {
@@ -118,7 +124,6 @@ export function PolicyTable({
   stylesOverride,
 }: PolicyTableProps) {
   const cols = useMemo(() => columns(installId), [installId]);
-  const rowPath = useMemo(() => (r: PolicyRow) => policyPath(installId, r.ref), [installId]);
   return (
     <ObjectTable
       label={policiesCopy.title}
@@ -126,7 +131,6 @@ export function PolicyTable({
       noun={policiesCopy.noun}
       columns={cols}
       rowRef={rowRef}
-      rowPath={rowPath}
       page={page}
       loading={!page}
       busy={busy}

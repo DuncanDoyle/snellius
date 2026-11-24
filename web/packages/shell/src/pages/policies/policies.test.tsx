@@ -15,11 +15,36 @@ import { PolicyRelationsSection } from "./PolicyRelationsSection";
 const ID = "kgw.kgateway";
 const API = `/api/v1/installs/${ID}`;
 const now = () => new Date().toISOString();
+/**
+ * The body with each policy ref's link in the D-136 form, the policy endpoint's path. Goldens written before the API
+ * change carry "detail"; this leaves the path form as it is.
+ */
+function withPolicyLinks<T>(body: T): T {
+  const kinds = new Set([
+    "TrafficPolicy",
+    "ListenerPolicy",
+    "BackendConfigPolicy",
+    "DirectResponse",
+    "BackendTLSPolicy",
+  ]);
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      if (o.link === "detail" && typeof o.kind === "string" && kinds.has(o.kind))
+        o.link = `${API}/policies/${o.group || "-"}/${o.kind}/${o.namespace}/${o.name}`;
+      Object.values(o).forEach(walk);
+    }
+  };
+  const out = structuredClone(body);
+  walk(out);
+  return out;
+}
 const list = (): PoliciesResponse => ({
-  ...(structuredClone(listGolden.body) as PoliciesResponse),
+  ...withPolicyLinks(listGolden.body as PoliciesResponse),
   collectedAt: now(),
 });
-const detail = (): PolicyDetail => ({ ...(structuredClone(detailGolden.body) as PolicyDetail), collectedAt: now() });
+const detail = (): PolicyDetail => ({ ...withPolicyLinks(detailGolden.body as PolicyDetail), collectedAt: now() });
 
 /** Stubs fetch by pathname; anything else is a 404. */
 function serve(routes: Record<string, (u: URL) => unknown>) {
@@ -211,7 +236,7 @@ const asRef = (r: { group: string; kind: string; namespace?: string; name: strin
 });
 
 it("a Gateway lists policies targeting it and reported attached here, each linked to its policy page with a source", () => {
-  const d = gatewayGolden.body as unknown as GatewayDetail;
+  const d = withPolicyLinks(gatewayGolden.body as unknown as GatewayDetail);
   renderWithTheme(<PolicyRelationsSection installId={ID} subject={asRef(d.ref)} relations={d.policyRelations} />);
   const targeting = screen.getByTestId("relations-targeting");
   const attached = screen.getByTestId("relations-attached-here");
@@ -246,7 +271,7 @@ it("a Gateway lists policies targeting it and reported attached here, each linke
 });
 
 it("a route shows policies naming a parent with the fixed note and the path walked, and links selectors by kind", () => {
-  const d = structuredClone(routeGolden.body) as unknown as RouteDetail;
+  const d = withPolicyLinks(routeGolden.body as unknown as RouteDetail);
   d.policyRelations.selectors.kinds = [{ group: "gateway.kgateway.dev", kind: "TrafficPolicy" }];
   renderWithTheme(<PolicyRelationsSection installId={ID} subject={asRef(d.ref)} relations={d.policyRelations} />);
   const parent = screen.getByTestId("relations-targeting-parent");
@@ -262,7 +287,7 @@ it("a route shows policies naming a parent with the fixed note and the path walk
 });
 
 it("an empty group says so, and an older body without relations shows no section", () => {
-  const d = gatewayGolden.body as unknown as GatewayDetail;
+  const d = withPolicyLinks(gatewayGolden.body as unknown as GatewayDetail);
   const { unmount } = renderWithTheme(
     <PolicyRelationsSection
       installId={ID}
@@ -284,4 +309,59 @@ it("an ancestor waiting for status is marked so and left out of the summaries", 
   mount(`/i/${ID}/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp`);
   await screen.findByRole("heading", { name: copy.policyDetailCopy.summary });
   expect(screen.getByTestId("not-current")).toHaveTextContent(copy.notCurrentCopy.pending as string);
+});
+
+// region Review fixes (8.2 review #3, #9)
+it("a policy the viewer may not open by name is text, not a link, in the list and in relations (8.2 review #3)", async () => {
+  const l = list();
+  const named = l.items[0] as PolicyRow;
+  const { link: _, ...unlinked } = named.ref;
+  l.items[0] = { ...named, ref: unlinked as LinkedRef };
+  serve({ [`${API}/policies`]: () => l });
+  const { unmount } = mount(`/i/${ID}/policies`);
+  const table = await screen.findByRole("table", { name: copy.policiesCopy.title });
+  await waitFor(() => expect(table).toHaveAttribute("aria-busy", "false"));
+  const row = within(table).getAllByRole("row")[1] as HTMLElement;
+  expect(within(row).queryByRole("link")).toBeNull();
+  expect(row).toHaveTextContent(`${named.ref.namespace}/${named.ref.name}`);
+  // The row itself opens nothing either.
+  expect(row).not.toHaveAttribute("data-link");
+  unmount();
+  const d = withPolicyLinks(gatewayGolden.body as unknown as GatewayDetail);
+  const rel = d.policyRelations.targeting[0];
+  if (rel) delete (rel.policy as Partial<LinkedRef>).link;
+  renderWithTheme(<PolicyRelationsSection installId={ID} subject={asRef(d.ref)} relations={d.policyRelations} />);
+  const item = within(screen.getByTestId("relations-targeting")).getAllByTestId("policy-relation")[0] as HTMLElement;
+  expect(within(item).queryByRole("link")).toBeNull();
+});
+
+it("every tag follows the API's source fields (8.2 review #9)", async () => {
+  // List: a failing target check carries its own inferred tag; an empty attached-on summary is inferred.
+  serve({ [`${API}/policies`]: list });
+  const { unmount } = mount(`/i/${ID}/policies`);
+  const table = await screen.findByRole("table", { name: copy.policiesCopy.title });
+  await waitFor(() => expect(table).toHaveAttribute("aria-busy", "false"));
+  const gone = within(table)
+    .getByText(/HTTPRoute gone/)
+    .closest("td") as HTMLElement;
+  expect(within(gone).getByTestId("source-tag")).toHaveAttribute("data-source", "inferred");
+  const emptyAttached = [...table.querySelectorAll('td[data-col="attachedOn"]')].find((td) =>
+    td.textContent?.includes(copy.attachedCopy.none),
+  ) as HTMLElement;
+  expect(within(emptyAttached).getByTestId("source-tag")).toHaveAttribute("data-source", "inferred");
+  unmount();
+  // Detail: an empty attached-on summary is inferred; a stale condition carries staleSource.
+  const d = detail();
+  d.attachedOn = [];
+  const other = d.ancestors[1];
+  if (other) other.staleSource = "inferred";
+  serve({ [`${API}/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp`]: () => d });
+  mount(`/i/${ID}/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp`);
+  await screen.findByRole("heading", { name: copy.policyDetailCopy.summary });
+  expect(within(screen.getByTestId("policy-attached-on")).getByTestId("source-tag")).toHaveAttribute(
+    "data-source",
+    "inferred",
+  );
+  const stale = within(screen.getAllByTestId("policy-ancestor")[1] as HTMLElement).getByTestId("stale-source");
+  expect(within(stale).getByTestId("source-tag")).toHaveAttribute("data-source", "inferred");
 });

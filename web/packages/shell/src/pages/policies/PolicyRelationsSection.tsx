@@ -4,7 +4,6 @@ import type { LinkedRef, PolicyRelation, PolicyRelationHop, PolicyRelations } fr
 import { readingNoteCopy, relationsCopy } from "../../copy/policies";
 import { conditionState } from "../../explore/ConditionList";
 import { LinkedName } from "../../explore/LinkedName";
-import { policyPath } from "../../explore/objectPath";
 import { SourceTag } from "../../explore/SourceTag";
 import { HealthIcon } from "../../health/HealthIcon";
 import { installPath } from "../../shell/paths";
@@ -101,12 +100,8 @@ function Item({ installId, r }: { installId: string; r: PolicyRelation }) {
   return (
     <li data-testid="policy-relation">
       <span className="kind">{r.policy.kind}</span>
-      <LinkedName
-        refValue={r.policy}
-        installId={installId}
-        // Every policy link opens its detail page, with its group.
-        to={r.policy.link === "none" ? undefined : policyPath(installId, r.policy)}
-      />
+      {/* Opens where the API's link says; a policy the viewer may not open by name is text (8.2 review #3). */}
+      <LinkedName refValue={r.policy} installId={installId} />
       {where ? <span className="muted">({where})</span> : null}
       {r.via?.length ? (
         <span className="muted" data-testid="relation-via">

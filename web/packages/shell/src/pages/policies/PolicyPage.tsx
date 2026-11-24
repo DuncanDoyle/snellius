@@ -212,6 +212,7 @@ function AncestorItem({ installId, a, generation }: { installId: string; a: Poli
         conditions={a.conditions}
         generation={generation}
         stateOf={(c) => (reading(c)?.warning && !c.stale ? "warning" : conditionState(c))}
+        staleExtra={<SourceTag source={a.staleSource} />}
         extra={(c) => {
           const note = reading(c)?.note;
           return note ? (
@@ -285,7 +286,8 @@ export function PolicyPage({ stylesOverride }: PolicyPageProps = {}) {
               <dd>
                 <Line data-testid="policy-attached-on">
                   {data.attachedOn.length ? data.attachedOn.map(ancestorText).join(" · ") : attachedCopy.none}
-                  <SourceTag source="controller-reported" />
+                  {/* The entries are reported; an empty summary is Snellius's (8.2 review #9). */}
+                  <SourceTag source={data.attachedOn[0]?.source ?? "inferred"} />
                 </Line>
               </dd>
               <dt>{policyDetailCopy.problems}</dt>

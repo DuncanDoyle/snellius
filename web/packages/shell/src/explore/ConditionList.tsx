@@ -84,6 +84,8 @@ interface ConditionListProps {
   stateOf?: (c: Condition) => HealthState;
   /** The head text per condition; defaults to "<Type>: <Status>". */
   headOf?: (c: Condition) => ReactNode;
+  /** After a stale condition's freshness line, e.g. the source of that judgment. */
+  staleExtra?: ReactNode;
   stylesOverride?: SerializedStyles;
 }
 
@@ -95,6 +97,7 @@ export function ConditionList({
   extra,
   stateOf = conditionState,
   headOf,
+  staleExtra,
   stylesOverride,
 }: ConditionListProps) {
   if (!conditions.length) return <None>{empty ?? detailCopy.noConditions}</None>;
@@ -112,6 +115,7 @@ export function ConditionList({
             <span className="fresh">
               <HealthIcon state="unknown" size={14} />
               {detailCopy.stale(c.observedGeneration, generation)}
+              {staleExtra ? <span data-testid="stale-source">{staleExtra}</span> : null}
             </span>
           ) : null}
           {extra?.(c)}
