@@ -69,7 +69,9 @@ export function useList<T, P extends { install: string } = Page<T>>(id: string, 
   // Relies on SWR keying its cache by the same withQuery string passed to useSWR.
   const own = cache.get(rKey)?.data !== undefined;
   const data = own || !r.error ? forInstall(r.data, id) : undefined;
-  return { data, error: r.error, mutate: r.mutate, cursorRejected, isLaggy: !own && data !== undefined };
+  // Busy reads SWR's isLoading, which re-renders when it flips; the cache read alone misses an answer that
+  // deep-equals the rows already shown.
+  return { data, error: r.error, mutate: r.mutate, cursorRejected, isLaggy: r.isLoading && data !== undefined };
 }
 
 function useDetail<T extends { install: string }>(id: string, path: string) {
