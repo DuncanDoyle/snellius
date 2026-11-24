@@ -214,11 +214,11 @@ function AncestorItem({ installId, a, generation }: { installId: string; a: Poli
         stateOf={(c) => (reading(c)?.warning && !c.stale ? "warning" : conditionState(c))}
         staleExtra={<SourceTag source={a.staleSource} />}
         extra={(c) => {
-          const note = reading(c)?.note;
-          return note ? (
+          const r = reading(c);
+          return r?.note ? (
             <Line className="note" data-testid="reading-note">
-              {readingNoteCopy[note] ?? note}
-              <SourceTag source={reading(c)?.source ?? "inferred"} />
+              {readingNoteCopy[r.note] ?? r.note}
+              <SourceTag source={r.source} />
             </Line>
           ) : null;
         }}
@@ -279,15 +279,14 @@ export function PolicyPage({ stylesOverride }: PolicyPageProps = {}) {
                 <Line data-testid="policy-accepted">
                   <HealthIcon state={acceptedState(data.accepted)} />
                   {acceptedText(data.accepted)}
-                  <SourceTag source={data.accepted?.source ?? "inferred"} />
+                  {data.acceptedSource ? <SourceTag source={data.acceptedSource} /> : null}
                 </Line>
               </dd>
               <dt>{policyDetailCopy.attachedOn}</dt>
               <dd>
                 <Line data-testid="policy-attached-on">
                   {data.attachedOn.length ? data.attachedOn.map(ancestorText).join(" · ") : attachedCopy.none}
-                  {/* The entries are reported; an empty summary is Snellius's (8.2 review #9). */}
-                  <SourceTag source={data.attachedOn[0]?.source ?? "inferred"} />
+                  {data.attachedOnSource ? <SourceTag source={data.attachedOnSource} /> : null}
                 </Line>
               </dd>
               <dt>{policyDetailCopy.problems}</dt>

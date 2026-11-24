@@ -1590,7 +1590,16 @@ const policyFeature = shape<PolicyFeature>(
 );
 const policyProblems = shape<PolicyProblems>({ has: "!", source: "!" }, {}, { source: policySource });
 const policyRow = shape<PolicyRow>(
-  { ref: "!", targets: "!", accepted: "?", attachedOn: "!", features: "!", problems: "!" },
+  {
+    ref: "!",
+    targets: "!",
+    accepted: "?",
+    acceptedSource: "?",
+    attachedOn: "!",
+    attachedOnSource: "?",
+    features: "!",
+    problems: "!",
+  },
   {
     ref: linkedRef,
     targets: policyTarget,
@@ -1599,6 +1608,7 @@ const policyRow = shape<PolicyRow>(
     features: policyFeature,
     problems: policyProblems,
   },
+  { acceptedSource: policySource, attachedOnSource: policySource },
 );
 const policiesResponse = shape<PoliciesResponse>(
   { ...pageKeys, facets: "!" },
@@ -1658,7 +1668,9 @@ const policyDetail = shape<PolicyDetail>(
     targets: "!",
     ancestors: "!",
     accepted: "?",
+    acceptedSource: "?",
     attachedOn: "!",
+    attachedOnSource: "?",
     features: "!",
     annotations: "!",
     problems: "!",
@@ -1674,6 +1686,7 @@ const policyDetail = shape<PolicyDetail>(
     annotations: shape<PolicyAnnotation>({ key: "!", value: "!", source: "!" }, {}, { source: policySource }),
     problems: policyProblems,
   },
+  { acceptedSource: policySource, attachedOnSource: policySource },
 );
 
 function problems(s: Shape, v: unknown, path: string): string[] {

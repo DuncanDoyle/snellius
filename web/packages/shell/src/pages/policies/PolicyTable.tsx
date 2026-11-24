@@ -59,31 +59,31 @@ function columns(installId: string): ObjectColumn<PolicyRow>[] {
     {
       id: "accepted",
       header: policyColumnCopy.accepted,
-      headerExtra: <SourceTag source="inferred" />,
       width: "18%",
       cell: (r) => (
         <IconLine data-testid="policy-accepted">
           <HealthIcon state={acceptedState(r.accepted)} />
           <OneLine text={acceptedText(r.accepted)} />
+          {r.acceptedSource ? <SourceTag source={r.acceptedSource} /> : null}
         </IconLine>
       ),
     },
     {
       id: "attachedOn",
       header: policyColumnCopy.attachedOn,
-      headerExtra: <SourceTag source="controller-reported" />,
       width: "17%",
       secondary: true,
-      cell: (r) =>
-        r.attachedOn.length ? (
-          <OneLine text={r.attachedOn.map(ancestorText).join(" · ")} />
-        ) : (
-          // No current ancestor reports it attached: Snellius's summary, not a report (8.2 review #9).
-          <IconLine>
+      // Every tag comes from the API's attachedOnSource, empty or not (8.2 re-review).
+      cell: (r) => (
+        <IconLine>
+          {r.attachedOn.length ? (
+            <OneLine text={r.attachedOn.map(ancestorText).join(" · ")} />
+          ) : (
             <Muted>{attachedCopy.none}</Muted>
-            <SourceTag source="inferred" />
-          </IconLine>
-        ),
+          )}
+          {r.attachedOnSource ? <SourceTag source={r.attachedOnSource} /> : null}
+        </IconLine>
+      ),
     },
     {
       id: "features",
