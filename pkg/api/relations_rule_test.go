@@ -825,3 +825,51 @@ func TestPolicyFindingLinkNeedsName(t *testing.T) {
 		}
 	}
 }
+
+// denyPolicy is a downstream authoriser that refuses one policy, as a member and by name.
+type denyPolicy struct{ name string }
+
+func (d denyPolicy) Authorize(_ *http.Request, ref objects.Ref) bool {
+	return ref.Kind != "TrafficPolicy" || ref.Name != d.name
+}
+
+func (d denyPolicy) AuthorizeNamedErr(r *http.Request, ref objects.Ref) (bool, error) {
+	return d.Authorize(r, ref), nil
+}
+
+func (denyPolicy) CanList(*http.Request, objects.GroupKind, string) (bool, error) { return true, nil }
+
+// With every check answering, a policy the downstream authoriser denies changes no byte or
+// status of the policy list, the policy detail or a subject detail (D-085, D-137).
+func TestDownstreamDeniedPolicyChangesNothing(t *testing.T) {
+	down := tp(ns0, "tp-down", []any{targetGW("http"), targetRef(gatewaysGroup, "ListenerSet", lsAllName, ""), targetRef(gatewaysGroup, "HTTPRoute", relSect, "")},
+		attachedAncestor(gw0()[0], "Merged"), attachedAncestor(lsAllRef, "Attached"))
+	down.Object["spec"].(map[string]any)["targetSelectors"] = []any{map[string]any{"group": gatewaysGroup, "kind": "HTTPRoute", "matchLabels": map[string]any{"app": "x"}}}
+	add := ruleChange{name: "down", apply: func(s ruleSnap) { s.add(down) }}
+	narrow := func(a api.Authorizer) api.Authorizer {
+		return api.Narrowed{Base: a, Policy: denyPolicy{name: "tp-down"}}
+	}
+	absent := policyServeWith(t, relEngine(t, ruleChange{name: "base"}), relChecker{}, narrow)
+	present := policyServeWith(t, relEngine(t, add), relChecker{}, narrow)
+	surfaces := append(slices.Clone(relSubjects), slices.Concat(policySurfaces[:6], []string{tpPath(ns0, "tp-down")})...)
+	for _, path := range surfaces {
+		ac, ab := fetch(t, absent, restrictedUser, path)
+		pc, pb := fetch(t, present, restrictedUser, path)
+		if ac != pc || ab != pb {
+			t.Errorf("%s changed for the restricted viewer:\n  %d %.400s\n  vs %d %.400s", path, ac, ab, pc, pb)
+		}
+	}
+	// Without the downstream authoriser the policy reaches the restricted viewer.
+	plainAbsent := policyServeWith(t, relEngine(t, ruleChange{name: "base"}), relChecker{}, nil)
+	plainPresent := policyServeWith(t, relEngine(t, add), relChecker{}, nil)
+	moved := 0
+	for _, path := range surfaces {
+		_, a := fetch(t, plainAbsent, restrictedUser, path)
+		if _, p := fetch(t, plainPresent, restrictedUser, path); a != p {
+			moved++
+		}
+	}
+	if moved < 5 {
+		t.Errorf("tp-down moves only %d surfaces without the downstream authoriser: the test is weak", moved)
+	}
+}
