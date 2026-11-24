@@ -481,7 +481,8 @@ func (h *handler) policyDetail(w http.ResponseWriter, r *http.Request) {
 	ref := objects.Ref{Group: group, Kind: r.PathValue("kind"), Namespace: r.PathValue("ns"), Name: r.PathValue("name")}
 	noteSubject(r, ref)
 	v := h.view(r)
-	if v.downstreamDenies(ref, true) || !v.canNamed(ref) {
+	// The downstream authoriser's named answer comes first, before any full-read probe (D-137).
+	if v.policy != nil && !v.policyAllows(ref, true) || !v.canNamed(ref) {
 		writeErr(w, http.StatusNotFound, notFoundInScope)
 		return
 	}

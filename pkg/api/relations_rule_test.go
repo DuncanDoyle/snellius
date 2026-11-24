@@ -734,3 +734,26 @@ func TestOlderNegativeAttachedIgnored(t *testing.T) {
 		t.Error("detail has problems")
 	}
 }
+
+// failingFullRead is relChecker, except that every cluster-wide list fails, so a full-read probe fails.
+type failingFullRead struct{}
+
+func (failingFullRead) Check(ctx context.Context, id oidc.Identity, a sar.Attributes) (bool, error) {
+	if a.Verb == "list" && a.Namespace == "" {
+		return false, errors.New("SAR unavailable")
+	}
+	return relChecker{}.Check(ctx, id, a)
+}
+
+// The policy detail asks about the name before any full-read probe: a policy the downstream
+// authoriser denies, present or absent, answers 404 without it (8.2 re-review: named first, D-137).
+func TestPolicyDetailNamedBeforeFullRead(t *testing.T) {
+	denied := testutil.Policy(kinds.KgatewayGroup+"/v1alpha1", "HTTPListenerPolicy", hiddenNS, "hlp-denied", attachedAncestor(hiddenGwRef("hidden-gw"), "Attached"))
+	narrow := func(a api.Authorizer) api.Authorizer { return api.Narrowed{Base: a, Policy: denyHiddenHLP{}} }
+	srv := policyServeWith(t, relEngine(t, ruleChange{name: "denied", apply: func(s ruleSnap) { s.add(denied) }}), failingFullRead{}, narrow)
+	for _, name := range []string{"hlp-denied", "hlp-absent"} {
+		if code, body := fetch(t, srv, restrictedUser, policyPath(kgwGroup, "HTTPListenerPolicy", hiddenNS, name)); code != http.StatusNotFound {
+			t.Errorf("%s: %d %.200s, want 404", name, code, body)
+		}
+	}
+}
