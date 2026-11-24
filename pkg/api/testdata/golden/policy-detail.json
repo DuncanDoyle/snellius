@@ -5,6 +5,7 @@
       "source": "inferred",
       "status": "True"
     },
+    "acceptedSource": "inferred",
     "ancestors": [
       {
         "conditions": [
@@ -95,6 +96,7 @@
         "source": "controller-reported"
       }
     ],
+    "attachedOnSource": "controller-reported",
     "collectedAt": "2026-10-17T12:00:00Z",
     "features": [
       {

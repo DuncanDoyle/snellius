@@ -673,3 +673,42 @@ func TestDeniedPolicyAsksNoCheckInPolicies(t *testing.T) {
 		t.Errorf("the full reader does not list hlp-denied (%d): the test is vacuous", code)
 	}
 }
+
+// Each summary names its source, also when it is empty: Accepted is inferred, and
+// attachedOn is controller-reported when it lists ancestors, inferred when Snellius
+// found none to list (8.2 re-review: summary sources).
+func TestPolicySummarySources(t *testing.T) {
+	srv := policyServeWith(t, relEngine(t, ruleChange{name: "base"}), relChecker{}, nil)
+	type sources struct {
+		Name             string `json:"name"`
+		AcceptedSource   string `json:"acceptedSource"`
+		AttachedOnSource string `json:"attachedOnSource"`
+	}
+	var list struct {
+		Items []struct {
+			Ref struct {
+				Name string `json:"name"`
+			} `json:"ref"`
+			AcceptedSource   string `json:"acceptedSource"`
+			AttachedOnSource string `json:"attachedOnSource"`
+		} `json:"items"`
+	}
+	_, body := fetch(t, srv, restrictedUser, policiesPath+"?limit=200&namespace="+ns0)
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]sources{}
+	for _, r := range list.Items {
+		got[r.Ref.Name] = sources{r.Ref.Name, r.AcceptedSource, r.AttachedOnSource}
+	}
+	for name, want := range map[string]string{"tp-gw": "controller-reported", "tp-listener": "inferred"} {
+		if s := got[name]; s.AcceptedSource != "inferred" || s.AttachedOnSource != want {
+			t.Errorf("row %s: %+v, want acceptedSource inferred and attachedOnSource %s", name, s, want)
+		}
+		var d sources
+		_, body := fetch(t, srv, restrictedUser, tpPath(ns0, name))
+		if err := json.Unmarshal([]byte(body), &d); err != nil || d.AcceptedSource != "inferred" || d.AttachedOnSource != want {
+			t.Errorf("detail %s: %+v, want acceptedSource inferred and attachedOnSource %s", name, d, want)
+		}
+	}
+}

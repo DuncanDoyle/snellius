@@ -201,6 +201,15 @@ func (e *policyEntry) attachedOn() []PolicyAttachedDTO {
 	return out
 }
 
+// attachedOnSource is the source of attached: controller-reported when it lists
+// ancestors, inferred when Snellius found none to list.
+func attachedOnSource(attached []PolicyAttachedDTO) policy.Source {
+	if len(attached) > 0 {
+		return policy.SourceControllerReported
+	}
+	return policy.SourceInferred
+}
+
 // features are e's spec sections; values only when withValues.
 func (e *policyEntry) features(withValues bool) []PolicyFeatureDTO {
 	out := make([]PolicyFeatureDTO, 0, len(e.p.Features))
@@ -442,8 +451,9 @@ func (h *handler) policies(w http.ResponseWriter, r *http.Request) {
 	}
 	for k := range pg.refs {
 		e := &entries[start+k]
-		items = append(items, PolicyRow{Ref: linkedPolicy(v, i.Resolved.ID(), e.p.Ref), Targets: e.targets(nil), Accepted: e.accepted(), AttachedOn: e.attachedOn(),
-			Features: e.features(false), Problems: PolicyProblemsDTO{Has: problems[e.p.Ref], Source: policy.SourceInferred}})
+		att := e.attachedOn()
+		items = append(items, PolicyRow{Ref: linkedPolicy(v, i.Resolved.ID(), e.p.Ref), Targets: e.targets(nil), Accepted: e.accepted(), AcceptedSource: policy.SourceInferred,
+			AttachedOn: att, AttachedOnSource: attachedOnSource(att), Features: e.features(false), Problems: PolicyProblemsDTO{Has: problems[e.p.Ref], Source: policy.SourceInferred}})
 	}
 	denied := v.deniedInInstall(len(all), func(id explore.RowID) objects.Ref { return objects.RefOf(all[id]) })
 	writeJSON(w, PoliciesResponse{Page: Page[PolicyRow]{Install: i.Resolved.ID(), Items: items, Total: len(refs), Next: pg.next, Prev: pg.prev,
@@ -481,8 +491,10 @@ func (h *handler) policyDetail(w http.ResponseWriter, r *http.Request) {
 	e := h.policyReader(p, i, v).read(all[k])
 	l := h.linker(v, p, i, nil, nil)
 	lh := policyHealth(l, ix, v.viewer(i))
+	att := e.attachedOn()
 	out := PolicyDetail{Install: i.Resolved.ID(), Ref: l.linkedNamed(ref), Generation: e.p.Generation, Interpreted: e.p.Interpreted,
-		Targets: e.targets(lh), Ancestors: make([]PolicyAncestorDTO, 0, len(e.p.Ancestors)), Accepted: e.accepted(), AttachedOn: e.attachedOn(),
+		Targets: e.targets(lh), Ancestors: make([]PolicyAncestorDTO, 0, len(e.p.Ancestors)), Accepted: e.accepted(), AcceptedSource: policy.SourceInferred,
+		AttachedOn: att, AttachedOnSource: attachedOnSource(att),
 		Features: e.features(true), Annotations: make([]PolicyAnnotationDTO, 0, len(e.p.Annotations)),
 		Problems: PolicyProblemsDTO{Has: e.problems(), Source: policy.SourceInferred}, CollectedAt: wireTime(p.ConfirmedAt)}
 	if l.admitNamed(ref) != LinkNone {
