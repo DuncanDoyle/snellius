@@ -220,6 +220,12 @@ func (v *view) readsAll() bool {
 	return v.all
 }
 
+// downstreamDenies reports whether v's policy already refuses ref, so asking the base
+// authoriser about it could only cost a check, or fail the request (8.2 review #1).
+func (v *view) downstreamDenies(ref objects.Ref, named bool) bool {
+	return v.policy != nil && !v.readsAll() && !v.policyAllows(ref, named)
+}
+
 // policyAllows reports whether v's policy, if any, lets the caller see ref.
 func (v *view) policyAllows(ref objects.Ref, named bool) bool {
 	switch {

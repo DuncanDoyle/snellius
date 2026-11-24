@@ -619,3 +619,57 @@ func TestListenerSetAncestorFindingNeedsItsGateway(t *testing.T) {
 		t.Errorf("restricted ancestor %+v, want unreadable", d.Ancestors)
 	}
 }
+
+// failingHLP is relChecker, except that a check on HTTPListenerPolicies in the hidden namespace fails.
+type failingHLP struct{}
+
+func (failingHLP) Check(ctx context.Context, id oidc.Identity, a sar.Attributes) (bool, error) {
+	if a.Resource == "httplistenerpolicies" && a.Namespace == hiddenNS {
+		return false, errors.New("SAR unavailable")
+	}
+	return relChecker{}.Check(ctx, id, a)
+}
+
+// denyHiddenHLP is a downstream authoriser that refuses HTTPListenerPolicies in the hidden namespace.
+type denyHiddenHLP struct{}
+
+func (denyHiddenHLP) Authorize(_ *http.Request, ref objects.Ref) bool {
+	return ref.Kind != "HTTPListenerPolicy" || ref.Namespace != hiddenNS
+}
+
+func (d denyHiddenHLP) AuthorizeNamedErr(r *http.Request, ref objects.Ref) (bool, error) {
+	return d.Authorize(r, ref), nil
+}
+
+func (denyHiddenHLP) CanList(_ *http.Request, gk objects.GroupKind, ns string) (bool, error) {
+	return gk.Kind != "HTTPListenerPolicy" || ns != hiddenNS, nil
+}
+
+// The policies list, its facets and totals, and the policy detail ask no check for a policy the
+// downstream authoriser denies: a failing one in an otherwise unqueried bucket answers as if the
+// policy were absent, never 503 (8.2 review #1, list).
+func TestDeniedPolicyAsksNoCheckInPolicies(t *testing.T) {
+	denied := testutil.Policy(kinds.KgatewayGroup+"/v1alpha1", "HTTPListenerPolicy", hiddenNS, "hlp-denied", attachedAncestor(hiddenGwRef("hidden-gw"), "Attached"))
+	denied.Object["spec"] = map[string]any{"targetRefs": []any{targetRef(gatewaysGroup, "Gateway", "hidden-gw", "")}}
+	narrow := func(a api.Authorizer) api.Authorizer { return api.Narrowed{Base: a, Policy: denyHiddenHLP{}} }
+	absent := policyServeWith(t, relEngine(t, ruleChange{name: "base"}), failingHLP{}, narrow)
+	present := policyServeWith(t, relEngine(t, ruleChange{name: "denied", apply: func(s ruleSnap) { s.add(denied) }}), failingHLP{}, narrow)
+	paths := []string{policiesPath + "?limit=200", policiesPath + "?limit=200&hasProblems=true", policiesPath + "?limit=1",
+		policiesPath + "?limit=200&kind=" + kgwGroup + "/HTTPListenerPolicy", policyPath(kgwGroup, "HTTPListenerPolicy", hiddenNS, "hlp-denied")}
+	for k, path := range paths {
+		ac, ab := fetch(t, absent, restrictedUser, path)
+		pc, pb := fetch(t, present, restrictedUser, path)
+		want := http.StatusOK
+		if k == len(paths)-1 {
+			want = http.StatusNotFound
+		}
+		if ac != want || pc != ac || pb != ab {
+			t.Errorf("%s: %d without the denied policy, %d with it:\n%.300s", path, ac, pc, pb)
+		}
+	}
+	// Without the downstream authoriser, the full reader lists it: the policy is in the install.
+	plain := policyServeWith(t, relEngine(t, ruleChange{name: "denied", apply: func(s ruleSnap) { s.add(denied) }}), failingHLP{}, nil)
+	if code, body := fetch(t, plain, fullUser, paths[0]); code != http.StatusOK || !strings.Contains(body, "hlp-denied") {
+		t.Errorf("the full reader does not list hlp-denied (%d): the test is vacuous", code)
+	}
+}

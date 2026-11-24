@@ -382,7 +382,9 @@ func (h *handler) policies(w http.ResponseWriter, r *http.Request) {
 	all := installPolicies(i)
 	v.prefetch(func(add func(objects.Ref)) {
 		for _, u := range all {
-			add(objects.RefOf(u))
+			if ref := objects.RefOf(u); !v.downstreamDenies(ref, false) {
+				add(ref)
+			}
 		}
 	})
 	pr := h.policyReader(p, i, v)
@@ -392,7 +394,8 @@ func (h *handler) policies(w http.ResponseWriter, r *http.Request) {
 	var refs []objects.Ref
 	problems := map[objects.Ref]bool{}
 	for _, u := range all {
-		if !v.can(objects.RefOf(u)) {
+		// A policy the downstream authoriser denies asks no check (8.2 review #1).
+		if ref := objects.RefOf(u); v.downstreamDenies(ref, false) || !v.can(ref) {
 			continue
 		}
 		e := pr.read(u)
@@ -461,7 +464,7 @@ func (h *handler) policyDetail(w http.ResponseWriter, r *http.Request) {
 	ref := objects.Ref{Group: group, Kind: r.PathValue("kind"), Namespace: r.PathValue("ns"), Name: r.PathValue("name")}
 	noteSubject(r, ref)
 	v := h.view(r)
-	if !v.canNamed(ref) {
+	if v.downstreamDenies(ref, true) || !v.canNamed(ref) {
 		writeErr(w, http.StatusNotFound, notFoundInScope)
 		return
 	}
