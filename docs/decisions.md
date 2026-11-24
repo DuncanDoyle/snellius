@@ -1839,20 +1839,20 @@ Measured on the reference machine, 5 runs per world:
 
 **Decision:** Whether a Gateway or ListenerSet belongs to the install is install context (D-107), also when it is a policy's ancestor or target and the policy stays in the install. A hidden change to that membership (a GatewayClass `controllerName`, a ListenerSet's parent Gateway) may change a readable policy's summaries, ancestor marks, target links and ancestor findings. The stricter checks built in 8.1 stay: an ancestor the viewer cannot read is `unreadable` (D-131), and a ListenerSet ancestor needs its parent Gateway readable.
 
-**Consequences:** The byte tests treat these membership changes like the other D-107 changes. No GatewayClass checks are added to policy reads.
+**Consequences:** The byte tests treat these membership changes like the other D-107 changes. No GatewayClass checks are added to policy reads. A KGWUI-002 about a ListenerSet ancestor rests on the ListenerSet and its parent Gateway, matching the policy page (8.2 review #6).
 
 ## D-135 — A policy ancestor's freshness is judged on Accepted alone (2026-11-23, Phase 8)
 **Status:** accepted (bug fix found in sub-phase 8.2; our call, reported to the user); corrects phase-1 design §5.2 item 2.
 
 **Context:** kgateway v2.3.11, v2.4.8 and v2.5.2 write `Accepted=False/Invalid` and `Attached=False/Pending` at the current generation for a policy they reject. `own.BlockFreshness` treated Pending on any condition as a pending block, so a rejected policy raised KGWUI-003 "Not yet processed" instead of KGWUI-002, and the policies API counted it as not current. Phase-1 design §5.2 item 2 assumed the Pending defaults exist only before translation; that holds for `Accepted`, not for `Attached`.
 
-**Decision:** A policy ancestor block is pending only when `Accepted` is missing, Pending or Unknown; a Pending `Attached` neither makes it pending nor counts as a problem. Gateways, listeners and routes keep `BlockFreshness` (kgateway writes Pending only on policy ancestors). The model's non-current reason splits into `stale` and `pending` (amends D-130); `not-fresh` remains only for a `Guard` without a freshness function.
+**Decision:** A policy ancestor block is pending only when `Accepted` is missing, Pending or Unknown, and stale only when `Accepted` describes an older generation; a Pending `Attached` neither makes it pending nor counts as a problem. An `Attached=True` older than the policy's generation is no attachment evidence (8.2 review #5). Gateways, listeners and routes keep `BlockFreshness` (kgateway writes Pending only on policy ancestors). The model's non-current reason splits into `stale` and `pending` (amends D-130); `not-fresh` remains only for a `Guard` without a freshness function.
 
 **Consequences:** Rejected policies raise KGWUI-002 on every supported version; accepted policies with a Pending `Attached` no longer raise KGWUI-003. `explore.StatusTrueFor` counts an Accepted policy whose `Attached` is Pending. `docs/findings.md` and snellius.dev follow in 8.3.
 
 ## D-136 — Policy links open the policy detail page (2026-11-23, Phase 8)
 **Status:** accepted (user, 2026-11-24: "accept"; sub-phase 8.2); replaces D-131 item 6's interim YAML links.
 
-**Decision:** Every policy link in API v1 responses is a `detail` link to `/installs/:id/policies/:group/:kind/:ns/:name`, and `/meta` `views` lists the policy kinds. This changes existing `link` values (findings, diagnostics, finding details, the policies endpoints), not only adds fields. The web routes kinds of category `policy` to the policy page.
+**Decision:** Every policy link in API v1 responses is the policy endpoint path `/api/v1/installs/{install}/policies/{group}/{kind}/{ns}/{name}` (segments path-escaped, `-` for the core group), so a shell routes it without `/meta` (8.2 review #8); `/meta` `views` lists the policy kinds. In policy list rows and subject relations the link is present only when the viewer may `get` the policy by name (8.2 review #3). This changes existing `link` values (findings, diagnostics, finding details, the policies endpoints), not only adds fields.
 
-**Consequences:** Ten API goldens change (link values; `/meta` views). A client that followed a policy's `yaml` link from those responses now gets a detail link; the YAML stays reachable from the detail page and the install-scoped YAML path.
+**Consequences:** Ten API goldens change (link values; `/meta` views). A downstream shell older than 8.2 routes these links wrong; the 8.3 upgrade notes say so. A client that followed a policy's `yaml` link from those responses now gets a detail link; the YAML stays reachable from the detail page and the install-scoped YAML path.
