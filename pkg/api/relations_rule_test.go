@@ -592,3 +592,30 @@ func TestPolicyFreshnessOnAcceptedAlone(t *testing.T) {
 		}
 	}
 }
+
+// A KGWUI-002 about a ListenerSet ancestor rests on its parent Gateway too, as the policy
+// page's currentness does (D-134): a viewer who may not read that Gateway is not shown it (8.2 review #6).
+func TestListenerSetAncestorFindingNeedsItsGateway(t *testing.T) {
+	hop := objects.ParentRef{Group: objects.GatewayAPIGroup, Kind: "ListenerSet", Namespace: ns0, Name: lsHop}
+	rejected := tp(ns0, "tp-ls-hop-rejected", []any{targetRef(gatewaysGroup, "ListenerSet", lsHop, "")},
+		ancestor(hop, testutil.Controller, metav1.ConditionFalse, metav1.ConditionFalse))
+	srv := policyServeWith(t, relEngine(t, ruleChange{name: "rejected", apply: func(s ruleSnap) { s.add(rejected) }}), relChecker{}, nil)
+	shown := func(user string) bool {
+		for _, f := range decode[api.Page[api.FindingRow]](t, srv, user, ruleBase+"/findings?limit=200").Items {
+			if f.Code == health.CodeConditionFalse && f.Resource != nil && f.Resource.Name == rejected.GetName() {
+				return true
+			}
+		}
+		return false
+	}
+	if !shown(fullUser) {
+		t.Fatal("the full reader sees no KGWUI-002 on tp-ls-hop-rejected: the test is vacuous")
+	}
+	if shown(restrictedUser) {
+		t.Error("the restricted viewer, who may not read ls-hop's Gateway, is shown the KGWUI-002 about ls-hop")
+	}
+	d := decode[api.PolicyDetail](t, srv, restrictedUser, tpPath(ns0, rejected.GetName()))
+	if len(d.Ancestors) != 1 || d.Ancestors[0].NotCurrent != policy.NotCurrentUnreadable {
+		t.Errorf("restricted ancestor %+v, want unreadable", d.Ancestors)
+	}
+}
