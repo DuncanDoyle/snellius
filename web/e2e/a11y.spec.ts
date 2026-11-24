@@ -134,7 +134,11 @@ const pages: { name: string; open: (page: Page) => Promise<void> }[] = [
     open: async (page) => {
       await nav(page, policiesCopy.title);
       const rows = await dataRows(page.getByRole("table", { name: policiesCopy.title }));
-      await rows.first().locator('td[data-col="kind"]').click();
+      // base.yaml's valid policy, so the page has an accepted ancestor and a linked target.
+      await rows
+        .filter({ hasText: process.env.E2E_POLICY ?? "shop/tp-good-timeout" })
+        .locator('td[data-col="kind"]')
+        .click();
       await expect(page).toHaveURL(new RegExp(`${install}/policies/[^/]+/[^/]+/[^/]+/[^/?]+`));
       await expect(page.getByRole("heading", { name: policyDetailCopy.summary })).toBeVisible();
     },
@@ -142,13 +146,15 @@ const pages: { name: string; open: (page: Page) => Promise<void> }[] = [
   {
     name: "policy target with its policy sections",
     open: async (page) => {
+      // base.yaml's valid policy and its route; E2E_POLICY and E2E_POLICY_TARGET name others (ns/name).
+      const policy = process.env.E2E_POLICY ?? "shop/tp-good-timeout";
+      const target = process.env.E2E_POLICY_TARGET ?? "shop/good";
       await nav(page, policiesCopy.title);
       const rows = await dataRows(page.getByRole("table", { name: policiesCopy.title }));
-      await rows.first().locator('td[data-col="kind"]').click();
+      await rows.filter({ hasText: policy }).locator('td[data-col="kind"]').click();
       await expect(page.getByRole("heading", { name: policyDetailCopy.summary })).toBeVisible();
-      // A target the viewer may open; the page then shows its policy sections.
-      await page.getByTestId("policy-target").getByRole("link").first().click();
-      await expect(page.getByTestId("policy-relations")).toBeVisible();
+      await page.getByTestId("policy-target").getByRole("link", { name: target, exact: true }).click();
+      await expect(page.getByTestId("policy-relations").getByRole("link", { name: policy, exact: true })).toBeVisible();
     },
   },
   {

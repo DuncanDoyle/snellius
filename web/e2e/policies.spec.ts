@@ -24,13 +24,17 @@ async function dataRows(page: Page): Promise<Locator> {
   return table.locator("tbody > tr[data-row]");
 }
 
+// test/e2e/fixtures/base.yaml's valid policy and its route; E2E_POLICY and E2E_POLICY_TARGET name others (ns/name).
+const named = process.env.E2E_POLICY ?? "shop/tp-good-timeout";
+const namedTarget = process.env.E2E_POLICY_TARGET ?? "shop/good";
+
 const refText = (r: PolicyRow) => `${r.ref.namespace}/${r.ref.name}`;
 
 test("Policies opens from the install nav, lists the API's rows by namespace and name, and filters", async ({
   page,
 }) => {
   const all = await get<PoliciesResponse>(page, "policies");
-  test.skip(all.items.length === 0, "the install has no policies");
+  expect(all.items.length, "base.yaml declares policies").toBeGreaterThan(0);
   await page.goto(install);
   await page.getByRole("navigation", { name: navCopy.label }).getByRole("link", { name: policiesCopy.title }).click();
   await expect(page).toHaveURL(new RegExp(`${install}/policies$`));
@@ -67,15 +71,16 @@ test("Policies opens from the install nav, lists the API's rows by namespace and
   await expect(await dataRows(page)).toHaveCount(Math.min(kind.policies, 50));
 });
 
-test("a policy row opens its detail: targets, status per ancestor as written, configuration and YAML", async ({
+test("the named policy's row opens its detail: targets, status per ancestor as written, configuration and YAML", async ({
   page,
 }) => {
+  const [ns = "", name = ""] = named.split("/");
   const all = await get<PoliciesResponse>(page, "policies");
-  const first = all.items[0];
-  test.skip(!first, "the install has no policies");
+  const first = all.items.find((r) => r.ref.namespace === ns && r.ref.name === name);
+  expect(first, `${named} is listed`).toBeTruthy();
   if (!first) return;
   await page.goto(`${install}/policies`);
-  await (await dataRows(page)).first().locator('td[data-col="kind"]').click();
+  await (await dataRows(page)).filter({ hasText: named }).locator('td[data-col="kind"]').click();
   const path = policyPath(id, first.ref);
   await expect(page).toHaveURL(new RegExp(`${path.replace(/[.]/g, "\\.")}(\\?|$)`));
   await expect(page.getByRole("heading", { name: policyDetailCopy.summary })).toBeVisible();
@@ -100,38 +105,22 @@ test("a policy row opens its detail: targets, status per ancestor as written, co
   await expect(page.getByTestId("yaml")).toContainText(`name: ${first.ref.name}`);
 });
 
-test("a policy's target page lists the policy under Targeting this object, linked back to its detail", async ({
+test("the named policy's target route lists it under Targeting this object, linked back to its detail", async ({
   page,
 }) => {
-  const all = await get<PoliciesResponse>(page, "policies");
-  // The first policy whose target the viewer may open.
-  let found: { row: PolicyRow; detail: PolicyDetail } | undefined;
-  for (const row of all.items) {
-    const g = row.ref.group || "-";
-    const detail = await get<PolicyDetail>(page, `policies/${g}/${row.ref.kind}/${row.ref.namespace}/${row.ref.name}`);
-    if (detail.targets.some((t) => !t.selector && t.ref?.link === "detail")) {
-      found = { row, detail };
-      break;
-    }
-  }
-  test.skip(!found, "no policy targets an object with a detail page");
-  if (!found) return;
-  const { row, detail } = found;
-  const target = detail.targets.find((t) => !t.selector && t.ref?.link === "detail");
-  await page.goto(policyPath(id, row.ref));
-  await page
-    .getByTestId("policy-target")
-    .getByRole("link", { name: `${target?.ref?.namespace}/${target?.ref?.name}` })
-    .first()
-    .click();
+  const [ns = "", name = ""] = named.split("/");
+  const detailPath = policyPath(id, { group: "gateway.kgateway.dev", kind: "TrafficPolicy", namespace: ns, name });
+  await page.goto(`${install}/policies`);
+  await (await dataRows(page)).filter({ hasText: named }).locator('td[data-col="kind"]').click();
+  await expect(page).toHaveURL(new RegExp(`${detailPath.replace(/[.]/g, "\\.")}(\\?|$)`));
+  await expect(page.getByRole("heading", { name: policyDetailCopy.summary })).toBeVisible();
+  await page.getByTestId("policy-target").getByRole("link", { name: namedTarget, exact: true }).click();
   const sections = page.getByTestId("policy-relations");
   await expect(sections).toBeVisible();
   await expect(sections.getByTestId("relations-selectors")).toContainText(relationsCopy.selectorNote);
-  const link = sections
-    .getByTestId("relations-targeting")
-    .getByRole("link", { name: `${row.ref.namespace}/${row.ref.name}`, exact: true })
-    .first();
-  await expect(link).toHaveAttribute("href", new RegExp(`^${policyPath(id, row.ref).replace(/[.]/g, "\\.")}(\\?|$)`));
+  const link = sections.getByTestId("relations-targeting").getByRole("link", { name: named, exact: true });
+  await expect(link).toHaveAttribute("href", new RegExp(`^${detailPath.replace(/[.]/g, "\\.")}(\\?|$)`));
   await link.click();
+  await expect(page).toHaveURL(new RegExp(`${detailPath.replace(/[.]/g, "\\.")}(\\?|$)`));
   await expect(page.getByRole("heading", { name: policyDetailCopy.summary })).toBeVisible();
 });
