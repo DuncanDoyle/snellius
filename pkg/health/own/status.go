@@ -143,8 +143,9 @@ func policyAncestors(ic InstallContext, u *unstructured.Unstructured, named Name
 		owner := append([]string{OwnerAncestor}, RefKey(ar)...)
 		owner = append(owner, a.AncestorRef.SectionName, strconv.Itoa(int(a.AncestorRef.Port)))
 		for _, t := range append(slices.Clone(required), optional...) {
+			// A condition older than the policy says nothing about it now (D-135).
 			cond := objects.FindCondition(a.Conditions, t)
-			if cond == nil || fromStatus && cond.Reason == "TargetNotFound" {
+			if cond == nil || objects.IsStale(u, *cond) || fromStatus && cond.Reason == "TargetNotFound" {
 				continue
 			}
 			if sev, report := policySeverity(*cond); report {

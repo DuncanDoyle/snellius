@@ -712,3 +712,25 @@ func TestPolicySummarySources(t *testing.T) {
 		}
 	}
 }
+
+// An Attached condition older than the policy's generation is ignored beside a current
+// Accepted=True: a negative one is no problem and raises no KGWUI-002 (8.2 re-review: old Attached).
+func TestOlderNegativeAttachedIgnored(t *testing.T) {
+	acc, att := testutil.Cond("Accepted", metav1.ConditionTrue, "Accepted"), testutil.Cond("Attached", metav1.ConditionFalse, "Invalid")
+	acc.ObservedGeneration = 2
+	u := tp(ns0, "tp-old-negative", []any{targetGW("")}, testutil.PolicyAncestor{Ref: gw0()[0], Controller: testutil.Controller, Conds: []metav1.Condition{acc, att}})
+	u.SetGeneration(2)
+	srv := policyServeWith(t, relEngine(t, ruleChange{name: "old", apply: func(s ruleSnap) { s.add(u) }}), relChecker{}, nil)
+	for _, f := range decode[api.Page[api.FindingRow]](t, srv, fullUser, ruleBase+"/findings?limit=200").Items {
+		if f.Resource != nil && f.Resource.Name == u.GetName() {
+			t.Errorf("finding %s on tp-old-negative", f.Code)
+		}
+	}
+	row := policyRowOf(t, decode[api.PoliciesResponse](t, srv, fullUser, policiesPath+"?limit=200"), kgwGroup, ns0, u.GetName())
+	if row.Problems.Has || row.Accepted == nil || row.Accepted.Status != metav1.ConditionTrue {
+		t.Errorf("row %+v: want current Accepted True and no problem", row)
+	}
+	if d := decode[api.PolicyDetail](t, srv, fullUser, tpPath(ns0, u.GetName())); d.Problems.Has {
+		t.Error("detail has problems")
+	}
+}

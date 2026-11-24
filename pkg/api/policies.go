@@ -162,9 +162,16 @@ func (e *policyEntry) problems() bool {
 		if !a.Current {
 			continue
 		}
-		// A Pending Attached is undecided, not a problem, as for the 002s.
-		if slices.ContainsFunc(a.Conditions, func(c metav1.Condition) bool { return c.Status == metav1.ConditionFalse && c.Reason != "Pending" }) ||
-			slices.ContainsFunc(a.Readings, func(r policy.Reading) bool { return r.Warning }) {
+		// A Pending Attached is undecided and a condition older than the policy says nothing
+		// about it now: neither is a problem, as for the 002s (D-135).
+		current := func(c metav1.Condition) bool { return c.ObservedGeneration >= e.p.Generation }
+		if slices.ContainsFunc(a.Conditions, func(c metav1.Condition) bool {
+			return c.Status == metav1.ConditionFalse && c.Reason != "Pending" && current(c)
+		}) ||
+			slices.ContainsFunc(a.Readings, func(r policy.Reading) bool {
+				c := objects.FindCondition(a.Conditions, r.Type)
+				return r.Warning && (c == nil || current(*c))
+			}) {
 			return true
 		}
 	}
