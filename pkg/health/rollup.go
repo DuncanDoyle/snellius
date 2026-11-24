@@ -60,11 +60,16 @@ func (f *Finding) ShownTo(rd Readable) bool {
 			return false
 		}
 		nr, named := rd.(NamedReadable)
+		lr, lists := rd.(ListReadable)
 		strict := f.Basis != nil && f.Basis.Strict
 		for _, r := range f.Basis.refs() {
 			switch {
-			// Without a NamedReadable, Ref answers both questions, as canNamed falls back to can.
-			case strict && (!rd.Ref(r) || named && !nr.Named(r)):
+			// A strict basis asks list on the kind in the namespace, then the name. A reader
+			// that cannot answer one of them answers it with Ref, as canNamed falls back to can.
+			case strict && lists && !lr.List(objects.GroupKind{Group: r.Group, Kind: r.Kind}, r.Namespace),
+				strict && !lists && !rd.Ref(r),
+				strict && named && !nr.Named(r),
+				strict && !named && !rd.Ref(r):
 				return false
 			case !strict && !rd.Ref(r) && (!named || !nr.Named(r)):
 				return false

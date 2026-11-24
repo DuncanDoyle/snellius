@@ -505,6 +505,9 @@ func (v *view) Ref(ref objects.Ref) bool { return v.can(ref) }
 // Named implements health.NamedReadable: whether the caller may read ref by name (D-100 item 1).
 func (v *view) Named(ref objects.Ref) bool { return v.canNamed(ref) }
 
+// List implements health.ListReadable: whether the caller may list gk in namespace.
+func (v *view) List(gk objects.GroupKind, namespace string) bool { return v.canList(gk, namespace) }
+
 // projects reports whether v projects findings and check results (D-106):
 // secure mode without the full read.
 func (v *view) projects() bool { return v.secure && v.off&stepFindings == 0 && !v.readsAll() }
@@ -751,3 +754,8 @@ func (n namedSubject) Ref(r objects.Ref) bool {
 
 // Named implements health.NamedReadable, as the view does.
 func (n namedSubject) Named(r objects.Ref) bool { return n.v.canNamed(r) }
+
+// List implements health.ListReadable, as the view does.
+func (n namedSubject) List(gk objects.GroupKind, namespace string) bool {
+	return n.v.canList(gk, namespace)
+}

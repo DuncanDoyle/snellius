@@ -69,7 +69,11 @@ func (l linker) linkNamed(ref objects.Ref) Link {
 
 func (l linker) linkWith(ref objects.Ref, named bool) Link {
 	k := l.admitWith(ref, named)
-	if k != LinkDetail && !k.isPolicy() && l.backend != nil && l.check(named)(ref) && l.backend(ref, named) {
+	// A policy links only to its own detail, never to a backend page (D-136).
+	if l.policy[objects.GroupKind{Group: ref.Group, Kind: ref.Kind}] {
+		return k
+	}
+	if k != LinkDetail && l.backend != nil && l.check(named)(ref) && l.backend(ref, named) {
 		return LinkBackend
 	}
 	return k

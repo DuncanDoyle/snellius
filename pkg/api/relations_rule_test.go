@@ -840,10 +840,11 @@ func (d denyPolicy) AuthorizeNamedErr(r *http.Request, ref objects.Ref) (bool, e
 func (denyPolicy) CanList(*http.Request, objects.GroupKind, string) (bool, error) { return true, nil }
 
 // With every check answering, a policy the downstream authoriser denies changes no byte or
-// status of the policy list, the policy detail or a subject detail (D-085, D-137).
+// status of the policy list, any policy detail, a subject detail or the findings (D-085, D-137).
 func TestDownstreamDeniedPolicyChangesNothing(t *testing.T) {
+	// tp-down is attached on gw-000 and rejected on ls-all, a current KGWUI-002.
 	down := tp(ns0, "tp-down", []any{targetGW("http"), targetRef(gatewaysGroup, "ListenerSet", lsAllName, ""), targetRef(gatewaysGroup, "HTTPRoute", relSect, "")},
-		attachedAncestor(gw0()[0], "Merged"), attachedAncestor(lsAllRef, "Attached"))
+		attachedAncestor(gw0()[0], "Merged"), ancestor(lsAllRef, testutil.Controller, metav1.ConditionFalse, metav1.ConditionFalse))
 	down.Object["spec"].(map[string]any)["targetSelectors"] = []any{map[string]any{"group": gatewaysGroup, "kind": "HTTPRoute", "matchLabels": map[string]any{"app": "x"}}}
 	add := ruleChange{name: "down", apply: func(s ruleSnap) { s.add(down) }}
 	narrow := func(a api.Authorizer) api.Authorizer {
@@ -851,7 +852,11 @@ func TestDownstreamDeniedPolicyChangesNothing(t *testing.T) {
 	}
 	absent := policyServeWith(t, relEngine(t, ruleChange{name: "base"}), relChecker{}, narrow)
 	present := policyServeWith(t, relEngine(t, add), relChecker{}, narrow)
-	surfaces := append(slices.Clone(relSubjects), slices.Concat(policySurfaces[:6], []string{tpPath(ns0, "tp-down")})...)
+	// The subject details, the policy lists, the denied policy's detail, readable policies'
+	// details and the findings, where tp-down's KGWUI-002 would appear.
+	surfaces := append(slices.Clone(relSubjects), slices.Concat(policySurfaces[:6], []string{tpPath(ns0, "tp-down"), tpPath(ns0, "tp-gw"),
+		tpPath(ns0, "tp-ls"), tpPath(ns0, tpAncestors), ruleBase + "/findings?limit=200", ruleBase + "/findings?view=groups&limit=200",
+		ruleBase + "/health", ruleBase + "/overview"})...)
 	for _, path := range surfaces {
 		ac, ab := fetch(t, absent, restrictedUser, path)
 		pc, pb := fetch(t, present, restrictedUser, path)
@@ -862,14 +867,57 @@ func TestDownstreamDeniedPolicyChangesNothing(t *testing.T) {
 	// Without the downstream authoriser the policy reaches the restricted viewer.
 	plainAbsent := policyServeWith(t, relEngine(t, ruleChange{name: "base"}), relChecker{}, nil)
 	plainPresent := policyServeWith(t, relEngine(t, add), relChecker{}, nil)
-	moved := 0
+	var moved []string
 	for _, path := range surfaces {
 		_, a := fetch(t, plainAbsent, restrictedUser, path)
 		if _, p := fetch(t, plainPresent, restrictedUser, path); a != p {
-			moved++
+			moved = append(moved, path)
 		}
 	}
-	if moved < 5 {
-		t.Errorf("tp-down moves only %d surfaces without the downstream authoriser: the test is weak", moved)
+	if len(moved) < 5 || !slices.Contains(moved, ruleBase+"/findings?limit=200") {
+		t.Errorf("without the downstream authoriser tp-down moves only %v: the test is weak", moved)
+	}
+}
+
+// A policy ref never falls back to a backend link: a readable route that writes the policy
+// as a backendRef does not make a policy denied by name link anywhere (8.2 re-review 2: backend link).
+func TestPolicyNeverBackendLink(t *testing.T) {
+	rejected := tp(ns0, "tp-as-backend", []any{targetGW("")}, ancestor(gw0()[0], testutil.Controller, metav1.ConditionFalse, metav1.ConditionFalse))
+	route := accepted(ns0, "rel-to-policy", gw0()...)
+	route.Object["spec"].(map[string]any)["rules"] = []any{map[string]any{"backendRefs": []any{
+		map[string]any{"group": kgwGroup, "kind": "TrafficPolicy", "name": rejected.GetName()}}}}
+	e := relEngine(t, ruleChange{name: "as-backend", apply: func(s ruleSnap) { s.add(rejected, route) }})
+	srv := policyServeWith(t, e, relChecker{}, func(a api.Authorizer) api.Authorizer {
+		return api.Narrowed{Base: a, Policy: denyNamed{name: rejected.GetName()}}
+	})
+	found := false
+	for _, f := range decode[api.Page[api.FindingRow]](t, srv, restrictedUser, ruleBase+"/findings?limit=200").Items {
+		if f.Resource != nil && f.Resource.Name == rejected.GetName() {
+			found = true
+			if f.Resource.Link != api.LinkNone {
+				t.Errorf("finding %s links %q, want none", f.Code, f.Resource.Link)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no finding on tp-as-backend: the test is vacuous")
+	}
+}
+
+// The strict basis asks what the policy page asks: list on the kind in the namespace and get
+// by name. A viewer whose authoriser refuses the Gateway list in ns0, while it allows the member
+// and the name, sees gw-000 unreadable and no KGWUI-002 about it (8.2 re-review 2: strict basis).
+func TestPolicyAncestorFindingNeedsList(t *testing.T) {
+	rejected := tp(ns0, "tp-gw-unlisted", []any{targetGW("")}, ancestor(gw0()[0], testutil.Controller, metav1.ConditionFalse, metav1.ConditionFalse))
+	srv := policyServeWith(t, relEngine(t, ruleChange{name: "rejected", apply: func(s ruleSnap) { s.add(rejected) }}), relChecker{}, func(a api.Authorizer) api.Authorizer {
+		return api.Narrowed{Base: a, Policy: denyList{ns: ns0, kinds: []string{"Gateway"}}}
+	})
+	if d := decode[api.PolicyDetail](t, srv, restrictedUser, tpPath(ns0, rejected.GetName())); len(d.Ancestors) != 1 || d.Ancestors[0].NotCurrent != policy.NotCurrentUnreadable {
+		t.Fatalf("ancestor %+v, want unreadable", d.Ancestors)
+	}
+	for _, f := range decode[api.Page[api.FindingRow]](t, srv, restrictedUser, ruleBase+"/findings?limit=200").Items {
+		if f.Code == health.CodeConditionFalse && f.Resource != nil && f.Resource.Name == rejected.GetName() {
+			t.Error("a KGWUI-002 about gw-000 is shown to a viewer who may not list Gateways in ns-000")
+		}
 	}
 }
