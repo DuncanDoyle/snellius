@@ -4,11 +4,14 @@
 Phase: 8 — Policies & Filters
 Base: b01b677
 Docs: docs/phases/phase-8/
-Status: design approved (user, 2026-11-23); D-121 … D-129 accepted; runtime view in Phase 12. 8.1 closed 2026-11-23 (D-130 … D-134). 8.2 closed 2026-11-25 (D-135 … D-137; phases/phase-8/phase-8.2-complete.md). 8.3 closed 2026-11-25 (docs; phases/phase-8/phase-8.3-complete.md). Phase review done 2026-11-25 (phases/phase-8/reviews/phase-codex.md): 2 P1 and 5 P2 accepted, proposed as stabilization sub-phase 8.4 (queue below; awaits the user). Then phase close: file the four 8.3 notices at the tag (approved by the user 2026-11-25), update the program file, tag `v0.9.0`. Phase start: program read, scope endpoint filed as kgateway#15070, kgateway#14815 still open.
+Status: design approved (user, 2026-11-23); D-121 … D-129 accepted; runtime view in Phase 12. 8.1 closed 2026-11-23 (D-130 … D-134). 8.2 closed 2026-11-25 (D-135 … D-137; phases/phase-8/phase-8.2-complete.md). 8.3 closed 2026-11-25 (docs; phases/phase-8/phase-8.3-complete.md). Phase review done 2026-11-25 (phases/phase-8/reviews/phase-codex.md): 2 P1 and 5 P2 accepted, in stabilization sub-phase 8.4 (started 2026-11-25). Then phase close: file the four 8.3 notices at the tag (approved by the user 2026-11-25), update the program file, tag `v0.9.0`. Phase start: program read, scope endpoint filed as kgateway#15070, kgateway#14815 still open.
 Author: claude (Opus 5.5)
 
 ## Sub-phase
-none
+Sub-phase: 8.4 — Phase review fixes (stabilization)
+Base: 2635548
+Brief: docs/phases/phase-8/phase-8.4-brief.md
+Queue: "8.4 queue" below (Q8.4-1 … Q8.4-7). Listener view: option B, policies in each expanded listener row (user, 2026-11-25)
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md (read 2026-11-22 at `bd1f17d`; merged on main at `090fd7e`, which adds M-4 and U12: P-008, P-009, M-1, M-2, E7, E13, E14).
@@ -72,8 +75,8 @@ Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; uncha
 - The first release tag freezes API v1, install IDs and SPA URLs; make the ghcr packages public first (phase-1-complete.md).
 - The repo is public: per the public-repo hygiene rules, vendor and commercial edition names must not appear in code, file names, commit messages or PR text. Refer to them as "downstream distributions".
 
-## Proposed 8.4 queue (stabilization, from reviews/phase-codex.md)
-- [ ] Q8.4-1 (P1 correctness) 2.5 rules: an `Attached` older than the policy raises KGWUI-016 — src: reviews/phase-codex.md#1
+## 8.4 queue (stabilization, from reviews/phase-codex.md; started 2026-11-25)
+- [ ] Q8.4-1 (P1 correctness) 2.5 rules: an `Attached` older than the policy raises KGWUI-016 — src: reviews/phase-codex.md#1 ← CURRENT
 - [ ] Q8.4-2 (P1 correctness) a policy referenced by a route in another install gets a policy link whose detail returns 404 — src: #2
 - [ ] Q8.4-3 (P2 architecture) `/policies` ignores the namespace scope (D-100 item 8) — src: #3
 - [ ] Q8.4-4 (P2 architecture) `PartiallyValid` and `Overridden` read in core for every policy kind, not via the interpreter (design §8) — src: #4
