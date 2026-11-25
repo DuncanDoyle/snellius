@@ -170,7 +170,7 @@ The namespace selector in the header limits the list pages to the namespaces you
 
 - **One setting per browser.** The choice is stored in the browser and applies to every install. While a scope is active, the header button names it, and on a narrow window its icon shows a count. An empty list under a scope says so and offers "Show all namespaces".
 - **Fewer checks.** A scoped list checks permissions only in the chosen namespaces. On a large cluster this cuts the checks for a cold page about tenfold.
-- **API.** The lists `/routes`, `/gateways`, `/listenersets`, `/paths`, `/backends`, `/findings` and `/processes` take `namespaces=a,b`, in both modes. Give it once, with up to 100 namespace names. An empty or invalid value answers `400`. `GET /api/v1/installs/{id}/namespaces` lists the namespaces that hold routes, Gateways or ListenerSets the user can see.
+- **API.** The lists `/routes`, `/gateways`, `/listenersets`, `/paths`, `/backends`, `/findings`, `/processes` and `/policies` take `namespaces=a,b`, in both modes. Give it once, with up to 100 namespace names. An empty or invalid value answers `400`. `GET /api/v1/installs/{id}/namespaces` lists the namespaces that hold routes, Gateways or ListenerSets the user can see.
 
 #### Capacity and tuning
 
@@ -532,7 +532,7 @@ Saved theme choices carry over. Finding codes keep the `KGWUI-` prefix, so API v
 
 New Policies pages and policy sections on Gateway, ListenerSet, route and backend pages: see [Policies](#policies). The new endpoints and fields are additive to API v1. Two existing wire values change: policy `link` values, and the IDs of policy-ancestor KGWUI-002 findings. Both are below.
 
-- **New endpoints.** `GET /api/v1/installs/{id}/policies` (filters `kind`, `feature`, `namespace` and `hasProblems`; paging; facets) and `GET /api/v1/installs/{id}/policies/{group}/{kind}/{ns}/{name}`. The audit stream records the list under `summaries` and the detail under `reads`.
+- **New endpoints.** `GET /api/v1/installs/{id}/policies` (filters `kind`, `feature`, `namespace` and `hasProblems`, and the namespace scope `namespaces`, which the `namespace` filter narrows; paging; facets) and `GET /api/v1/installs/{id}/policies/{group}/{kind}/{ns}/{name}`. The audit stream records the list under `summaries` and the detail under `reads`.
 - **`policyRelations`.** Gateway, ListenerSet, route and backend detail responses gain `policyRelations`. `/api/v1/meta` `views` lists the policy kinds.
 - **Rejected policies.** A current rejection from kgateway (`Accepted=False`) now raises KGWUI-002 on kgateway 2.3, 2.4 and 2.5, or KGWUI-016 when the 2.5 rules read `TargetNotFound`; before, it read "Not yet processed" (KGWUI-003). A stale or pending ancestor entry still raises KGWUI-003. An accepted policy no longer reads "Not yet processed" while kgateway's `Attached` is still pending. See [docs/findings.md](docs/findings.md) (KGWUI-002, 003 and 016) for the exact rules.
 - **DirectResponse findings.** A DirectResponse can now raise KGWUI-002, like a TrafficPolicy. Its install assignment stays list-only, and routes that use it keep their signals. It has a policy detail page like other policies.

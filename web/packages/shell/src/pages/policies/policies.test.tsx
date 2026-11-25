@@ -2,11 +2,13 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes, useLocation } from "react-router-dom";
 import gatewayGolden from "../../../../../../pkg/api/testdata/golden/gateway-detail-policies.json";
+import metaGolden from "../../../../../../pkg/api/testdata/golden/meta.json";
 import listGolden from "../../../../../../pkg/api/testdata/golden/policies.json";
 import detailGolden from "../../../../../../pkg/api/testdata/golden/policy-detail.json";
 import routeGolden from "../../../../../../pkg/api/testdata/golden/route-detail-policies.json";
 import type { GatewayDetail, LinkedRef, PoliciesResponse, PolicyDetail, PolicyRow, RouteDetail } from "../../api/types";
 import * as copy from "../../copy/policies";
+import { setNamespaceScope } from "../../shell/namespaceScopeStore";
 import { renderWithTheme } from "../../test/render";
 import { PoliciesPage } from "./PoliciesPage";
 import { PolicyPage } from "./PolicyPage";
@@ -365,4 +367,17 @@ it("every tag follows the API's source fields, whatever they say (8.2 re-review:
   expect(tag("policy-attached-on")).toBe("unknown");
   const stale = within(screen.getAllByTestId("policy-ancestor")[1] as HTMLElement).getByTestId("stale-source");
   expect(within(stale).getByTestId("source-tag")).toHaveAttribute("data-source", "unknown");
+});
+
+// region Namespace scope (Q8.4-3)
+it("sends the header's namespace scope with the page's Namespace filter, as /meta advertises it", async () => {
+  setNamespaceScope(["infra", "shop"]);
+  serve({ "/api/v1/meta": () => metaGolden.body, [`${API}/policies`]: list });
+  mount(`/i/${ID}/policies?namespace=shop`);
+  await waitFor(() => expect(calls("/policies").length).toBeGreaterThan(0));
+  for (const u of calls("/policies")) {
+    expect(u.searchParams.get("namespaces")).toBe("infra,shop");
+    expect(u.searchParams.getAll("namespace")).toEqual(["shop"]);
+  }
+  setNamespaceScope([]);
 });

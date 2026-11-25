@@ -32,6 +32,9 @@
       "paths": [
         "namespaces"
       ],
+      "policies": [
+        "namespaces"
+      ],
       "processes": [
         "namespaces"
       ],

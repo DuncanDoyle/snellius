@@ -170,7 +170,7 @@ var auditFilters = map[string]map[string]filterCheck{
 	"GET /api/v1/installs/{id}/paths": {"namespace": checkNamespace, scopeParam: checkScope, "listener": checkListener, "backend": checkRef,
 		"state": checkHealth, "kind": checkKind, "sort": checkSort},
 	"GET /api/v1/installs/{id}/backends": {"namespace": checkNamespace, scopeParam: checkScope, "state": checkHealth, "kind": checkKind, "sort": checkSort},
-	"GET /api/v1/installs/{id}/policies": {"namespace": checkNamespace, "kind": checkGroupKind, "feature": checkFeature, "hasProblems": oneOf("true", "false")},
+	"GET /api/v1/installs/{id}/policies": {"namespace": checkNamespace, scopeParam: checkScope, "kind": checkGroupKind, "feature": checkFeature, "hasProblems": oneOf("true", "false")},
 }
 
 // maxFilterValue bounds one filter's joined values in a record.

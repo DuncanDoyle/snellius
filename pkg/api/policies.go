@@ -289,8 +289,8 @@ func refState(ix *explore.Index, vw explore.Viewer, ref objects.Ref) health.Stat
 
 // Policies list parameters; single ones are allowed once.
 var (
-	policiesParams = []string{"kind", "feature", "namespace", "hasProblems", "limit", "cursor"}
-	policiesSingle = []string{"hasProblems", "limit", "cursor"}
+	policiesParams = []string{"kind", "feature", "namespace", scopeParam, "hasProblems", "limit", "cursor"}
+	policiesSingle = []string{scopeParam, "hasProblems", "limit", "cursor"}
 	featureFormat  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,62}$`)
 )
 
@@ -302,6 +302,8 @@ type policiesQuery struct {
 	kinds      []objects.GroupKind
 	features   []string
 	namespaces []string
+	// scope is the namespace scope (D-100 item 8); nil is every namespace.
+	scope []string
 	// problems filters on has problems when set.
 	problems *bool
 	limit    int
@@ -343,6 +345,9 @@ func parsePoliciesQuery(r *http.Request) (policiesQuery, error) {
 		}
 		q.namespaces = append(q.namespaces, v)
 	}
+	if q.scope, err = parseScope(vals); err != nil {
+		return q, err
+	}
 	if vals.Has("hasProblems") {
 		b, err := strconv.ParseBool(vals.Get("hasProblems"))
 		if err != nil {
@@ -382,8 +387,8 @@ func (q *policiesQuery) filter(e *policyEntry, problems bool) policyFilter {
 	}
 }
 
-// policies is GET …/policies (Phase 8 design §6.2): the install's policies
-// the caller may view as members, with totals and facets over them only.
+// policies is GET …/policies (Phase 8 design §6.2): the install's policies in
+// the scope that the caller may view as members, with totals and facets over them only.
 func (h *handler) policies(w http.ResponseWriter, r *http.Request) {
 	p, i := h.find(w, r)
 	if i == nil {
@@ -395,7 +400,8 @@ func (h *handler) policies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := h.view(r)
-	all := installPolicies(i)
+	// The scope applies before any check, so nothing outside it is asked (D-100 item 8).
+	all := slices.DeleteFunc(installPolicies(i), func(u *unstructured.Unstructured) bool { return !explore.InScope(q.scope, u.GetNamespace()) })
 	v.prefetch(func(add func(objects.Ref)) {
 		for _, u := range all {
 			if ref := objects.RefOf(u); !v.downstreamDenies(ref, false) {
