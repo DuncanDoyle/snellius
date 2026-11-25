@@ -4,7 +4,7 @@
 Phase: 8 — Policies & Filters
 Base: b01b677
 Docs: docs/phases/phase-8/
-Status: design approved (user, 2026-11-23); D-121 … D-129 accepted; runtime view in Phase 12. 8.1 closed 2026-11-23 (D-130 … D-134). 8.2 closed 2026-11-25 (D-135 … D-137; phases/phase-8/phase-8.2-complete.md). 8.3 closed 2026-11-25 (docs; phases/phase-8/phase-8.3-complete.md). Next: phase review (Codex, `b01b677..HEAD`), then phase close: file the four 8.3 notices (user approval), update the program file, tag `v0.9.0`. Phase start: program read, scope endpoint filed as kgateway#15070, kgateway#14815 still open.
+Status: design approved (user, 2026-11-23); D-121 … D-129 accepted; runtime view in Phase 12. 8.1 closed 2026-11-23 (D-130 … D-134). 8.2 closed 2026-11-25 (D-135 … D-137; phases/phase-8/phase-8.2-complete.md). 8.3 closed 2026-11-25 (docs; phases/phase-8/phase-8.3-complete.md). Next: phase review (Codex, `b01b677..HEAD`), then phase close: file the four 8.3 notices at the tag (approved by the user 2026-11-25), update the program file, tag `v0.9.0`. Phase start: program read, scope endpoint filed as kgateway#15070, kgateway#14815 still open.
 Author: claude (Opus 5.5)
 
 ## Sub-phase
