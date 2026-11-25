@@ -156,6 +156,8 @@ export const relationsCopy = {
   targeting: "Targeting this object", // (fixed)
   targetingParent: "Targeting a parent", // (fixed)
   attachedHere: "Reported attached here", // (fixed)
+  /** An expanded listener row: the policies whose targetRefs name that listener. */
+  listener: "Policies targeting this listener", // S853
   /** (fixed for a route, design §6.5) noun is "route" or "ListenerSet". */
   parentNote: (noun: string) =>
     `These policies name a parent of this ${noun}. kgateway decides whether and how they apply.`,

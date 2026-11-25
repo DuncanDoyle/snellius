@@ -144,7 +144,12 @@ export function GatewayPage({ stylesOverride }: GatewayPageProps = {}) {
             <h2 id="gw-listeners">
               {gatewayCopy.listeners} <span className="note">{data.listeners.length}</span>
             </h2>
-            <ListenerTable listeners={data.listeners} generation={data.generation} />
+            <ListenerTable
+              listeners={data.listeners}
+              generation={data.generation}
+              installId={id}
+              policies={data.policyRelations?.targeting}
+            />
           </Section>
           <Section aria-labelledby="gw-listenersets">
             <h2 id="gw-listenersets">

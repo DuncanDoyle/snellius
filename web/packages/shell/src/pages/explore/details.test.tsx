@@ -16,6 +16,7 @@ import type {
   GatewayDetail,
   ListenerSetDetail,
   ListenerSetList,
+  PolicyRelation,
   RouteList,
   RouteRow,
 } from "../../api/types";
@@ -114,6 +115,61 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+/** A declared TrafficPolicy relation in infra, on section when given, linked as the API links it (D-136). */
+const targets = (name: string, sectionName?: string): PolicyRelation => ({
+  policy: {
+    group: "gateway.kgateway.dev",
+    kind: "TrafficPolicy",
+    namespace: "infra",
+    name,
+    link: `${API}/policies/gateway.kgateway.dev/TrafficPolicy/infra/${name}`,
+  },
+  relation: "targets",
+  source: "declared",
+  ...(sectionName ? { sectionName } : {}),
+});
+
+it("an expanded listener row shows the policies that name its section; whole-Gateway ones stay in Policies", async () => {
+  const g = gateway();
+  g.policyRelations = {
+    ...g.policyRelations,
+    targeting: [targets("tp-gw"), targets("tp-http", "http"), targets("tp-https", "https")],
+  };
+  serve(api({ gateway: g }));
+  mount(GW_PATH);
+  const listeners = await screen.findByRole("table", { name: "Listeners" });
+  // The page's Policies section keeps all three.
+  expect(within(screen.getByTestId("relations-targeting")).getAllByTestId("policy-relation")).toHaveLength(3);
+  await userEvent.click(within(rowOf(listeners, "http")).getByRole("button", { name: /Show conditions/ }));
+  const http = within(screen.getByTestId("listener-http-details")).getByTestId("listener-policies");
+  expect(http).toHaveTextContent("Policies targeting this listener");
+  const item = within(http).getByTestId("policy-relation");
+  expect(item).toHaveTextContent("tp-http");
+  expect(item).toHaveTextContent("Declared");
+  expect(hrefPath(within(item).getByRole("link"))).toBe(
+    `/i/${ID}/policies/gateway.kgateway.dev/TrafficPolicy/infra/tp-http`,
+  );
+  expect(http).not.toHaveTextContent("tp-gw");
+  expect(http).not.toHaveTextContent("tp-https");
+  // A listener no policy names says so.
+  await userEvent.click(within(rowOf(listeners, "tcp")).getByRole("button", { name: /Show conditions/ }));
+  const tcp = within(screen.getByTestId("listener-tcp-details")).getByTestId("listener-policies");
+  expect(tcp).toHaveTextContent("None.");
+  expect(within(tcp).queryByTestId("policy-relation")).toBeNull();
+});
+
+it("a ListenerSet's listener row shows the policies that name its section", async () => {
+  const l = ls(lsGolden);
+  l.policyRelations = { ...l.policyRelations, targeting: [targets("tp-ls"), targets("tp-extra", "extra")] };
+  serve(api({ ls: l }));
+  mount(LS_PATH("ls"));
+  const listeners = await screen.findByRole("table", { name: "Listeners" });
+  await userEvent.click(within(rowOf(listeners, "extra")).getByRole("button", { name: /Show conditions/ }));
+  const row = within(screen.getByTestId("listener-extra-details")).getByTestId("listener-policies");
+  expect(within(row).getByTestId("policy-relation")).toHaveTextContent("tp-extra");
+  expect(row).not.toHaveTextContent("tp-ls");
 });
 
 it("Gateway page shows the status count and the computed count side by side", async () => {
@@ -824,7 +880,7 @@ it("unknown listeners show no number; a hidden Namespace hides no count", async 
   await userEvent.click(within(rowOf(listeners, "tcp")).getByRole("button", { name: /Show conditions/ }));
   const details = screen.getByTestId("listener-tcp-details");
   expect(details).toHaveTextContent("Computed routes: No count");
-  expect(details).not.toHaveTextContent("None");
+  expect(details).not.toHaveTextContent("Computed routes: None");
 });
 
 it("a count without its check shows the count and Not checked", async () => {

@@ -13,12 +13,12 @@ import { kindValue } from "./policyText";
 
 // region Styles
 const Block = styled(Section)<{ stylesOverride?: SerializedStyles }>`
-  h3 {
-    margin: ${(p) => p.theme.space(3)} 0 ${(p) => p.theme.space(1)};
-    font-size: ${(p) => p.theme.font.size.md};
-    font-weight: ${(p) => p.theme.font.weight.semibold};
-  }
   ${(p) => p.stylesOverride}
+`;
+const GroupTitle = styled.h3`
+  margin: ${(p) => p.theme.space(3)} 0 ${(p) => p.theme.space(1)};
+  font-size: ${(p) => p.theme.font.size.md};
+  font-weight: ${(p) => p.theme.font.weight.semibold};
 `;
 const Note = styled.p`
   margin: 0 0 ${(p) => p.theme.space(1)};
@@ -94,8 +94,8 @@ function selectorsLink(installId: string, r: PolicyRelations): string {
 }
 
 // region Parts
-function Item({ installId, r }: { installId: string; r: PolicyRelation }) {
-  const where = at(r);
+function Item({ installId, r, hideSection }: { installId: string; r: PolicyRelation; hideSection?: boolean }) {
+  const where = hideSection ? "" : at(r);
   const c = r.condition;
   return (
     <li data-testid="policy-relation">
@@ -131,22 +131,22 @@ function Item({ installId, r }: { installId: string; r: PolicyRelation }) {
   );
 }
 
-function Group({
-  installId,
-  id,
-  title,
-  note,
-  items,
-}: {
+interface GroupProps {
   installId: string;
   id: string;
   title: string;
   note?: string;
   items: PolicyRelation[];
-}) {
+  /** Leaves out each item's section, where the context already names it. */
+  hideSection?: boolean;
+  "data-testid"?: string;
+}
+
+/** One relation group: a title and its policies, or "None.". Listener rows reuse it for their section's policies. */
+export function PolicyRelationGroup({ installId, id, title, note, items, hideSection, ...rest }: GroupProps) {
   return (
-    <div data-testid={`relations-${id}`}>
-      <h3 id={`policy-rel-${id}`}>{title}</h3>
+    <div data-testid={rest["data-testid"] ?? `relations-${id}`}>
+      <GroupTitle id={`policy-rel-${id}`}>{title}</GroupTitle>
       {note ? <Note>{note}</Note> : null}
       {items.length ? (
         <Items aria-labelledby={`policy-rel-${id}`}>
@@ -155,6 +155,7 @@ function Group({
               key={`${r.policy.group}/${r.policy.kind}/${r.policy.namespace ?? ""}/${r.policy.name}/${at(r)}/${(r.via ?? []).map((h) => h.ref.name).join(">")}`}
               installId={installId}
               r={r}
+              hideSection={hideSection}
             />
           ))}
         </Items>
@@ -184,9 +185,14 @@ export function PolicyRelationsSection({ installId, subject, relations, stylesOv
   return (
     <Block aria-labelledby="policy-relations" data-testid="policy-relations" stylesOverride={stylesOverride}>
       <h2 id="policy-relations">{relationsCopy.title}</h2>
-      <Group installId={installId} id="targeting" title={relationsCopy.targeting} items={relations.targeting} />
+      <PolicyRelationGroup
+        installId={installId}
+        id="targeting"
+        title={relationsCopy.targeting}
+        items={relations.targeting}
+      />
       {relations.targetingParent ? (
-        <Group
+        <PolicyRelationGroup
           installId={installId}
           id="targeting-parent"
           title={relationsCopy.targetingParent}
@@ -195,7 +201,7 @@ export function PolicyRelationsSection({ installId, subject, relations, stylesOv
         />
       ) : null}
       {relations.attachedHere ? (
-        <Group
+        <PolicyRelationGroup
           installId={installId}
           id="attached-here"
           title={relationsCopy.attachedHere}

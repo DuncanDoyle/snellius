@@ -147,7 +147,12 @@ export function ListenerSetPage({ stylesOverride }: ListenerSetPageProps = {}) {
             <h2 id="ls-listeners">
               {gatewayCopy.listeners} <span className="note">{data.listeners.length}</span>
             </h2>
-            <ListenerTable listeners={data.listeners} generation={data.generation} />
+            <ListenerTable
+              listeners={data.listeners}
+              generation={data.generation}
+              installId={id}
+              policies={data.policyRelations?.targeting}
+            />
           </Section>
           <RouteSections installId={id} parent={data.ref} counts={data.routeCounts} />
         </>
