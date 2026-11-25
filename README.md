@@ -510,7 +510,7 @@ var reg = extension.NewCore(extension.WithPack(extension.Pack{
 
 Without an interpreter, nothing is interpreted: features show their spec keys, no annotation is picked out, no ancestor is a missing-target entry, and conditions get no reading. The detail response then has `interpreted: false`. Raw targets, status entries and relations come from the core either way. The interpreter's readings can change derived results, such as "Has problems" and which status counts in the summaries. The kgateway pack's interpreter reads only `gateway.kgateway.dev` kinds, so BackendTLSPolicy and kinds added with `WithKinds` get none. An interpreter labels and reads what is written; it never decides whether a policy applies.
 
-A one-shot caller, such as a CLI, builds the same model with `policy.Read`, `policy.CheckTargets` and `policy.Relations`, and passes its own `policy.Guard` and `policy.Lookup`.
+A one-shot caller, such as a CLI, builds the same model with `policy.Read`, `policy.CheckTargets` and `policy.Relations`, and passes its own `policy.Guard` and `policy.Lookup`. It also passes the kinds whose descriptor is `ListOnly`, such as DirectResponse, as `policy.Inputs.ListOnlyKinds`. `Relations` then gives those kinds no `attached-on-ancestor` relation, as the API does.
 
 ## Upgrading from kgateway-ui
 

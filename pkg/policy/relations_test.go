@@ -8,6 +8,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/DuncanDoyle/snellius/pkg/kgateway"
+	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/policy"
 )
@@ -229,6 +231,34 @@ func TestRelationsCallerListenerSetKinds(t *testing.T) {
 		}
 		if !slices.Equal(got, c.want) {
 			t.Errorf("%s:\n got %q\nwant %q", c.subject, got, c.want)
+		}
+	}
+}
+
+// A list-only kind's ancestors relate to nothing (D-129, D-138): the DirectResponse
+// fixture's Attached=True Gateway ancestor makes no relation when read the README way.
+func TestRelationsListOnly(t *testing.T) {
+	var listOnly []objects.GroupKind
+	for _, d := range kinds.Upstream() {
+		if d.ListOnly {
+			listOnly = append(listOnly, objects.GroupKind{Group: d.Group, Kind: d.Kind})
+		}
+	}
+	var in []policy.Policy
+	for _, u := range load(t, "kgateway-2.3.yaml") {
+		in = append(in, policy.Read(u, kgateway.PolicyInterpreter(), guard()))
+	}
+	s := policy.Subject{Ref: objects.Ref{Group: gw, Kind: "Gateway", Namespace: "default", Name: "example-gateway"}}
+	l := newWorld(gateway("default", "example-gateway", "http"))
+	for _, c := range []struct {
+		listOnly []objects.GroupKind
+		want     bool
+	}{{nil, true}, {listOnly, false}} {
+		got := slices.ContainsFunc(policy.Relations(s, policy.Inputs{Policies: in, Lookup: l, ListOnlyKinds: c.listOnly}), func(r policy.Relation) bool {
+			return r.Policy.Kind == "DirectResponse"
+		})
+		if got != c.want {
+			t.Errorf("list-only %v: DirectResponse relation %v, want %v", c.listOnly, got, c.want)
 		}
 	}
 }

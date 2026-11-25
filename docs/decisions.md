@@ -1865,3 +1865,12 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** An authorization outage is an availability failure, not a visibility result. A response may become 503 whenever a check fails, including a check that a hidden object triggered. With every check answering, a hidden object never changes bytes or status (D-085 holds). Cheap orderings that avoid needless checks stay: a policy the downstream authoriser denies gets no SAR, and a named check runs before any broader probe where that is cheaper.
 
 **Consequences:** No further work closes outage-only paths. A test shows that with all checks answering, hidden and downstream-denied policies change nothing on the policy list, policy detail and subject details. Reopen if a viewer can cause check failures on purpose.
+
+## D-138 — `policy.Relations` owns the list-only rule (2026-11-25, Phase 8.4, amends D-123)
+**Status:** accepted (8.4 stabilization; phase review finding 5)
+
+**Context:** D-129 keeps a list-only kind's ancestors, such as DirectResponse's, out of subject relations. `pkg/api` applied that rule before it called `policy.Relations`, so a kgwctl caller that followed the README got an `attached-on-ancestor` relation the API never returns.
+
+**Decision:** `policy.Inputs.ListOnlyKinds` carries the caller's list-only classification, and `Relations` makes no `attached-on-ancestor` relation for a policy of those kinds. Nil means no kind is list-only. The API passes its served list-only kinds and drops its own filter.
+
+**Consequences:** Every consumer gets the same relations from the same inputs. The field is additive within the minor (D-123). The README's one-shot caller example names the field.

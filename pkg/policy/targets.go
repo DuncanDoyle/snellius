@@ -45,6 +45,9 @@ type Inputs struct {
 	// parent is its two-hop join, and a ListenerSet subject walks its own parentRef. Nil
 	// means Gateway API's ListenerSet and XListenerSet.
 	ListenerSetKinds []objects.GroupKind
+	// ListOnlyKinds are the caller's list-only kinds (kinds.Descriptor.ListOnly). Relations
+	// relates none of their ancestors (D-129). Nil means no kind is list-only.
+	ListOnlyKinds []objects.GroupKind
 }
 
 // TargetCheck is the outcome of one targetRef (design §5.2).

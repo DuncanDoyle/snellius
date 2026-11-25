@@ -54,6 +54,7 @@ type Relation struct {
 //   - targets-parent: a targetRef names a parent s declares in spec.parentRefs
 //     (design §5.3), with Via the hops walked.
 //   - attached-on-ancestor: a current ancestor with Attached=True is s, matched as targets are.
+//     A policy of one of in.ListOnlyKinds makes none: its ancestors feed only its findings (D-129).
 //
 // s must be readable, and every hop readable and present, through in.Lookup, or the relation is not made.
 func Relations(s Subject, in Inputs) []Relation {
@@ -68,6 +69,9 @@ func Relations(s Subject, in Inputs) []Relation {
 				out = append(out, Relation{Policy: p.Ref, Subject: Subject{Ref: s.Ref, SectionName: t.SectionName},
 					Kind: RelationTargets, Source: SourceDeclared})
 			}
+		}
+		if slices.Contains(in.ListOnlyKinds, objects.GroupKind{Group: p.Ref.Group, Kind: p.Ref.Kind}) {
+			continue
 		}
 		for _, a := range p.Ancestors {
 			if a.Current && a.Ref.Ref() == s.Ref && sectionMatches(s, a.Ref.SectionName, a.Ref.Port) && Attached(a, p.Generation) {

@@ -56,10 +56,8 @@ func (h *handler) policyRelations(p *engine.Published, i *engine.InstallModel, v
 			continue
 		}
 		pol := policy.Read(u, pr.interp, pr.guard)
-		// Only an ancestor that is s can relate, so no other is judged. A list-only kind's
-		// ancestors feed only its findings (D-129, design §6.6).
-		listOnly := slices.ContainsFunc(p.Model.Served, func(k kinds.Served) bool { return k.ListOnly && k.Group == ref.Group && k.Kind == ref.Kind })
-		pol.Ancestors = slices.DeleteFunc(pol.Ancestors, func(a policy.Ancestor) bool { return listOnly || a.Ref.Ref() != s })
+		// Only an ancestor that is s can relate, so no other is judged.
+		pol.Ancestors = slices.DeleteFunc(pol.Ancestors, func(a policy.Ancestor) bool { return a.Ref.Ref() != s })
 		pr.gate(&pol)
 		gk := objects.GroupKind{Group: ref.Group, Kind: ref.Kind}
 		if ref.Namespace == s.Namespace && !slices.Contains(out.Selectors.Kinds, gk) &&
@@ -73,7 +71,8 @@ func (h *handler) policyRelations(p *engine.Published, i *engine.InstallModel, v
 		return compareAffected(objects.Ref{Group: a.Group, Kind: a.Kind}, objects.Ref{Group: b.Group, Kind: b.Kind})
 	})
 	parent, attached := []PolicyRelationDTO{}, []PolicyRelationDTO{}
-	for _, r := range policy.Relations(policy.Subject{Ref: s}, policy.Inputs{Policies: in, Lookup: pr.in.Lookup, ListenerSetKinds: lsKinds.ListenerSetKinds}) {
+	rin := policy.Inputs{Policies: in, Lookup: pr.in.Lookup, ListenerSetKinds: lsKinds.ListenerSetKinds, ListOnlyKinds: servedListOnly(p.Model.Served)}
+	for _, r := range policy.Relations(policy.Subject{Ref: s}, rin) {
 		d := PolicyRelationDTO{Policy: linkedPolicy(v, i.Resolved.ID(), r.Policy), Relation: r.Kind, Source: r.Source, SectionName: r.Subject.SectionName, Port: r.Subject.Port}
 		switch r.Kind {
 		case policy.RelationTargets:
@@ -144,6 +143,17 @@ func listenerSetKinds(served []kinds.Served) []objects.GroupKind {
 	out := []objects.GroupKind{}
 	for _, k := range served {
 		if k.Category == kinds.CategoryListenerSet {
+			out = append(out, objects.GroupKind{Group: k.Group, Kind: k.Kind})
+		}
+	}
+	return out
+}
+
+// servedListOnly are the served list-only kinds, whose ancestors relate to nothing (D-129).
+func servedListOnly(served []kinds.Served) []objects.GroupKind {
+	var out []objects.GroupKind
+	for _, k := range served {
+		if k.ListOnly {
 			out = append(out, objects.GroupKind{Group: k.Group, Kind: k.Kind})
 		}
 	}
