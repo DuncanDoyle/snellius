@@ -122,10 +122,13 @@ func (l linker) admitWith(ref objects.Ref, named bool) Link {
 		return LinkNone
 	}
 	gk := objects.GroupKind{Group: ref.Group, Kind: ref.Kind}
-	// A policy link opens its detail, which needs named get (8.2 re-review) and
-	// serves only the install's own and listed policies (Q8.4-2).
+	// A policy link opens its detail, which needs named get (8.2 re-review) and serves
+	// only the install's own and listed policies; any other referenced policy is YAML (Q8.4-2).
 	if candidate && l.policy[gk] {
-		if !a.Owned || !l.v.canNamed(ref) {
+		switch {
+		case !a.Owned:
+			return LinkYAML
+		case !l.v.canNamed(ref):
 			return LinkNone
 		}
 		return policyLink(l.i.Resolved.ID(), ref)
