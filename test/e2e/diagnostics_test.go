@@ -469,7 +469,12 @@ func testControllerDown(t *testing.T) {
 			return !slices.ContainsFunc(h.Findings, func(f api.FindingDTO) bool { return f.Code == health.CodeProxyDisconnected })
 		})
 	})
-	start := healthNow(t).CollectedAt
+	// The earlier subtests restart the controller, and a proxy can still be reconnecting. Start once no
+	// proxy is waiting to reconnect, so every 60 s clock starts after the scale-down.
+	start := waitHealth(t, 2*time.Minute, "every proxy connected", func(h api.HealthResponse) bool {
+		c := checkResult(h, "proxy connection")
+		return c != nil && c.OK && c.Hold == nil && finding(h, health.CodeProxyDisconnected, "Gateway", nackID) == nil
+	}).CollectedAt
 	must(t, "-n", "kgw-a", "scale", "deploy/kgateway", "--replicas=0")
 	h := waitHealth(t, 4*time.Minute, "026 on infra/nack", func(h api.HealthResponse) bool {
 		return finding(h, health.CodeProxyDisconnected, "Gateway", nackID) != nil
