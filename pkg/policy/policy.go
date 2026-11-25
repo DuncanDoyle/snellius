@@ -136,13 +136,15 @@ type Reading struct {
 	Type string
 	// Warning is true when the pack reads the condition as a warning, such as PartiallyValid.
 	Warning bool
+	// Info is true when the pack reads the condition as worth an info finding, such as Overridden.
+	Info bool
 	// Note is a Note* key, or "" for none.
 	Note   string
 	Source Source
 }
 
 // zero reports whether r says nothing.
-func (r Reading) zero() bool { return !r.Warning && r.Note == "" }
+func (r Reading) zero() bool { return !r.Warning && !r.Info && r.Note == "" }
 
 // Annotation is a precedence annotation as written (design §5.5). The
 // controller uses it to order policies; Snellius never evaluates it.

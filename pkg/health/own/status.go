@@ -137,7 +137,7 @@ func policyAncestors(ic InstallContext, u *unstructured.Unstructured, named Name
 		// judges a list-only policy (DirectResponse), which keeps its 002 (design §6.6).
 		fromStatus := ic.TargetFromStatus && slices.Contains(ic.PolicyKinds, gk) && slices.ContainsFunc(append(slices.Clone(required), optional...), func(t string) bool {
 			c := objects.FindCondition(a.Conditions, t)
-			return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "TargetNotFound"
+			return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "TargetNotFound" && !objects.IsStale(u, *c)
 		})
 		extra := "ancestor " + a.AncestorRef.Kind + " " + ar.String()
 		owner := append([]string{OwnerAncestor}, RefKey(ar)...)
@@ -148,7 +148,7 @@ func policyAncestors(ic InstallContext, u *unstructured.Unstructured, named Name
 			if cond == nil || objects.IsStale(u, *cond) || fromStatus && cond.Reason == "TargetNotFound" {
 				continue
 			}
-			if sev, report := policySeverity(*cond); report {
+			if sev, report := policySeverity(ic, gk, a.AncestorRef, *cond); report {
 				// Each ancestor's finding rests on that ancestor only, so another one never withholds it;
 				// a ListenerSet's also on its parent Gateway, which its ownership comes from (D-134).
 				f := conditionFinding(sev, *cond, extra, owner)
@@ -170,16 +170,19 @@ func AncestorOwned(ic InstallContext, ar objects.Ref) bool {
 	return !inCategory(ic, ar.Group, ar.Kind, kinds.CategoryGateway, kinds.CategoryListenerSet) || ic.Owns(ar)
 }
 
-// policySeverity maps a current policy ancestor condition to a severity
-// (design §5.2: Overridden is info, PartiallyValid a warning).
-func policySeverity(c metav1.Condition) (string, bool) {
-	switch c.Reason {
-	case "Pending": // an undecided Attached beside a definitive Accepted (PolicyFreshness)
+// policySeverity maps a current condition c on ancestor of a policy of kind gk to a severity.
+// Other than Pending, a reason means something only through the pack's reading (design §8).
+func policySeverity(ic InstallContext, gk objects.GroupKind, ancestor objects.ParentRef, c metav1.Condition) (string, bool) {
+	if c.Reason == "Pending" { // an undecided Attached beside a definitive Accepted (PolicyFreshness)
 		return "", false
-	case "PartiallyValid":
-		return severityWarning, true
-	case "Overridden":
-		return severityInfo, true
+	}
+	if ic.PolicyReading != nil {
+		switch warning, info := ic.PolicyReading(gk, ancestor, c); {
+		case warning:
+			return severityWarning, true
+		case info:
+			return severityInfo, true
+		}
 	}
 	if c.Status == metav1.ConditionFalse {
 		return severityError, true

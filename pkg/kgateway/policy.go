@@ -88,8 +88,8 @@ func (i interpreter) Summary(gk objects.GroupKind, a objects.ParentRef) bool {
 	return i.Handles(gk) && a.Group == kinds.KgatewayGroup && a.Kind == summaryName && a.Name == summaryName
 }
 
-// Condition reads PartiallyValid as a warning and words Merged and Overridden by the
-// ancestor's granularity (design §6.3): a whole Gateway or ListenerSet, or one backend port.
+// Condition reads PartiallyValid as a warning and Overridden as info (Phase 8 design §5.2), and
+// words Merged and Overridden by the ancestor's granularity (design §6.3): a whole Gateway or ListenerSet, or one backend port.
 func (i interpreter) Condition(gk objects.GroupKind, a objects.ParentRef, c metav1.Condition) policy.Reading {
 	if !i.Handles(gk) {
 		return policy.Reading{}
@@ -98,12 +98,14 @@ func (i interpreter) Condition(gk objects.GroupKind, a objects.ParentRef, c meta
 	case "PartiallyValid":
 		return policy.Reading{Warning: true}
 	case "Merged", "Overridden":
+		r := policy.Reading{Info: c.Reason == "Overridden"}
 		switch {
 		case gatewayLike(a):
-			return policy.Reading{Note: policy.NoteGatewayWide}
+			r.Note = policy.NoteGatewayWide
 		case backendLike(a):
-			return policy.Reading{Note: policy.NoteBackendPort}
+			r.Note = policy.NoteBackendPort
 		}
+		return r
 	}
 	return policy.Reading{}
 }

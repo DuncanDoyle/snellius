@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/install"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
+	"github.com/DuncanDoyle/snellius/pkg/policy"
 )
 
 // namedRecorder records the refs one resource's analyzer named, in order,
@@ -153,8 +155,23 @@ func newOwnInput(in Input, rec *namedRecorder) (own.InstallContext, own.Named) {
 		Experimental:     b.experimental,
 		Collected:        func(gk objects.GroupKind, ns string) bool { return b.in.collected(gk, ns) },
 		TargetFromStatus: ts != nil && ts.ReportsTargetNotFound(),
+		PolicyReading:    policyReading(in.PolicyInterpreter),
 	}
 	return b.ic, rec
+}
+
+// policyReading is p's reading of a policy condition as own reads it; nil without a pack.
+func policyReading(p policy.Interpreter) func(objects.GroupKind, objects.ParentRef, metav1.Condition) (bool, bool) {
+	if p == nil {
+		return nil
+	}
+	return func(gk objects.GroupKind, a objects.ParentRef, c metav1.Condition) (bool, bool) {
+		if !p.Handles(gk) {
+			return false, false
+		}
+		r := p.Condition(gk, a, c)
+		return r.Warning, r.Info
+	}
 }
 
 // experimental is the install's Experimental for k, decided once per kind.

@@ -25,6 +25,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/platform"
+	"github.com/DuncanDoyle/snellius/pkg/policy"
 	"github.com/DuncanDoyle/snellius/pkg/scopeverify"
 )
 
@@ -110,9 +111,21 @@ func (w *world) input(t *testing.T) Input {
 	}
 	a := install.Assign(snap, served, []install.Resolved{res}, nil)
 	hi := Input{Install: res, Owned: a.PerInstall[res.ID()], Assignment: a, Snapshot: snap, Served: served, Now: testutil.Now,
-		Verify: scopeverify.Result{Available: true}, Platform: w.platform}
+		Verify: scopeverify.Result{Available: true}, Platform: w.platform, PolicyInterpreter: packReadings{}}
 	hi.FirstSeen, hi.Computed = w.firstSeen, w.computed
 	return hi
+}
+
+// packReadings stands in for the kgateway pack's interpreter, which pkg/health cannot import:
+// on gateway.kgateway.dev kinds, PartiallyValid is a warning and Overridden info.
+type packReadings struct{}
+
+func (packReadings) Handles(gk objects.GroupKind) bool                 { return gk.Group == kinds.KgatewayGroup }
+func (packReadings) FeatureLabel(objects.GroupKind, string) string     { return "" }
+func (packReadings) PrecedenceAnnotations(objects.GroupKind) []string  { return nil }
+func (packReadings) Summary(objects.GroupKind, objects.ParentRef) bool { return false }
+func (packReadings) Condition(_ objects.GroupKind, _ objects.ParentRef, c metav1.Condition) policy.Reading {
+	return policy.Reading{Warning: c.Reason == "PartiallyValid", Info: c.Reason == "Overridden"}
 }
 
 func (w *world) report(t *testing.T) Report {

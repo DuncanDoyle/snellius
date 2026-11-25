@@ -201,7 +201,7 @@ func Build(c Clients, o Options, reg *extension.Registry) (Config, error) {
 				}
 				return engine.Hooks{Scope: im.Scope, Settings: im.Settings, RulesFor: rules, Version: im.Version, Reported: im.Reported,
 					ExperimentalOnly: im.ExperimentalOnly, Checks: checks(i.Impl), Conditions: im.Conditions,
-					Verifier: verifierFor(i, im), Process: im.Process, ProxyMode: im.ProxyMode}
+					Verifier: verifierFor(i, im), Process: im.Process, ProxyMode: im.ProxyMode, PolicyInterpreter: im.PolicyInterpreter}
 			},
 			Triggers: changes, Clock: o.Clock, ClassOnly: o.ClassOnlyInstalls,
 			// The other bounds stay zero: the walker gives each its default.

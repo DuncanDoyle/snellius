@@ -55,6 +55,9 @@ type InstallContext struct {
 	// TargetFromStatus is true when the rule set reads a policy's
 	// TargetNotFound from status as KGWUI-016 (D-020 rule 5).
 	TargetFromStatus bool
+	// PolicyReading is the pack's reading of a current condition c on a policy of kind gk
+	// (design §8): a warning, an info, or neither. Nil reads none.
+	PolicyReading func(gk objects.GroupKind, ancestor objects.ParentRef, c metav1.Condition) (warning, info bool)
 }
 
 // Named resolves the objects a resource names. Every ref asked is recorded

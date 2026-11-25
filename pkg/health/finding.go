@@ -17,6 +17,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/platform"
+	"github.com/DuncanDoyle/snellius/pkg/policy"
 	"github.com/DuncanDoyle/snellius/pkg/process"
 	"github.com/DuncanDoyle/snellius/pkg/proxymode"
 	"github.com/DuncanDoyle/snellius/pkg/scopeverify"
@@ -468,6 +469,9 @@ type Input struct {
 	// Conditions are the install's condition types beyond Gateway API's; nil
 	// means KgatewayConditions, as for a caller that builds Input itself.
 	Conditions *ConditionTypes
+	// PolicyInterpreter is the install's pack reading of its own policy kinds (Phase 8 design §8);
+	// nil reads no pack reason, so only a False condition raises a policy ancestor's KGWUI-002.
+	PolicyInterpreter policy.Interpreter
 }
 
 // ConditionTypes are an implementation's route condition types beyond

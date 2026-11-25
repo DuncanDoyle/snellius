@@ -481,6 +481,34 @@ func TestPolicyTargetNotFoundFromStatus(t *testing.T) {
 	}
 }
 
+// An Attached=False/TargetNotFound older than the policy raises no 016 beside a current
+// Accepted=True (D-135); a current one still does (phase-8.4 brief row 1).
+func TestPolicyTargetNotFoundFromStaleAttached(t *testing.T) {
+	gw := testutil.GwRef("infra", "edge")
+	for _, c := range []struct {
+		name     string
+		attached int64
+		want     bool
+	}{{"stale Attached", 1, false}, {"current Attached", 2, true}} {
+		t.Run(c.name, func(t *testing.T) {
+			acc := testutil.Cond("Accepted", metav1.ConditionTrue, "Valid")
+			acc.ObservedGeneration = 2
+			att := testutil.Cond("Attached", metav1.ConditionFalse, "TargetNotFound")
+			att.ObservedGeneration = c.attached
+			tp := targetPolicy("infra", []map[string]any{tRef("Gateway", "edge", "")}, nil,
+				testutil.PolicyAncestor{Ref: gw, Controller: testutil.Controller, Conds: []metav1.Condition{acc, att}})
+			tp.SetGeneration(2)
+			r := targetsRun(t, rules25, []*unstructured.Unstructured{tp}, time.Hour)
+			if got := has(r, CodePolicyTargetNotFound, SeverityError, "infra/tp"); got != c.want {
+				t.Fatalf("016 = %v, want %v: %+v", got, c.want, r.Findings)
+			}
+			if has(r, CodeConditionFalse, "", "infra/tp") || has(r, CodeRouteUnattached, "", "infra/tp") {
+				t.Fatalf("no 002 or 003 beside it: %+v", r.Findings)
+			}
+		})
+	}
+}
+
 // kgateway-2.5 computes no 016 for a named targetRef; a stale or foreign
 // TargetNotFound raises none either.
 func TestPolicyTargetComputedOffOn25(t *testing.T) {

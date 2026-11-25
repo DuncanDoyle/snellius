@@ -29,6 +29,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/overview"
 	"github.com/DuncanDoyle/snellius/pkg/platform"
+	"github.com/DuncanDoyle/snellius/pkg/policy"
 	"github.com/DuncanDoyle/snellius/pkg/process"
 	"github.com/DuncanDoyle/snellius/pkg/proxymode"
 	"github.com/DuncanDoyle/snellius/pkg/scopeverify"
@@ -117,6 +118,8 @@ type Hooks struct {
 	Checks []health.Check
 	// Conditions are the install's condition types beyond Gateway API's.
 	Conditions health.ConditionTypes
+	// PolicyInterpreter is the pack's reading of its own policy kinds; nil reads none.
+	PolicyInterpreter policy.Interpreter
 	// Verifier checks the install's scope against its controller.
 	Verifier scopeverify.Verifier
 	// Process reports the install's controller and proxy processes.
@@ -472,7 +475,8 @@ func (e *Engine) compute() *Published {
 		}
 		rep := health.Evaluate(health.Input{Install: res, Owned: owned, Assignment: asg, Snapshot: snap, Served: served, KindsChange: kc, Catalog: cat,
 			FirstSeen: firstSeen, Verify: ver, Now: now, Platform: e.cfg.Platform, ProxyMode: mode,
-			Computed: views[i], Views: e.decode, Process: proc, GatewayAPI: gatewayAPI(r.sel), Rules: r.sel, Conditions: &r.conds}, r.checks, rt)
+			Computed: views[i], Views: e.decode, Process: proc, GatewayAPI: gatewayAPI(r.sel), Rules: r.sel, Conditions: &r.conds,
+			PolicyInterpreter: r.hooks.PolicyInterpreter}, r.checks, rt)
 		if !rep.Next.IsZero() {
 			next.add(rep.Next, false) // a grace end or a check's WakeAt
 		}

@@ -292,8 +292,9 @@ func (in Input) statusTargetFinding(u *unstructured.Unstructured, cs []metav1.Co
 		return Finding{}, false
 	}
 	// Accepted comes first: it carries the controller's list of missing targets.
+	// A condition older than the policy says nothing about it now (D-135).
 	for _, t := range append(slices.Clone(policyRequired), policyOptional...) {
-		if c := objects.FindCondition(cs, t); c != nil && c.Status == metav1.ConditionFalse && c.Reason == "TargetNotFound" {
+		if c := objects.FindCondition(cs, t); c != nil && c.Status == metav1.ConditionFalse && c.Reason == "TargetNotFound" && !objects.IsStale(u, *c) {
 			return Finding{Code: CodePolicyTargetNotFound, Slug: "policy-target-not-found", Severity: SeverityError, Install: in.Install.ID(),
 				Resource: ref(u), Message: PolicyTargetNotFoundMessage, Detail: detail(*c, extra), Since: since(*c),
 				Key: slices.Clip(owner)}, true // the ancestor only (D-040)
