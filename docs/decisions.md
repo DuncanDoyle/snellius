@@ -1855,7 +1855,7 @@ Measured on the reference machine, 5 runs per world:
 
 **Decision:** Every policy link in API v1 responses is the policy endpoint path `/api/v1/installs/{install}/policies/{group}/{kind}/{ns}/{name}` (segments path-escaped, `-` for the core group), so a shell routes it without `/meta` (8.2 review #8); `/meta` `views` lists the policy kinds. Wherever a policy link appears (list rows, subject relations, findings, diagnostics, finding details) it is present only when the viewer may `get` the policy by name; otherwise rows and relations omit it and findings carry `"none"` (8.2 review #3 and re-review). This changes existing `link` values (findings, diagnostics, finding details, the policies endpoints), not only adds fields.
 
-**Consequences:** Ten API goldens change (link values; `/meta` views). A downstream shell older than 8.2 routes these links wrong; the 8.3 upgrade notes say so. A client that followed a policy's `yaml` link from those responses now gets a detail link; the YAML stays reachable from the detail page and the install-scoped YAML path.
+**Consequences:** Ten API goldens change (link values; `/meta` views). A downstream shell older than 8.2 does not know the new link value and shows policy refs without a link; the 8.3 upgrade notes say to upgrade the shell with the backend. A client that followed a policy's `yaml` link from those responses now gets a detail link; the YAML stays reachable from the detail page and the install-scoped YAML path.
 
 ## D-137 — An authorization outage may answer 503 to any viewer (2026-11-24, Phase 8)
 **Status:** accepted (user, 2026-11-24: "Record an exception"); from `phases/phase-8/reviews/8.2-fix-codex.md`; an exception to D-085 next to D-112's size-limit exception.
