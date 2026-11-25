@@ -54,7 +54,7 @@ func TestPolicyInterpreterReadsOnlyKgatewayKinds(t *testing.T) {
 			continue
 		}
 		rs := p.Ancestors[0].Readings
-		want := []policy.Reading{{Type: "Accepted", Warning: true, Source: policy.SourceInferred},
+		want := []policy.Reading{{Type: "Accepted", Warning: true, Message: "Partially valid; some settings were ignored", Source: policy.SourceInferred},
 			{Type: "Attached", Note: policy.NoteGatewayWide, Source: policy.SourceInferred}}
 		if len(rs) != 2 || rs[0] != want[0] || rs[1] != want[1] {
 			t.Errorf("readings %+v, want %+v", rs, want)

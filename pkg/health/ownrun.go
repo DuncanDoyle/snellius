@@ -161,16 +161,16 @@ func newOwnInput(in Input, rec *namedRecorder) (own.InstallContext, own.Named) {
 }
 
 // policyReading is p's reading of a policy condition as own reads it; nil without a pack.
-func policyReading(p policy.Interpreter) func(objects.GroupKind, objects.ParentRef, metav1.Condition) (bool, bool) {
+func policyReading(p policy.Interpreter) func(objects.GroupKind, objects.ParentRef, metav1.Condition) own.ConditionReading {
 	if p == nil {
 		return nil
 	}
-	return func(gk objects.GroupKind, a objects.ParentRef, c metav1.Condition) (bool, bool) {
+	return func(gk objects.GroupKind, a objects.ParentRef, c metav1.Condition) own.ConditionReading {
 		if !p.Handles(gk) {
-			return false, false
+			return own.ConditionReading{}
 		}
 		r := p.Condition(gk, a, c)
-		return r.Warning, r.Info
+		return own.ConditionReading{Warning: r.Warning, Info: r.Info, Message: r.Message}
 	}
 }
 

@@ -476,7 +476,7 @@ The backend is a Gateway API core plus implementation packs. A pack (`extension.
 
 ### Policy interpreters
 
-A pack reads its own policy kinds through `Impl.PolicyInterpreter`, a `policy.Interpreter`. Per kind, it supplies a label for each spec section, the precedence annotation keys, which ancestor is the controller's synthetic missing-target entry, and a reading of each ancestor condition: a warning, or a note such as `policy.NoteGatewayWide`. `policy.Read` asks it only about kinds for which `Handles` is true. In the example, `acmePolicy` is the pack's `kinds.Descriptor` and `acmeDetector` its own `install.Detector`; you supply both.
+A pack reads its own policy kinds through `Impl.PolicyInterpreter`, a `policy.Interpreter`. Per kind, it supplies a label for each spec section, the precedence annotation keys, which ancestor is the controller's synthetic missing-target entry, and a reading of each ancestor condition: a warning or info, a note such as `policy.NoteGatewayWide`, and the wording its finding uses. `policy.Read` asks it only about kinds for which `Handles` is true. In the example, `acmePolicy` is the pack's `kinds.Descriptor` and `acmeDetector` its own `install.Detector`; you supply both.
 
 ```go
 // acmePolicies reads acme's own policy kinds. Read asks it nothing about other kinds.

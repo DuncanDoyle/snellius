@@ -56,8 +56,15 @@ type InstallContext struct {
 	// TargetNotFound from status as KGWUI-016 (D-020 rule 5).
 	TargetFromStatus bool
 	// PolicyReading is the pack's reading of a current condition c on a policy of kind gk
-	// (design §8): a warning, an info, or neither. Nil reads none.
-	PolicyReading func(gk objects.GroupKind, ancestor objects.ParentRef, c metav1.Condition) (warning, info bool)
+	// (design §8). Nil reads none.
+	PolicyReading func(gk objects.GroupKind, ancestor objects.ParentRef, c metav1.Condition) ConditionReading
+}
+
+// ConditionReading is a pack's reading of a policy condition: a warning, an info or neither,
+// and its wording of the condition, "" for the core's neutral one.
+type ConditionReading struct {
+	Warning, Info bool
+	Message       string
 }
 
 // Named resolves the objects a resource names. Every ref asked is recorded
@@ -302,10 +309,6 @@ func reasonMessage(reason string) (string, bool) {
 		return "Invalid configuration", true
 	case "TargetNotFound":
 		return "Policy target not found", true
-	case "PartiallyValid":
-		return "Partially valid; some settings were ignored", true
-	case "Overridden":
-		return "Overridden by another policy", true
 	case "AddressNotAssigned":
 		return "No address assigned", true
 	case "InvalidParameters":

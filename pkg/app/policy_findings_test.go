@@ -106,3 +106,39 @@ func TestPolicyFindingsAgreeWithHasProblems(t *testing.T) {
 		}
 	}
 }
+
+// A reason string is worded by the kind's interpreter only (design §8): the same
+// Attached=False/Overridden reads as kgateway's "Overridden" on a TrafficPolicy and
+// in the core's neutral wording on a downstream kind with no interpreter.
+func TestPolicyFindingMessageComesFromThePack(t *testing.T) {
+	d := testutil.ControllerDeployment("kgw", "kgateway", "cr.kgateway.dev/kgateway-dev/kgateway:v2.5.1", 1, 1)
+	d.Labels["app.kubernetes.io/version"] = "2.5.1"
+	gw := testutil.GwRef("infra", "edge")
+	accepted, overridden := condAt("Accepted", metav1.ConditionTrue, "Valid", 1), condAt("Attached", metav1.ConditionFalse, "Overridden", 1)
+	objs := []runtime.Object{
+		testutil.Namespace("infra", nil), testutil.Namespace("shop", nil), d, testutil.ControllerPod(d, "kgateway-0", true),
+		testutil.GatewayClass("kgateway", testutil.Controller, true), testutil.Gateway("infra", "edge", "kgateway", nil),
+		policyAt("gateway.kgateway.dev/v1alpha1", "TrafficPolicy", "tp", 1, gw, accepted, overridden),
+		policyAt("widgets.acme.example.com/v1", "WidgetPolicy", "wp", 1, gw, accepted, overridden),
+	}
+	_, srv := start(t, objs, []kinds.Descriptor{widgetKind}, Options{PollInterval: 50 * time.Millisecond, MetricsInterval: time.Hour, UI: ui},
+		&stubScraper{}, extension.WithKinds(widgetKind))
+	want := map[string]string{"tp": "Overridden by another policy", "wp": "Attached is False (Overridden)"}
+	got := map[string]string{}
+	eventually(t, "policy findings never appeared", func() bool {
+		var fs api.Page[api.FindingRow]
+		getJSON(t, srv, "/api/v1/installs/kgw.kgateway/findings?limit=200", &fs)
+		got = map[string]string{}
+		for _, f := range fs.Items {
+			if f.Code == "KGWUI-002" && f.Resource != nil && f.Resource.Namespace == "shop" {
+				got[f.Resource.Name] = f.Message
+			}
+		}
+		return len(got) == len(want)
+	})
+	for name, m := range want {
+		if got[name] != m {
+			t.Errorf("%s: message %q, want %q", name, got[name], m)
+		}
+	}
+}

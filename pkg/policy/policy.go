@@ -139,12 +139,15 @@ type Reading struct {
 	// Info is true when the pack reads the condition as worth an info finding, such as Overridden.
 	Info bool
 	// Note is a Note* key, or "" for none.
-	Note   string
-	Source Source
+	Note string
+	// Message is the pack's operator wording of the condition for its finding;
+	// "" leaves the core's neutral wording.
+	Message string
+	Source  Source
 }
 
 // zero reports whether r says nothing.
-func (r Reading) zero() bool { return !r.Warning && !r.Info && r.Note == "" }
+func (r Reading) zero() bool { return !r.Warning && !r.Info && r.Note == "" && r.Message == "" }
 
 // Annotation is a precedence annotation as written (design §5.5). The
 // controller uses it to order policies; Snellius never evaluates it.
