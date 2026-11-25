@@ -81,3 +81,8 @@ Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; uncha
 - [ ] Q8.4-6 (P2 correctness) listener-specific policy view (design §§2, 6.5): build or defer (user) — src: #6
 - [ ] Q8.4-7 (P2 correctness) upgrade and site notes overstate finding rules — src: #7
 - Phase 10 design: an empty declared-policy group is not evidence that a route lacks auth — src: #carry-overs
+
+## Program rules added 2026-11-25 (kgateway-tooling `dbf7140`)
+- P-011 (identity): at the Phase 9 start, audit the remaining D-040 rank-based IDs against P-011 rule 2 (D-102 and D-132 comply)
+- P-012 (version bumps): any move to a later kgateway, Gateway API or Envoy version diffs the CRDs, checks kind lists (Helm RBAC test, kind registry), version-keyed tables and mirrors in the same change
+- Protocol step 7: every review prompt links the program's "Architecture guidelines" (from the 8.4 reviews on; the Phase 8 phase review predates it)
