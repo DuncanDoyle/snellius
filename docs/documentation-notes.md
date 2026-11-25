@@ -127,3 +127,13 @@ Topics the user-facing documentation must cover when it is written. Each entry s
 - Capacity at the default 100 checks/s: on a cluster of about 100 namespaces, 50 restricted viewers polling `/backends` every 5 s need about 95 checks/s, so their polls slow to about 12 s. Raise `auth.authz.rate` if the API server can take it; scoping a page to a namespace cuts its checks sharply.
 - The permission cache stays at 8 MiB and holds about 40,000 answers (about 210 B each).
 - **Written (7.6).** README "Capacity and tuning".
+
+## Policy visibility (2026-11-25, Phase 8, D-121 to D-127, D-135)
+
+- **What users see.** The Policies list and policy detail, and a Policies section on Gateway, ListenerSet, route and backend pages. Each shows what a spec declares and what the controller writes in status, never more.
+- **Sources.** Explain the four tags with one example each: Declared (a targetRef as written), Reported (an ancestor's `Accepted=False Invalid`, shown as is), Inferred (a target check, or the list's Accepted summary) and Unknown (a target the viewer cannot read). The API's `controller-reported-contribution` is reserved for the runtime view and also reads "Reported".
+- **"Not by precedence".** Lists sort by namespace and name. The order says nothing about which policy wins. Precedence annotations (`kgateway.dev/policy-weight`, `kgateway.dev/inherited-policy-priority`) appear as written; Snellius never evaluates them.
+- **What Snellius never shows.** The "effective policy" of a route, which policy wins, merge or override outcomes, or the objects a label selector matches. kgateway reports `Accepted` and `Attached` per Gateway, ListenerSet or backend port, not per route, and a `Merged` or `Overridden` on a Gateway covers the whole Gateway. Computing the rest would copy kgateway's resolution logic. Say this plainly, with the upstream gap behind it.
+- **"Targeting a parent".** Built from the object's own parentRefs, section by section, never from status. kgateway decides whether and how those policies apply. A route whose parentRef names a whole Gateway lists no listener-level policies; the Gateway page does.
+- **Rejected policies.** A rejected policy raises KGWUI-002 on kgateway 2.3, 2.4 and 2.5, where earlier releases showed KGWUI-003 "Not yet processed". DirectResponse gets the same findings. Update any page or demo that shows the old finding.
+- **Runtime view.** What Envoy runs, such as a route's filter chain and the policies that contributed to it, comes in Phase 12 (D-124). It needs access the chart does not grant today. Describe it as planned, without a date.

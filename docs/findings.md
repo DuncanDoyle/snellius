@@ -60,9 +60,15 @@ Severity is error, with three exceptions:
 - a policy ancestor with reason `Overridden` is info;
 - a Backend whose `Accepted=False` has no `observedGeneration`, as kgateway 2.3 writes it, is a warning.
 
-kgateway 2.5 controllers write `TargetNotFound` for a missing policy target, and the UI shows it as KGWUI-016, not here. A controller whose version the UI cannot read runs on the 2.5 rules, so it is shown as KGWUI-016 too. On 2.3 and 2.4 the UI computes a missing target instead: see KGWUI-016.
+For a policy ancestor, the finding comes from `Accepted` and `Attached`. A condition older than the policy's generation is ignored, and an `Attached` with reason `Pending` raises nothing. kgateway writes `Attached=False` with reason `Pending` on every policy it rejects, so a rejected policy shows here, from its `Accepted=False`, not as KGWUI-003.
+
+kgateway 2.5 controllers write `TargetNotFound` for a missing policy target, and the UI shows it as KGWUI-016, not here. A controller whose version the UI cannot read runs on the 2.5 rules, so it is shown as KGWUI-016 too. On 2.3 and 2.4 the UI computes a missing target instead: see KGWUI-016. A DirectResponse is the exception: its `TargetNotFound` stays here.
 
 **Evidence.** The message is the condition's reason in plain words. The detail quotes the condition as written: type, status, reason and message, and the listener, parent or ancestor it belongs to. A parent route whose backendRefs all delegate reads "A delegating rule has no accepted child route" in place of "Backend not found".
+
+**ID.** A policy ancestor's finding ID hashes the policy, the ancestor with its section and port, and the condition type. Other ancestors coming, going or reordering never change it. If status holds the same ancestor twice, each finding after the first gets an ordinal in status order.
+
+**Who sees it.** In secure mode, a policy ancestor's finding shows to a viewer who can read the policy and may `list` and `get` by name every object the finding rests on: the ancestor, and for a ListenerSet ancestor also its parent Gateway. A hidden second ancestor never withholds it.
 
 **Fix.** Read the condition's message in the detail. It is the controller's own text and usually names the field. Correct that field. The finding clears when the controller writes a new status.
 
@@ -70,7 +76,7 @@ kgateway 2.5 controllers write `TargetNotFound` for a missing policy target, and
 
 `route-unattached` · info, then warning · status
 
-**Cause.** The controller has not processed an object, or its status describes an older version. Despite the slug, it covers every kind with status: GatewayClasses, Gateways, ListenerSets, listeners, routes per parent, and policies. It never covers a DirectResponse (see KGWUI-002).
+**Cause.** The controller has not processed an object, or its status describes an older version. Despite the slug, it covers every kind with status: GatewayClasses, Gateways, ListenerSets, listeners, routes per parent, and policies. It never covers a DirectResponse (see KGWUI-002), nor a policy that kgateway rejected, which is KGWUI-002 too.
 
 For 60 s after the UI first sees the object's current generation, the finding is info, "Being processed by the controller", and the install reads unknown. After 60 s it is a warning, "Not yet processed by the controller". A route whose parent does not exist reads "Not attached: parent not found".
 
@@ -80,6 +86,8 @@ For 60 s after the UI first sees the object's current generation, the finding is
 - `stale`: `observedGeneration` is below `metadata.generation`. The evidence quotes both, and when the UI first saw the current generation.
 - `pending`: a current condition has reason `Pending` or status `Unknown`.
 - `no-ancestor`: no Gateway of this install reports using the policy.
+
+For a policy ancestor, only `Accepted` counts. The ancestor is `pending` when `Accepted` is missing, `Pending` or `Unknown`, and `stale` when `Accepted` describes an older generation. An `Attached` that is `Pending` or older is ignored.
 
 For a kind the controller watches only with its experimental Gateway API features on, the detail says those features may be off.
 
