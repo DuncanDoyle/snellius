@@ -24,8 +24,8 @@ import (
 )
 
 // WithPolicyInterpreters gives each install's pack policy interpreter (Phase 8
-// design §8). Without it, or when it returns nil, features are raw spec keys
-// and nothing is interpreted.
+// design §8). Without it, or when it returns nil, the install model's
+// interpreter applies, the one its findings used.
 func WithPolicyInterpreters(f func(install.Install) policy.Interpreter) HandlerOption {
 	return func(c *handlerConfig) { c.interpFor = f }
 }
@@ -110,6 +110,9 @@ func (h *handler) policyReader(p *engine.Published, i *engine.InstallModel, v *v
 	var interp policy.Interpreter
 	if h.interpFor != nil {
 		interp = h.interpFor(i.Resolved.Install)
+	}
+	if interp == nil {
+		interp = i.PolicyInterpreter
 	}
 	return policyReader{interp: interp, guard: policyGuard(p.Model, i), served: p.Model.Served, in: policy.Inputs{Lookup: policyLookup{m: p.Model, v: v},
 		Targeter: i.Rules.PolicyTargeter(), ScopeKnown: i.Resolved.Scope.Mode != install.ScopeUnknown}}

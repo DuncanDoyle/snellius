@@ -118,7 +118,7 @@ type Hooks struct {
 	Checks []health.Check
 	// Conditions are the install's condition types beyond Gateway API's.
 	Conditions health.ConditionTypes
-	// PolicyInterpreter is the pack's reading of its own policy kinds; nil is as health.Evaluate reads it.
+	// PolicyInterpreter is the pack's reading of its own policy kinds; nil is health.PolicyInterpreterFor the checks.
 	PolicyInterpreter policy.Interpreter
 	// Verifier checks the install's scope against its controller.
 	Verifier scopeverify.Verifier
@@ -144,6 +144,9 @@ type InstallModel struct {
 	Computed *computed.Views
 	// Process is the install's controller and proxy processes.
 	Process *health.ProcessData
+	// PolicyInterpreter is the one the findings used: the hooks' value, else
+	// health.PolicyInterpreterFor the install's checks; nil reads none.
+	PolicyInterpreter policy.Interpreter
 }
 
 // Model is one consistent computation over a snapshot.
@@ -473,10 +476,15 @@ func (e *Engine) compute() *Published {
 			pc = &printCtx{snap: snap, res: res, all: all, ver: &ver, views: views[i], kc: kc, cat: cat, col: col, proc: proc}
 			rt.Print = func(set health.InputSet) (uint64, bool) { return e.inputPrint(set, pc) }
 		}
+		// The one interpreter both the findings and the API's policy reads use.
+		interp := r.hooks.PolicyInterpreter
+		if interp == nil {
+			interp = health.PolicyInterpreterFor(r.checks)
+		}
 		rep := health.Evaluate(health.Input{Install: res, Owned: owned, Assignment: asg, Snapshot: snap, Served: served, KindsChange: kc, Catalog: cat,
 			FirstSeen: firstSeen, Verify: ver, Now: now, Platform: e.cfg.Platform, ProxyMode: mode,
 			Computed: views[i], Views: e.decode, Process: proc, GatewayAPI: gatewayAPI(r.sel), Rules: r.sel, Conditions: &r.conds,
-			PolicyInterpreter: r.hooks.PolicyInterpreter}, r.checks, rt)
+			PolicyInterpreter: interp}, r.checks, rt)
 		if !rep.Next.IsZero() {
 			next.add(rep.Next, false) // a grace end or a check's WakeAt
 		}
@@ -485,7 +493,7 @@ func (e *Engine) compute() *Published {
 		ix := explore.Build(explore.Input{Install: res, Owned: owned, Assignment: asg, Snapshot: snap, Served: served, Health: rep, Views: e.decode,
 			Computed: views[i], Conditions: &r.conds})
 		m.Installs = append(m.Installs, InstallModel{Resolved: res, Owned: owned, Health: rep, Diagnosis: diag, Index: ix, Overview: overview.Build(res, owned, snap, served, rep, e.cfg.Platform),
-			Rules: r.sel, Computed: views[i], Process: proc})
+			Rules: r.sel, Computed: views[i], Process: proc, PolicyInterpreter: interp})
 	}
 	maps.DeleteFunc(e.diags, func(id string, _ *diagMemo) bool { return states[id] == nil })
 	m.Next = next.next
