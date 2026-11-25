@@ -2,10 +2,12 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/pkg/install"
@@ -57,25 +59,80 @@ func linkPath(installBase string, l LinkedRef) string {
 	return string(l.Link)
 }
 
+const (
+	tpBRef = "gateway.kgateway.dev/TrafficPolicy/infra-b/tp-b"
+	routeA = base + "/routes/gateway.networking.k8s.io/HTTPRoute/shop/uses-tp"
+)
+
+var tpB = objects.Ref{Group: "gateway.kgateway.dev", Kind: "TrafficPolicy", Namespace: "infra-b", Name: "tp-b"}
+
+// twoInstalls serves install B, which owns tp-b when withPolicy, and a route in
+// install A that names tp-b, to callers authorized by authz.
+func twoInstalls(t *testing.T, withPolicy bool, authz Authorizer) *harness {
+	t.Helper()
+	d2 := testutil.ControllerDeployment("kgw2", "kgateway2", img, 1, 1, testutil.Env(install.DiscoveryNamespaceSelectorsEnv, `[{"matchLabels":{"team":"b"}}]`))
+	uses := testutil.HTTPRoute("shop", "uses-tp", []objects.ParentRef{edgeRef}, testutil.AcceptedBy(edgeRef, testutil.Controller))
+	uses.Object["spec"].(map[string]any)["rules"] = []any{map[string]any{"backendRefs": []any{
+		map[string]any{"group": tpB.Group, "kind": tpB.Kind, "namespace": tpB.Namespace, "name": tpB.Name}}}}
+	extra := []runtime.Object{testutil.Namespace("kgw2", nil), testutil.Namespace("infra-b", map[string]string{"team": "b"}), d2,
+		testutil.ControllerPod(d2, "kgateway2-0", true), edgeIn("infra-b", 0), testutil.ProxyDeployment("infra-b", "edge", 1, 1), uses}
+	if withPolicy {
+		tp := testutil.TrafficPolicy("infra-b", "tp-b", testutil.PolicyAncestor{Ref: testutil.GwRef("infra-b", "edge"), Controller: testutil.Controller,
+			Conds: []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionTrue, "Accepted")}})
+		tp.Object["spec"] = map[string]any{"targetRefs": []any{map[string]any{"group": objects.GatewayAPIGroup, "kind": "Gateway", "name": "edge"}}}
+		extra = append(extra, tp)
+	}
+	return newHarness(t, setup{metrics: okMetrics("kgw.kgateway", "kgw2.kgateway2"), authz: authz}, isolated(extra...)...)
+}
+
+// denyNamedRef allows every member and every list but refuses one name by name,
+// as a downstream authorizer narrowing SAR can (D-119).
+type denyNamedRef struct{ name string }
+
+func (denyNamedRef) Authorize(*http.Request, objects.Ref) bool { return true }
+
+func (d denyNamedRef) AuthorizeNamedErr(_ *http.Request, ref objects.Ref) (bool, error) {
+	return ref.Name != d.name, nil
+}
+
+func (denyNamedRef) CanList(*http.Request, objects.GroupKind, string) (bool, error) { return true, nil }
+
+// Another install's policy that the caller may not get by name links nowhere, as an
+// absent one does: its YAML needs named get like every YAML link (8.4 review, new 1).
+func TestReferencedPolicyOfAnotherInstallDeniedByName(t *testing.T) {
+	deny := denyNamedRef{name: tpB.Name}
+	denied, absent := twoInstalls(t, true, deny), twoInstalls(t, false, deny)
+	_, db := raw(t, denied.srv, refsQuery(tpBRef))
+	_, ab := raw(t, absent.srv, refsQuery(tpBRef))
+	if string(db) != string(ab) {
+		t.Errorf("refs: named-denied %s, absent %s", db, ab)
+	}
+	for name, h := range map[string]*harness{"named-denied": denied, "absent": absent} {
+		if r := get[TrailRefs](t, h.srv, refsQuery(tpBRef), 200); len(r.Refs) != 1 || r.Refs[0].Link != LinkNone {
+			t.Errorf("%s refs: %+v, want none", name, r.Refs)
+		}
+		status, b := raw(t, h.srv, routeA)
+		if status != 200 {
+			t.Fatalf("%s route: %d", name, status)
+		}
+		for _, l := range linkedRefs(t, b) {
+			if l.Ref == tpB && l.Link != LinkNone {
+				t.Errorf("%s route links tp-b %q, want none", name, l.Link)
+			}
+		}
+	}
+	if status, _ := raw(t, denied.srv, resourcePath(tpB)); status != 404 {
+		t.Errorf("named-denied YAML: %d, want 404", status)
+	}
+}
+
 // A route in install A that names a policy only install B owns links it to A's YAML,
 // never to A's policy detail, which serves members only (Q8.4-2). B links its detail.
 func TestReferencedPolicyOfAnotherInstallLinksYAML(t *testing.T) {
-	d2 := testutil.ControllerDeployment("kgw2", "kgateway2", img, 1, 1, testutil.Env(install.DiscoveryNamespaceSelectorsEnv, `[{"matchLabels":{"team":"b"}}]`))
-	edgeB := testutil.GwRef("infra-b", "edge")
-	tpB := testutil.TrafficPolicy("infra-b", "tp-b", testutil.PolicyAncestor{Ref: edgeB, Controller: testutil.Controller,
-		Conds: []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionTrue, "Accepted")}})
-	tpB.Object["spec"] = map[string]any{"targetRefs": []any{map[string]any{"group": objects.GatewayAPIGroup, "kind": "Gateway", "name": "edge"}}}
-	uses := testutil.HTTPRoute("shop", "uses-tp", []objects.ParentRef{edgeRef}, testutil.AcceptedBy(edgeRef, testutil.Controller))
-	uses.Object["spec"].(map[string]any)["rules"] = []any{map[string]any{"backendRefs": []any{
-		map[string]any{"group": "gateway.kgateway.dev", "kind": "TrafficPolicy", "namespace": "infra-b", "name": "tp-b"}}}}
-	objs := isolated(testutil.Namespace("kgw2", nil), testutil.Namespace("infra-b", map[string]string{"team": "b"}), d2,
-		testutil.ControllerPod(d2, "kgateway2-0", true), edgeIn("infra-b", 0), testutil.ProxyDeployment("infra-b", "edge", 1, 1), tpB, uses)
-	h := newHarness(t, setup{metrics: okMetrics("kgw.kgateway", "kgw2.kgateway2")}, objs...)
-
-	const tpRef = "gateway.kgateway.dev/TrafficPolicy/infra-b/tp-b"
-	ref := objects.Ref{Group: "gateway.kgateway.dev", Kind: "TrafficPolicy", Namespace: "infra-b", Name: "tp-b"}
+	h := twoInstalls(t, true, nil)
+	const tpRef = tpBRef
+	ref := tpB
 	baseB := "/api/v1/installs/kgw2.kgateway2"
-	routeA := base + "/routes/gateway.networking.k8s.io/HTTPRoute/shop/uses-tp"
 	if r := get[TrailRefs](t, h.srv, refsQuery(tpRef), 200); len(r.Refs) != 1 || r.Refs[0].Link != LinkYAML {
 		t.Errorf("install A refs: %+v, want a YAML link", r.Refs)
 	}
