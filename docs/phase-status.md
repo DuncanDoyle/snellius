@@ -59,7 +59,7 @@ Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; uncha
 - (P4) Move engine's rule-set fallbacks and the Gateway CRD table behind the pack (D-128, program open question 3)
 
 ## Notes
-- 2026-11-25: snellius#68 (from xdsview, E14): make "Config accepted" also require no KGWUI-025 or 026, or reword it; optional proxy-only version differences. Not Phase 8 scope; the user decides when. Program read at kgateway-tooling `70fda55`.
+- 2026-11-25: snellius#68 (from xdsview, E14): make "Config accepted" also require no KGWUI-025 or 026, or reword it; optional proxy-only version differences. User ruling 2026-11-25: keep the "Config accepted" label, show it only when 001, 024, 025 and 026 are all absent, no tooltip; document in the docs and site that Snellius does not compare config versions, so a connected proxy on old config still reads as accepted. Version differences wait for Phase 12. After the `v0.9.0` tag. Program read at kgateway-tooling `70fda55`.
 - 2026-11-25: KGWUI-026 e2e flake fixed in its own PR #69 (test bug: proxies kept the disconnect onset from earlier controller restarts).
 - 2026-11-22: `Scope.Excluded` (#66, PR #67) is for kgwctl Phase 4 task 4.2.2, which it does not block. kgwctl expects it in `v0.9.0` (owner's decision, 2026-11-23); send kgwctl the tag (`cross-repo` issue naming E2), or tell kgwctl if `v0.9.0` ships without it.
 - 2026-11-23: Phase 12 targets the xdsview Phase 9 tag (P-010, E15). xdsview will ask for a review of its Phase 9 design (`cross-repo` issue, program open question 7): check it against roadmap Phase 12.
