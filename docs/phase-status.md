@@ -4,7 +4,7 @@
 Phase: 8 — Policies & Filters
 Base: b01b677
 Docs: docs/phases/phase-8/
-Status: design approved (user, 2026-11-23); D-121 … D-129 accepted; runtime view in Phase 12. 8.1 closed 2026-11-23 (D-130 … D-134). 8.2 closed 2026-11-25 (D-135 … D-137; phases/phase-8/phase-8.2-complete.md). 8.3 closed 2026-11-25 (docs; phases/phase-8/phase-8.3-complete.md). Next: phase review (Codex, `b01b677..HEAD`), then phase close: file the four 8.3 notices at the tag (approved by the user 2026-11-25), update the program file, tag `v0.9.0`. Phase start: program read, scope endpoint filed as kgateway#15070, kgateway#14815 still open.
+Status: design approved (user, 2026-11-23); D-121 … D-129 accepted; runtime view in Phase 12. 8.1 closed 2026-11-23 (D-130 … D-134). 8.2 closed 2026-11-25 (D-135 … D-137; phases/phase-8/phase-8.2-complete.md). 8.3 closed 2026-11-25 (docs; phases/phase-8/phase-8.3-complete.md). Phase review done 2026-11-25 (phases/phase-8/reviews/phase-codex.md): 2 P1 and 5 P2 accepted, proposed as stabilization sub-phase 8.4 (queue below; awaits the user). Then phase close: file the four 8.3 notices at the tag (approved by the user 2026-11-25), update the program file, tag `v0.9.0`. Phase start: program read, scope endpoint filed as kgateway#15070, kgateway#14815 still open.
 Author: claude (Opus 5.5)
 
 ## Sub-phase
@@ -18,7 +18,6 @@ Consumers: E2, E3, E8 delivered through `v0.8.0` (kgwctl#3 … #8).
 Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; unchanged). The xdsview session will ask which of KGWUI-001, 006, 008, 025, 026 and the withheld-config signal answer the convergence questions (P-009 q6): answer it directly.
 
 ## Carry-over (deferred to later phases)
-- (P3) Phase 8 (phase review, final check): extend the full-read-without-Events-or-CRDs test to deny each grant separately and to cover backend list, backend detail and route detail, with a byte baseline for the fully granted reader — src: phases/phase-7/reviews/phase-codex.md
 - (P4) Phase 8 and 9 (phase review PH6): extensions receive the raw publication beside per-object visibility helpers; policy relations (Phase 8, no inherited policy, D-121) and winning-route predictions must use viewer-scoped computations so a hidden input cannot change a readable result (D-085) — src: phases/phase-7/reviews/phase-codex.md
 - (P3) After `v0.8.0` (user, 2026-11-18, D-118): compare how other Kubernetes UIs and platforms authorise per user, whether they hit the same check-rate limits, and whether Snellius's per-object visibility (D-085) causes them; what could be learned from their architecture. Include (user, 2026-11-18) an implicit namespace scope: derive the namespaces a viewer can read (cached SAR list answers, or SelfSubjectRulesReview as a hint only) and scope pages to them by default, SAR still deciding every object, shown in the UI with a way to widen; OpenShift's Projects API is the precedent
 - (P3) After `v0.8.0` (user, 2026-11-18): poll every 10 s instead of 5 s, pause while the tab is hidden and refresh on return (saves server work; check load follows answer lifetimes, not polls); a quiet "checking what you can see" hint after a few seconds of waiting; fairness between viewers in admission. No session cap for restricted viewers: idle sessions cost little, and D-116 already bounds concurrent work
@@ -42,11 +41,11 @@ Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; uncha
 - Smaller Phase 2 and Phase 3 items (parked tasks, test gaps, layout at 720 px, P4 polish) — src: phases/phase-2/phase-2-complete.md and phases/phase-3/phase-3-complete.md, Deferred / open
 
 ## Carry-over added 2026-11-25 (8.2)
-- (P3, phase review) On the 2.5 rules, `statusTargetFinding` raises KGWUI-016 from an `Attached=False TargetNotFound` without checking the condition's generation, so an older `Attached` can still raise it beside a current `Accepted=True` (D-135 covers 002 and summaries only) — src: phases/phase-8/reviews/8.3-codex.md#4
+- (P1) moved to the 8.4 queue (Q8.4-1)
 - (P2, phase review) Base authorization runs before the downstream authoriser outside the policy paths; prefetch of downstream-denied refs pays needless checks (cost and order; D-137 covers the outage leak) — src: phases/phase-8/phase-8.2-complete.md
 - (P3) Measure the `/findings` cost of policy links and strict bases in a bench world with policy findings — src: phases/phase-8/phase-8.2-complete.md
 - (P4) A downstream ListenerSet kind is covered in `pkg/policy` only, not in the API rule world — src: phases/phase-8/phase-8.2-complete.md
-- (P3, flake, own PR) KGWUI-026 raised 46 s after the controller scale-down in `TestDataPlaneDiagnostics/controller_scaled_to_zero` (one 2.3.11 job); root cause in progress (user, 2026-11-25) — src: phases/phase-8/phase-8.2-complete.md
+- [x] (P3, flake) KGWUI-026 e2e timing: test bug (proxies kept the disconnect onset from earlier controller restarts); fixed in PR #69, merged 2026-11-25
 - The 8.3 upgrade notes say that a downstream shell older than v0.9.0 shows policy refs without a link, so upgrade the shell with the backend
 
 ## Carry-over added 2026-11-23 (8.1)
@@ -72,3 +71,13 @@ Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; uncha
 - 2026-11-07: Phase 3 closed (phases/phase-3/phase-3-complete.md). D-061 adds Phase 4 (Snellius rebrand) and Phase 5 (Generic Gateway API core); the old Phases 4–11 are now 6–13. Phase 4 is pre-approved; set Base when it starts, then write its design.
 - The first release tag freezes API v1, install IDs and SPA URLs; make the ghcr packages public first (phase-1-complete.md).
 - The repo is public: per the public-repo hygiene rules, vendor and commercial edition names must not appear in code, file names, commit messages or PR text. Refer to them as "downstream distributions".
+
+## Proposed 8.4 queue (stabilization, from reviews/phase-codex.md)
+- [ ] Q8.4-1 (P1 correctness) 2.5 rules: an `Attached` older than the policy raises KGWUI-016 — src: reviews/phase-codex.md#1
+- [ ] Q8.4-2 (P1 correctness) a policy referenced by a route in another install gets a policy link whose detail returns 404 — src: #2
+- [ ] Q8.4-3 (P2 architecture) `/policies` ignores the namespace scope (D-100 item 8) — src: #3
+- [ ] Q8.4-4 (P2 architecture) `PartiallyValid` and `Overridden` read in core for every policy kind, not via the interpreter (design §8) — src: #4
+- [ ] Q8.4-5 (P2 architecture) list-only ancestor rule lives in the API, not in `pkg/policy.Relations` (D-123, D-129) — src: #5
+- [ ] Q8.4-6 (P2 correctness) listener-specific policy view (design §§2, 6.5): build or defer (user) — src: #6
+- [ ] Q8.4-7 (P2 correctness) upgrade and site notes overstate finding rules — src: #7
+- Phase 10 design: an empty declared-policy group is not evidence that a route lacks auth — src: #carry-overs
