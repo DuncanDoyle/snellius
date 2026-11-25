@@ -1857,6 +1857,8 @@ Measured on the reference machine, 5 runs per world:
 
 **Consequences:** Ten API goldens change (link values; `/meta` views). A downstream shell older than 8.2 does not know the new link value and shows policy refs without a link; the 8.3 upgrade notes say to upgrade the shell with the backend. A client that followed a policy's `yaml` link from those responses now gets a detail link; the YAML stays reachable from the detail page and the install-scoped YAML path.
 
+**Consequence (2026-11-25, 8.4):** A policy link is the policy detail path only when the policy belongs to the linking install (owned or listed) and the viewer may `get` it by name. A policy that a route references from another install gets a YAML link (phase review finding 2).
+
 ## D-137 — An authorization outage may answer 503 to any viewer (2026-11-24, Phase 8)
 **Status:** accepted (user, 2026-11-24: "Record an exception"); from `phases/phase-8/reviews/8.2-fix-codex.md`; an exception to D-085 next to D-112's size-limit exception.
 
