@@ -48,6 +48,7 @@ Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; uncha
 - Smaller Phase 2 and Phase 3 items (parked tasks, test gaps, layout at 720 px, P4 polish) — src: phases/phase-2/phase-2-complete.md and phases/phase-3/phase-3-complete.md, Deferred / open
 
 ## Carry-over added 2026-11-25 (8.2)
+- (P3, phase review) On the 2.5 rules, `statusTargetFinding` raises KGWUI-016 from an `Attached=False TargetNotFound` without checking the condition's generation, so an older `Attached` can still raise it beside a current `Accepted=True` (D-135 covers 002 and summaries only) — src: phases/phase-8/reviews/8.3-codex.md#4
 - (P2, phase review) Base authorization runs before the downstream authoriser outside the policy paths; prefetch of downstream-denied refs pays needless checks (cost and order; D-137 covers the outage leak) — src: phases/phase-8/phase-8.2-complete.md
 - (P3) Measure the `/findings` cost of policy links and strict bases in a bench world with policy findings — src: phases/phase-8/phase-8.2-complete.md
 - (P4) A downstream ListenerSet kind is covered in `pkg/policy` only, not in the API rule world — src: phases/phase-8/phase-8.2-complete.md
