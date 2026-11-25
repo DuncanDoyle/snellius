@@ -88,6 +88,28 @@ func hasFinding(rep health.Report, code, res, detail string) bool {
 	return false
 }
 
+// The engine's default kgateway hooks read a TrafficPolicy's PartiallyValid and Overridden
+// as the kgateway pack does, with no interpreter set (8.4 review, new 2).
+func TestDefaultHooksReadKgatewayPolicies(t *testing.T) {
+	gw := testutil.GwRef("infra", "edge")
+	tp := func(name string, cs ...metav1.Condition) *unstructured.Unstructured {
+		return testutil.TrafficPolicy("shop", name, testutil.PolicyAncestor{Ref: gw, Controller: testutil.Controller, Conds: cs})
+	}
+	snap := snapshot(t, tp("partial", testutil.Cond("Accepted", metav1.ConditionTrue, "PartiallyValid")),
+		tp("overridden", testutil.Cond("Accepted", metav1.ConditionTrue, "Valid"), testutil.Cond("Attached", metav1.ConditionFalse, "Overridden")))
+	e := New(config(snap, metricsAt(testutil.Now), func() time.Time { return testutil.Now }))
+	want := map[string]health.Severity{"shop/partial": health.SeverityWarning, "shop/overridden": health.SeverityInfo}
+	got := map[string]health.Severity{}
+	for _, f := range e.Compute().Installs[0].Health.Findings {
+		if f.Code == health.CodeConditionFalse && f.Resource != nil {
+			got[f.Resource.String()] = f.Severity
+		}
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("policy findings %v, want %v", got, want)
+	}
+}
+
 // Grace runs from when the engine first saw the current (uid, generation).
 // An annotation-only update does not restart it; a generation bump does;
 // objects present at the first computation get grace from UI start even if

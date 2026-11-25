@@ -111,21 +111,61 @@ func (w *world) input(t *testing.T) Input {
 	}
 	a := install.Assign(snap, served, []install.Resolved{res}, nil)
 	hi := Input{Install: res, Owned: a.PerInstall[res.ID()], Assignment: a, Snapshot: snap, Served: served, Now: testutil.Now,
-		Verify: scopeverify.Result{Available: true}, Platform: w.platform, PolicyInterpreter: packReadings{}}
+		Verify: scopeverify.Result{Available: true}, Platform: w.platform}
 	hi.FirstSeen, hi.Computed = w.firstSeen, w.computed
 	return hi
 }
 
-// packReadings stands in for the kgateway pack's interpreter, which pkg/health cannot import:
-// on gateway.kgateway.dev kinds, PartiallyValid is a warning and Overridden info.
-type packReadings struct{}
+// readsNothing is a downstream pack's interpreter that reads no kind.
+type readsNothing struct{}
 
-func (packReadings) Handles(gk objects.GroupKind) bool                 { return gk.Group == kinds.KgatewayGroup }
-func (packReadings) FeatureLabel(objects.GroupKind, string) string     { return "" }
-func (packReadings) PrecedenceAnnotations(objects.GroupKind) []string  { return nil }
-func (packReadings) Summary(objects.GroupKind, objects.ParentRef) bool { return false }
-func (packReadings) Condition(_ objects.GroupKind, _ objects.ParentRef, c metav1.Condition) policy.Reading {
-	return policy.Reading{Warning: c.Reason == "PartiallyValid", Info: c.Reason == "Overridden"}
+func (readsNothing) Handles(objects.GroupKind) bool                    { return false }
+func (readsNothing) FeatureLabel(objects.GroupKind, string) string     { return "" }
+func (readsNothing) PrecedenceAnnotations(objects.GroupKind) []string  { return nil }
+func (readsNothing) Summary(objects.GroupKind, objects.ParentRef) bool { return false }
+func (readsNothing) Condition(objects.GroupKind, objects.ParentRef, metav1.Condition) policy.Reading {
+	return policy.Reading{}
+}
+
+// Evaluate with the kgateway checks and no interpreter reads kgateway's policies as its
+// pack does; the core checks alone, or a pack's own interpreter, read no kgateway reason (8.4 review, new 2).
+func TestKgatewayPolicyReadingsFollowTheChecks(t *testing.T) {
+	gw := testutil.GwRef("infra", "edge")
+	w := healthyWorld()
+	w.objs = append(w.objs,
+		testutil.TrafficPolicy("shop", "partial", testutil.PolicyAncestor{Ref: gw, Controller: testutil.Controller,
+			Conds: []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionTrue, "PartiallyValid")}}),
+		testutil.TrafficPolicy("shop", "overridden", testutil.PolicyAncestor{Ref: gw, Controller: testutil.Controller,
+			Conds: []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionTrue, "Valid"), testutil.Cond("Attached", metav1.ConditionFalse, "Overridden")}}))
+	type got struct {
+		sev Severity
+		msg string
+	}
+	read := func(r Report, name string) []got {
+		var out []got
+		for _, f := range policyFindings(r, name) {
+			out = append(out, got{f.Severity, f.Message})
+		}
+		return out
+	}
+	downstream := w.input(t)
+	downstream.PolicyInterpreter = readsNothing{}
+	for _, c := range []struct {
+		name                string
+		in                  Input
+		checks              []Check
+		partial, overridden []got
+	}{
+		{"kgateway checks", w.input(t), Upstream(), []got{{SeverityWarning, "Partially valid; some settings were ignored"}},
+			[]got{{SeverityInfo, "Overridden by another policy"}}},
+		{"core checks", w.input(t), Core(), nil, []got{{SeverityError, "Attached is False (Overridden)"}}},
+		{"pack interpreter", downstream, Upstream(), nil, []got{{SeverityError, "Attached is False (Overridden)"}}},
+	} {
+		r := Evaluate(c.in, c.checks, w.runtime(Runtime{}))
+		if p, o := read(r, "partial"), read(r, "overridden"); !reflect.DeepEqual(p, c.partial) || !reflect.DeepEqual(o, c.overridden) {
+			t.Errorf("%s: partial %+v, overridden %+v; want %+v, %+v", c.name, p, o, c.partial, c.overridden)
+		}
+	}
 }
 
 func (w *world) report(t *testing.T) Report {

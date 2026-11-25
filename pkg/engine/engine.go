@@ -118,7 +118,7 @@ type Hooks struct {
 	Checks []health.Check
 	// Conditions are the install's condition types beyond Gateway API's.
 	Conditions health.ConditionTypes
-	// PolicyInterpreter is the pack's reading of its own policy kinds; nil reads none.
+	// PolicyInterpreter is the pack's reading of its own policy kinds; nil is as health.Evaluate reads it.
 	PolicyInterpreter policy.Interpreter
 	// Verifier checks the install's scope against its controller.
 	Verifier scopeverify.Verifier

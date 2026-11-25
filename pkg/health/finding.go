@@ -470,7 +470,7 @@ type Input struct {
 	// means KgatewayConditions, as for a caller that builds Input itself.
 	Conditions *ConditionTypes
 	// PolicyInterpreter is the install's pack reading of its own policy kinds (Phase 8 design §8);
-	// nil reads no pack reason, so only a False condition raises a policy ancestor's KGWUI-002.
+	// nil is kgateway's when the checks include Kgateway's, else none (Evaluate).
 	PolicyInterpreter policy.Interpreter
 }
 

@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/DuncanDoyle/snellius/pkg/cache"
+	"github.com/DuncanDoyle/snellius/pkg/kgateway/kgwpolicy"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
 
@@ -161,7 +162,11 @@ func Withhold(rep Report, events, crds bool) Report {
 // When every check returns the same findings slice as in the last Evaluate (a memo hit,
 // or a rerun with equal findings), the findings are that report's slice, shared and
 // with the Group values diagnose.Build set on it.
+// Without a PolicyInterpreter, checks that include the kgateway checks read kgateway's policies as its pack does.
 func Evaluate(in Input, checks []Check, rt Runtime) Report {
+	if in.PolicyInterpreter == nil && runsKgateway(checks) {
+		in.PolicyInterpreter = kgwpolicy.Interpreter()
+	}
 	r := Report{Install: in.Install.ID(), Counts: map[Severity]int{}, CollectedAt: in.Now}
 	memoize := rt.Print != nil && rt.States != nil
 	var outputs map[string]CheckOutput
