@@ -8,7 +8,13 @@ Status: design approved (user, 2026-11-23); D-121 … D-129 accepted; runtime vi
 Author: claude (Opus 5.5)
 
 ## Sub-phase
-none
+Sub-phase: 8.3 — Docs and program (planned)
+Base: e6f1cb1
+Brief: docs/phases/phase-8/phase-8.3-brief.md
+Queue (plan steps):
+- [ ] 1 README (Policies, Extending, upgrade notes), findings.md, documentation-notes.md ← CURRENT
+- [ ] 2 drafts: snellius.dev (P-006), snellius-demo (P-007), kgwctl E7 notice, program-file diff — file after user approval
+Sub-phase start: program read at kgateway-tooling `70fda55` (E14 decided; asks snellius#68, optional, not Phase 8 scope — user decides when).
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md (read 2026-11-22 at `bd1f17d`; merged on main at `090fd7e`, which adds M-4 and U12: P-008, P-009, M-1, M-2, E7, E13, E14).
