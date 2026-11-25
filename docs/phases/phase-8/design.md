@@ -193,6 +193,8 @@ The pack names the annotation keys (`kgateway.dev/inherited-policy-priority`, `k
 
 Columns: kind, namespace/name, targets (as written; a selector shown as `HTTPRoute labels app=cart`), accepted (worst current `Accepted` over this install's ancestors, `inferred`), reported attached on (current `Attached=True` ancestors), features. Filter chips: kind, feature, namespace, has problems (`inferred`: a current condition False, PartiallyValid, or a target check "not found"). Readable policies only (§7).
 
+Amended 2026-11-25 (8.4): the pack's reading of a condition (§8) takes precedence, so a current False it reads as info, such as kgateway's `Attached=False` `Overridden`, is not a problem.
+
 ### 6.3 Policy detail (`/installs/:id/policies/:group/:kind/:ns/:name`)
 
 1. **Targets:** each targetRef with its check and link; selectors as written.

@@ -32,8 +32,8 @@ func condAt(typ string, status metav1.ConditionStatus, reason string, gen int64)
 }
 
 // On the 2.5 rules, /findings and the policy list's "Has problems" agree per policy (phase-8.4
-// brief rows 1 and 4): an Attached older than the policy raises no 016, and the kgateway reason
-// readings apply to kgateway kinds only; a downstream kind with no interpreter gets none of them.
+// brief rows 1 and 4): an Attached older than the policy raises no 016, and the pack's reading decides
+// both, on kgateway kinds only; a downstream kind with no interpreter gets none of them.
 func TestPolicyFindingsAgreeWithHasProblems(t *testing.T) {
 	d := testutil.ControllerDeployment("kgw", "kgateway", "cr.kgateway.dev/kgateway-dev/kgateway:v2.5.1", 1, 1)
 	d.Labels["app.kubernetes.io/version"] = "2.5.1"
@@ -48,8 +48,11 @@ func TestPolicyFindingsAgreeWithHasProblems(t *testing.T) {
 		policyAt(tpV, "TrafficPolicy", "target-missing", 2, gw, accepted, condAt("Attached", metav1.ConditionFalse, "TargetNotFound", 2)),
 		policyAt(tpV, "TrafficPolicy", "tp-partial", 2, gw, condAt("Accepted", metav1.ConditionTrue, "PartiallyValid", 2)),
 		policyAt(tpV, "TrafficPolicy", "tp-overridden", 2, gw, accepted, condAt("Attached", metav1.ConditionTrue, "Overridden", 2)),
+		// As kgateway 2.3 writes it (pkg/policy/testdata/kgateway-2.3.yaml): the pack reads it as info.
+		policyAt(tpV, "TrafficPolicy", "tp-overridden-false", 2, gw, accepted, condAt("Attached", metav1.ConditionFalse, "Overridden", 2)),
 		policyAt(wpV, "WidgetPolicy", "wp-partial", 2, gw, condAt("Accepted", metav1.ConditionTrue, "PartiallyValid", 2)),
 		policyAt(wpV, "WidgetPolicy", "wp-overridden", 2, gw, accepted, condAt("Attached", metav1.ConditionTrue, "Overridden", 2)),
+		policyAt(wpV, "WidgetPolicy", "wp-overridden-false", 2, gw, accepted, condAt("Attached", metav1.ConditionFalse, "Overridden", 2)),
 		policyAt(wpV, "WidgetPolicy", "wp-rejected", 2, gw, condAt("Accepted", metav1.ConditionFalse, "Invalid", 2)),
 	}
 	_, srv := start(t, objs, []kinds.Descriptor{widgetKind}, Options{PollInterval: 50 * time.Millisecond, MetricsInterval: time.Hour, UI: ui},
@@ -61,13 +64,15 @@ func TestPolicyFindingsAgreeWithHasProblems(t *testing.T) {
 		has  bool
 	}
 	wants := map[string]want{
-		"stale-attached": {"", "", false},
-		"target-missing": {"KGWUI-016", health.SeverityError, true},
-		"tp-partial":     {"KGWUI-002", health.SeverityWarning, true},
-		"tp-overridden":  {"KGWUI-002", health.SeverityInfo, false},
-		"wp-partial":     {"", "", false},
-		"wp-overridden":  {"", "", false},
-		"wp-rejected":    {"KGWUI-002", health.SeverityError, true},
+		"stale-attached":      {"", "", false},
+		"target-missing":      {"KGWUI-016", health.SeverityError, true},
+		"tp-partial":          {"KGWUI-002", health.SeverityWarning, true},
+		"tp-overridden":       {"KGWUI-002", health.SeverityInfo, false},
+		"tp-overridden-false": {"KGWUI-002", health.SeverityInfo, false},
+		"wp-partial":          {"", "", false},
+		"wp-overridden":       {"", "", false},
+		"wp-overridden-false": {"KGWUI-002", health.SeverityError, true},
+		"wp-rejected":         {"KGWUI-002", health.SeverityError, true},
 	}
 	const base = "/api/v1/installs/kgw.kgateway"
 	var rows api.PoliciesResponse

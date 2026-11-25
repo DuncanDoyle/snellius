@@ -156,7 +156,8 @@ func readable(l policy.Lookup, ref objects.Ref) bool {
 	return l.CanList(objects.GroupKind{Group: ref.Group, Kind: ref.Kind}, ref.Namespace) && l.CanGet(ref)
 }
 
-// problems reports whether e has problems (design §6.2).
+// problems reports whether e has problems (design §6.2). The pack's reading of a
+// condition comes first, as for the 002s: a False it reads as info is no problem.
 func (e *policyEntry) problems() bool {
 	for _, a := range e.p.Ancestors {
 		if !a.Current {
@@ -165,8 +166,11 @@ func (e *policyEntry) problems() bool {
 		// A Pending Attached is undecided and a condition older than the policy says nothing
 		// about it now: neither is a problem, as for the 002s (D-135).
 		current := func(c metav1.Condition) bool { return c.ObservedGeneration >= e.p.Generation }
+		info := func(c metav1.Condition) bool {
+			return slices.ContainsFunc(a.Readings, func(r policy.Reading) bool { return r.Type == c.Type && r.Info })
+		}
 		if slices.ContainsFunc(a.Conditions, func(c metav1.Condition) bool {
-			return c.Status == metav1.ConditionFalse && c.Reason != "Pending" && current(c)
+			return c.Status == metav1.ConditionFalse && c.Reason != "Pending" && current(c) && !info(c)
 		}) ||
 			slices.ContainsFunc(a.Readings, func(r policy.Reading) bool {
 				c := objects.FindCondition(a.Conditions, r.Type)
