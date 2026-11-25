@@ -4,17 +4,11 @@
 Phase: 8 — Policies & Filters
 Base: b01b677
 Docs: docs/phases/phase-8/
-Status: design approved (user, 2026-11-23); D-121 … D-129 accepted; runtime view in Phase 12. 8.1 closed 2026-11-23 (D-130 … D-134). 8.2 closed 2026-11-25 (D-135 … D-137; phases/phase-8/phase-8.2-complete.md). Next: sub-phase 8.3 (docs and program). Phase start: program read, scope endpoint filed as kgateway#15070, kgateway#14815 still open.
+Status: design approved (user, 2026-11-23); D-121 … D-129 accepted; runtime view in Phase 12. 8.1 closed 2026-11-23 (D-130 … D-134). 8.2 closed 2026-11-25 (D-135 … D-137; phases/phase-8/phase-8.2-complete.md). 8.3 closed 2026-11-25 (docs; phases/phase-8/phase-8.3-complete.md). Next: phase review (Codex, `b01b677..HEAD`), then phase close: file the four 8.3 notices (user approval), update the program file, tag `v0.9.0`. Phase start: program read, scope endpoint filed as kgateway#15070, kgateway#14815 still open.
 Author: claude (Opus 5.5)
 
 ## Sub-phase
-Sub-phase: 8.3 — Docs and program (planned)
-Base: e6f1cb1
-Brief: docs/phases/phase-8/phase-8.3-brief.md
-Queue (plan steps):
-- [ ] 1 README (Policies, Extending, upgrade notes), findings.md, documentation-notes.md ← CURRENT
-- [ ] 2 drafts: snellius.dev (P-006), snellius-demo (P-007), kgwctl E7 notice, program-file diff — file after user approval
-Sub-phase start: program read at kgateway-tooling `70fda55` (E14 decided; asks snellius#68, optional, not Phase 8 scope — user decides when).
+none
 
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md (read 2026-11-22 at `bd1f17d`; merged on main at `090fd7e`, which adds M-4 and U12: P-008, P-009, M-1, M-2, E7, E13, E14).
@@ -65,6 +59,8 @@ Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; uncha
 - (P4) Move engine's rule-set fallbacks and the Gateway CRD table behind the pack (D-128, program open question 3)
 
 ## Notes
+- 2026-11-25: snellius#68 (from xdsview, E14): make "Config accepted" also require no KGWUI-025 or 026, or reword it; optional proxy-only version differences. Not Phase 8 scope; the user decides when. Program read at kgateway-tooling `70fda55`.
+- 2026-11-25: KGWUI-026 e2e flake fixed in its own PR #69 (test bug: proxies kept the disconnect onset from earlier controller restarts).
 - 2026-11-22: `Scope.Excluded` (#66, PR #67) is for kgwctl Phase 4 task 4.2.2, which it does not block. kgwctl expects it in `v0.9.0` (owner's decision, 2026-11-23); send kgwctl the tag (`cross-repo` issue naming E2), or tell kgwctl if `v0.9.0` ships without it.
 - 2026-11-23: Phase 12 targets the xdsview Phase 9 tag (P-010, E15). xdsview will ask for a review of its Phase 9 design (`cross-repo` issue, program open question 7): check it against roadmap Phase 12.
 - 2026-11-14: `v0.7.1` released (walkthrough fixes, #42 and #43, D-079 … D-083; phases/phase-6/phase-6-complete.md, Patch release v0.7.1). API v1 changes are additive. The snellius.dev sync now covers `v0.7.0` and `v0.7.1`.
