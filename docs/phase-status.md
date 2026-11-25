@@ -52,7 +52,7 @@ Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; uncha
 - (P3) Measure the `/findings` cost of policy links and strict bases in a bench world with policy findings — src: phases/phase-8/phase-8.2-complete.md
 - (P4) A downstream ListenerSet kind is covered in `pkg/policy` only, not in the API rule world — src: phases/phase-8/phase-8.2-complete.md
 - (P3, flake, own PR) KGWUI-026 raised 46 s after the controller scale-down in `TestDataPlaneDiagnostics/controller_scaled_to_zero` (one 2.3.11 job); root cause in progress (user, 2026-11-25) — src: phases/phase-8/phase-8.2-complete.md
-- The 8.3 upgrade notes say that a downstream shell older than 8.2 routes policy links to ListenerSet pages
+- The 8.3 upgrade notes say that a downstream shell older than v0.9.0 shows policy refs without a link, so upgrade the shell with the backend
 
 ## Carry-over added 2026-11-23 (8.1)
 - (P4) Route parent KGWUI-002s keep a shared basis and D-040 ranks (D-131 item 1); revisit at the phase review — src: phases/phase-8/phase-8.1-complete.md

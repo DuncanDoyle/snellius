@@ -310,13 +310,13 @@ These pages answer "where does this traffic go, and is it getting there?" They a
 These pages answer "which policies name this object, and what does kgateway report about them?" They show what a spec declares and what the controller writes in status. Snellius never decides whether a policy applies: it does not work out attachment, inheritance, precedence, merges or overrides.
 
 - **Policies** (`/i/{id}/policies`) lists the install's policies, DirectResponse included: targets as written, Accepted, "Reported attached on" and the features each one sets. Filter by kind, feature, namespace or "Has problems". The list is sorted by namespace and name, not by precedence. API: `GET /api/v1/installs/{id}/policies`.
-- **Policy detail** shows each target with its check (found, not found, section not found or not checked), kgateway's status per ancestor as written, the configuration by feature, precedence annotations as written, and the YAML. Ancestor entries from another controller or install, stale or still waiting for status stay visible but count in no summary. API: `GET /api/v1/installs/{id}/policies/{group}/{kind}/{ns}/{name}`, with `-` for the core group.
+- **Policy detail**, DirectResponse included, shows each targetRef with its check (found, not found, section not found or not checked) and each label selector as written, with no check. It also shows kgateway's status per ancestor as written, the configuration by feature, precedence annotations as written, and the YAML. Ancestor entries from another controller or install, stale or still waiting for status stay visible but count in no summary. API: `GET /api/v1/installs/{id}/policies/{group}/{kind}/{ns}/{name}`, with `-` for the core group.
 - **On other pages.** Gateway, ListenerSet, route and backend pages have a Policies section with up to three groups:
   - "Targeting this object": targetRefs name the object or one of its sections.
-  - "Targeting a parent" (routes and ListenerSets): targetRefs name a parent that the object's own parentRefs declare. kgateway decides whether and how these apply.
-  - "Reported attached here" (Gateways, ListenerSets and backends): the controller reports `Attached=True` on this object.
+  - "Targeting a parent" (routes and ListenerSets): targetRefs name a parent that the object's own parentRefs declare. A route whose parentRef names a ListenerSet also lists the unsectioned policies of that ListenerSet's Gateway, though the route never names the Gateway. kgateway decides whether and how these apply.
+  - "Reported attached here" (Gateways, ListenerSets and backends): a current ancestor entry for this object reports `Attached=True` for the policy's current generation.
 
-  Policies that select by label are never listed there; the section links to the Policies list instead. API: `policyRelations` on each detail response.
+  Snellius never matches label selectors to build these groups. A policy that targets only by label shows here only when the controller reports it attached; the section links to the Policies list for the rest. API: `policyRelations` on each detail response.
 - **Sources.** Every value carries a tag: Declared (written in a spec), Reported (the controller's status, as written), Inferred (worked out by Snellius, such as a target check or the Accepted summary) or Unknown (nothing can tell, or you cannot read the input).
 
 ## Extending
@@ -476,7 +476,7 @@ The backend is a Gateway API core plus implementation packs. A pack (`extension.
 
 ### Policy interpreters
 
-A pack reads its own policy kinds through `Impl.PolicyInterpreter`, a `policy.Interpreter`. Per kind, it supplies a label for each spec section, the precedence annotation keys, which ancestor is the controller's synthetic missing-target entry, and a reading of each ancestor condition: a warning, or a note such as `policy.NoteGatewayWide`. `policy.Read` asks it only about kinds for which `Handles` is true.
+A pack reads its own policy kinds through `Impl.PolicyInterpreter`, a `policy.Interpreter`. Per kind, it supplies a label for each spec section, the precedence annotation keys, which ancestor is the controller's synthetic missing-target entry, and a reading of each ancestor condition: a warning, or a note such as `policy.NoteGatewayWide`. `policy.Read` asks it only about kinds for which `Handles` is true. In the example, `acmePolicy` is the pack's `kinds.Descriptor` and `acmeDetector` its own `install.Detector`; you supply both.
 
 ```go
 // acmePolicies reads acme's own policy kinds. Read asks it nothing about other kinds.
@@ -508,7 +508,7 @@ var reg = extension.NewCore(extension.WithPack(extension.Pack{
 }))
 ```
 
-Without an interpreter, nothing is interpreted: features show their spec keys, no annotation is picked out, no ancestor is a missing-target entry, and conditions get no reading. The detail response then has `interpreted: false`. Targets, status, relations and visibility come from the core and work the same either way. The kgateway pack's interpreter reads only `gateway.kgateway.dev` kinds, so BackendTLSPolicy and kinds added with `WithKinds` get none. An interpreter labels what is written; it never decides whether a policy applies.
+Without an interpreter, nothing is interpreted: features show their spec keys, no annotation is picked out, no ancestor is a missing-target entry, and conditions get no reading. The detail response then has `interpreted: false`. Raw targets, status entries and relations come from the core either way. Some derived results do depend on the interpreter. A `Warning` reading makes a policy count under "Has problems", in its filter and its facet. A missing-target entry skips the ancestor readability check, so it can change which status counts in the summaries. The kgateway pack's interpreter reads only `gateway.kgateway.dev` kinds, so BackendTLSPolicy and kinds added with `WithKinds` get none. An interpreter labels and reads what is written; it never decides whether a policy applies.
 
 A one-shot caller, such as a CLI, builds the same model with `policy.Read`, `policy.CheckTargets` and `policy.Relations`, and passes its own `policy.Guard` and `policy.Lookup`.
 
@@ -530,16 +530,21 @@ Saved theme choices carry over. Finding codes keep the `KGWUI-` prefix, so API v
 
 ### v0.9.0: policies (Phase 8)
 
-New Policies pages and policy sections on Gateway, ListenerSet, route and backend pages: see [Policies](#policies). API v1 changes are additive, except the policy `link` values below.
+New Policies pages and policy sections on Gateway, ListenerSet, route and backend pages: see [Policies](#policies). The new endpoints and fields are additive to API v1. Two existing wire values change: policy `link` values, and the IDs of policy-ancestor KGWUI-002 findings. Both are below.
 
 - **New endpoints.** `GET /api/v1/installs/{id}/policies` (filters `kind`, `feature`, `namespace` and `hasProblems`; paging; facets) and `GET /api/v1/installs/{id}/policies/{group}/{kind}/{ns}/{name}`. The audit stream records the list under `summaries` and the detail under `reads`.
 - **`policyRelations`.** Gateway, ListenerSet, route and backend detail responses gain `policyRelations`. `/api/v1/meta` `views` lists the policy kinds.
-- **Rejected policies.** kgateway writes `Attached=False` with reason `Pending` on every policy it rejects. Snellius now judges a policy ancestor on `Accepted` alone, and ignores an `Attached` older than the policy. So a rejected policy now raises KGWUI-002 on kgateway 2.3, 2.4 and 2.5, where it read KGWUI-003 "Not yet processed". An accepted policy whose `Attached` is `Pending` no longer raises KGWUI-003.
-- **DirectResponse findings.** A DirectResponse now gets KGWUI-002 per ancestor, like a TrafficPolicy in the same state. Its `TargetNotFound` stays KGWUI-002, not KGWUI-016. It stays list-only, and routes that use it keep their signals.
-- **Policy-ancestor KGWUI-002 IDs.** The ID now hashes the policy, the ancestor and the condition type, so other ancestors no longer move it. Existing links to these findings change once.
-- **Policy links.** Every policy `link` is now the policy endpoint path, `/api/v1/installs/{id}/policies/{group}/{kind}/{ns}/{name}`, instead of `yaml`. It is set only when the viewer may `get` the policy by name. Otherwise rows and relations leave it out, and findings carry `none`. This changes the values in findings, diagnostics and finding details. A downstream build whose `@snellius/shell` predates v0.9.0 routes these links to ListenerSet pages, so upgrade the shell with the backend.
+- **Rejected policies.** kgateway writes `Attached=False` with reason `Pending` on every policy it rejects. Snellius now judges each ancestor entry's freshness on `Accepted` alone. Per ancestor entry of this install, on kgateway 2.3, 2.4 and 2.5:
+  - `Accepted=False` for the policy's current generation: KGWUI-002, where it read KGWUI-003 "Not yet processed". On the 2.5 rules, reason `TargetNotFound` is KGWUI-016 instead, except on a DirectResponse.
+  - `Accepted` missing, `Pending`, `Unknown` or for an older generation: KGWUI-003, as before. A rejected policy that was edited reads KGWUI-003 until kgateway writes new status.
+  - `Accepted=True` with a `Pending` `Attached`: no finding, where it read KGWUI-003.
+
+  Each entry has its own finding, so one policy can show KGWUI-002 for one ancestor and KGWUI-003 for another. An `Attached` older than the policy raises no KGWUI-002 and counts as no attachment. On the 2.5 rules, an older `Attached=False` with reason `TargetNotFound` can still raise KGWUI-016.
+- **DirectResponse findings.** A DirectResponse now gets KGWUI-002 per ancestor, like a TrafficPolicy in the same state. Its `TargetNotFound` stays KGWUI-002, not KGWUI-016. Its install assignment stays list-only, and routes that use it keep their signals. It has a policy detail page like other policies.
+- **Policy-ancestor KGWUI-002 IDs (wire change).** The ID now hashes the install, the code, the policy, the ancestor with its section and port, and the condition type, so other ancestors no longer move it. Every existing ID of these findings changes once, so a saved finding link answers `404`.
+- **Policy links (wire change).** Every policy `link` is now the policy endpoint path, `/api/v1/installs/{id}/policies/{group}/{kind}/{ns}/{name}`, instead of `yaml`. It is set only when the viewer may `get` the policy by name. Otherwise rows and relations leave it out, and findings carry `none`. This changes the values in findings, diagnostics and finding details. A `@snellius/shell` older than v0.9.0 does not know the new value and shows policy names without a link. Upgrade the shell with the backend.
 - **Secure mode: who sees a policy-ancestor KGWUI-002.** Besides reading the policy, the viewer needs `list` and named `get` on every object the finding rests on: the ancestor, and for a ListenerSet ancestor also its parent Gateway. A viewer allowed only by `resourceNames` does not see it. A hidden second ancestor no longer withholds the finding about a readable one.
-- **Secure mode: authorization outages.** When a permission check fails, rather than denies, a request may answer `503 authz-unavailable`, also when the check was for an object the viewer cannot read. With every check answering, a hidden object never changes a response.
+- **Secure mode: authorization outages.** When a permission check fails, rather than denies, a request may answer `503 authz-unavailable`, also when the check was for an object the viewer cannot read. With every check answering, a hidden object never changes a response, except through install membership (see [What each user sees](#what-each-user-sees)). A hidden change to a GatewayClass `controllerName` or a ListenerSet's parent Gateway can move a Gateway or ListenerSet in or out of the install. That can change a readable policy's summaries, ancestor marks, target links and ancestor findings.
 
 ### v0.8.2
 

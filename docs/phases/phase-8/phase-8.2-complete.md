@@ -32,7 +32,7 @@ None.
 In the review triage tables; design-level ones are D-135 … D-137. UI copy chosen from five options each (list in `.agents-tmp`, summarised): source tags Declared / Reported / Inferred / Unknown; "Waiting for status" for pending; "None." for an empty group; "Open Policies in <namespace>" for the selector link.
 
 ## Notes for later phases
-- A downstream shell older than 8.2 routes policy links to ListenerSet pages; say so in the 8.3 upgrade notes.
+- A downstream shell older than 8.2 shows policy refs without a link, since it does not know the new link value; the 8.3 upgrade notes say to upgrade the shell with the backend.
 - `/findings` now asks one named check per distinct policy linked, and a strict basis asks `list` per basis object; no bench world has policy findings yet, so this cost is unmeasured.
 - On a kind node, a Docker restart resets `fs.inotify.max_user_instances` to 128; kgateway and kube-proxy then crash-loop with "too many open files" (set 512, restart both).
 

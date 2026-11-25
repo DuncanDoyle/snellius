@@ -5,7 +5,7 @@
 **Program:** [kgateway-tooling program.md](https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md)
 
 ## Goal
-A read-only web UI for kgateway (Envoy data plane) that lets platform operators see at a glance whether their gateways are healthy, understand where traffic goes and which policies apply, and debug misrouted traffic in large deployments (100s of hostnames, 1000s of routes). It layers the higher-level semantics of Gateway API and kgateway policies on top of the cluster state, rather than being yet another Kubernetes resource viewer. The project is built so that downstream distributions can extend it without forking or copying code.
+A read-only web UI for kgateway (Envoy data plane) that lets platform operators see at a glance whether their gateways are healthy, understand where traffic goes and which policies are declared for an object and what the controller reports about them, and debug misrouted traffic in large deployments (100s of hostnames, 1000s of routes). It layers the higher-level semantics of Gateway API and kgateway policies on top of the cluster state, rather than being yet another Kubernetes resource viewer. The project is built so that downstream distributions can extend it without forking or copying code.
 
 ## Product principles
 These apply to every phase. A phase design that breaks one needs a `decisions.md` entry.
