@@ -43,20 +43,6 @@ func Kgateway() []Check {
 	return []Check{xdsCheck{}, verifyCheck{}, backendCheck{}, skewCheck{}, proxyStatsCheck{proxyWarming}, proxyStatsCheck{proxyDisconnected}, computedCheck{}, withheldCheck{}}
 }
 
-// kgatewayNames are the names of Kgateway's checks.
-var kgatewayNames = func() map[string]bool {
-	out := map[string]bool{}
-	for _, c := range Kgateway() {
-		out[c.Name()] = true
-	}
-	return out
-}()
-
-// runsKgateway reports whether checks include any of Kgateway's checks.
-func runsKgateway(checks []Check) bool {
-	return slices.ContainsFunc(checks, func(c Check) bool { return kgatewayNames[c.Name()] })
-}
-
 func ref(u *unstructured.Unstructured) *objects.Ref { r := objects.RefOf(u); return &r }
 
 func since(c metav1.Condition) *time.Time {

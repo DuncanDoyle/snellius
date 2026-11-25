@@ -127,8 +127,18 @@ func (readsNothing) Condition(objects.GroupKind, objects.ParentRef, metav1.Condi
 	return policy.Reading{}
 }
 
+// sameName is a downstream check named like the kgateway backend check.
+type sameName struct{}
+
+func (sameName) Name() string     { return backendCheck{}.Name() }
+func (sameName) Inputs() InputSet { return InputSet{} }
+func (sameName) Run(RunContext) ([]Finding, CheckResult) {
+	return nil, CheckResult{Name: backendCheck{}.Name(), OK: true}
+}
+
 // Evaluate with the kgateway checks and no interpreter reads kgateway's policies as its
-// pack does; the core checks alone, or a pack's own interpreter, read no kgateway reason (8.4 review, new 2).
+// pack does; the core checks alone, a check that only shares a kgateway check's name,
+// or a pack's own interpreter read no kgateway reason (8.4 review and re-review, new 2 and 1).
 func TestKgatewayPolicyReadingsFollowTheChecks(t *testing.T) {
 	gw := testutil.GwRef("infra", "edge")
 	w := healthyWorld()
@@ -159,6 +169,7 @@ func TestKgatewayPolicyReadingsFollowTheChecks(t *testing.T) {
 		{"kgateway checks", w.input(t), Upstream(), []got{{SeverityWarning, "Partially valid; some settings were ignored"}},
 			[]got{{SeverityInfo, "Overridden by another policy"}}},
 		{"core checks", w.input(t), Core(), nil, []got{{SeverityError, "Attached is False (Overridden)"}}},
+		{"same-name check", w.input(t), append(Core(), sameName{}), nil, []got{{SeverityError, "Attached is False (Overridden)"}}},
 		{"pack interpreter", downstream, Upstream(), nil, []got{{SeverityError, "Attached is False (Overridden)"}}},
 	} {
 		r := Evaluate(c.in, c.checks, w.runtime(Runtime{}))

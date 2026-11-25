@@ -471,7 +471,7 @@ type Input struct {
 	// means KgatewayConditions, as for a caller that builds Input itself.
 	Conditions *ConditionTypes
 	// PolicyInterpreter is the install's pack reading of its own policy kinds (Phase 8 design §8);
-	// nil is kgateway's when the checks include Kgateway's, else none (Evaluate).
+	// nil is PolicyInterpreterFor the checks Evaluate runs.
 	PolicyInterpreter policy.Interpreter
 }
 
@@ -496,13 +496,36 @@ func (in Input) conditions() ConditionTypes {
 	return *in.Conditions
 }
 
-// withPolicyInterpreter returns in with kgateway's policy interpreter when it has none
-// and checks include Kgateway's, as for a caller that builds Input itself.
+// withPolicyInterpreter returns in with PolicyInterpreterFor(checks) when it has none,
+// as for a caller that builds Input itself.
 func (in Input) withPolicyInterpreter(checks []Check) Input {
-	if in.PolicyInterpreter == nil && runsKgateway(checks) {
-		in.PolicyInterpreter = kgwpolicy.Interpreter()
+	if in.PolicyInterpreter == nil {
+		in.PolicyInterpreter = PolicyInterpreterFor(checks)
 	}
 	return in
+}
+
+// interpreterSupplier is a check that brings its pack's policy interpreter. Only
+// Kgateway's check values implement it; a check that shares their names does not.
+type interpreterSupplier interface{ policyInterpreter() policy.Interpreter }
+
+func (xdsCheck) policyInterpreter() policy.Interpreter        { return kgwpolicy.Interpreter() }
+func (verifyCheck) policyInterpreter() policy.Interpreter     { return kgwpolicy.Interpreter() }
+func (backendCheck) policyInterpreter() policy.Interpreter    { return kgwpolicy.Interpreter() }
+func (skewCheck) policyInterpreter() policy.Interpreter       { return kgwpolicy.Interpreter() }
+func (proxyStatsCheck) policyInterpreter() policy.Interpreter { return kgwpolicy.Interpreter() }
+func (computedCheck) policyInterpreter() policy.Interpreter   { return kgwpolicy.Interpreter() }
+func (withheldCheck) policyInterpreter() policy.Interpreter   { return kgwpolicy.Interpreter() }
+
+// PolicyInterpreterFor is the policy interpreter that checks bring: kgateway's when they
+// include one of Kgateway's check values, else nil.
+func PolicyInterpreterFor(checks []Check) policy.Interpreter {
+	for _, c := range checks {
+		if s, ok := c.(interpreterSupplier); ok {
+			return s.policyInterpreter()
+		}
+	}
+	return nil
 }
 
 // ProcessData is one install's controller and per-Gateway proxy processes
