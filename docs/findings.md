@@ -66,9 +66,9 @@ kgateway 2.5 controllers write `TargetNotFound` for a missing policy target, and
 
 **Evidence.** The message is the condition's reason in plain words. The detail quotes the condition as written: type, status, reason and message, and the listener, parent or ancestor it belongs to. A parent route whose backendRefs all delegate reads "A delegating rule has no accepted child route" in place of "Backend not found".
 
-**ID.** A policy ancestor's finding ID hashes the install, the code, the policy, the ancestor with its section and port, and the condition type. Other ancestors coming, going or reordering never change it. When the same ancestor appears twice in status, two findings can have the same inputs. The first keeps its ID; the second and later add `#2`, `#3` and so on, in status order. Reordering those entries can swap their IDs.
+**ID.** A policy ancestor's finding ID hashes the install, the code, the policy, the ancestor with its section and port, and the condition type. Other ancestors coming, going or reordering never change it. When the same ancestor appears twice in status, two findings can have the same inputs. The first keeps its inputs; the second and later add `#2`, `#3` and so on to their inputs, in status order, so each gets its own ID. Reordering those entries can swap their IDs.
 
-**Who sees it.** In secure mode, a policy ancestor's finding shows to a viewer who can read the policy and may `list` and `get` by name every object the finding rests on: the ancestor, and for a ListenerSet ancestor also its parent Gateway. A hidden second ancestor never withholds it. Install context, such as membership, is the exception: a hidden change to a GatewayClass, for example, can move the ancestor out of the install and end the finding.
+**Who sees it.** In secure mode, a viewer with full read is not checked per finding (see the README, "What each user sees"). Any other viewer sees a policy ancestor's finding when they can read the policy and may `list` and `get` by name every object the finding rests on: the ancestor, and for a ListenerSet ancestor also its parent Gateway. A hidden second ancestor never withholds it. Install context, such as membership, is the exception: a hidden change to a GatewayClass, for example, can move the ancestor out of the install and end the finding.
 
 **Fix.** Read the condition's message in the detail. It is the controller's own text and usually names the field. Correct that field. The finding clears when the controller writes a new status.
 
@@ -76,7 +76,7 @@ kgateway 2.5 controllers write `TargetNotFound` for a missing policy target, and
 
 `route-unattached` · info, then warning · status
 
-**Cause.** The controller has not processed an object, or its status describes an older version. Despite the slug, it covers every kind with status: GatewayClasses, Gateways, ListenerSets, listeners, routes per parent, and policies. A policy gets at most one of these findings, however many of its ancestor entries are stale or pending. It never covers a DirectResponse (see KGWUI-002). An ancestor entry with a current `Accepted=False` is KGWUI-002, not this finding.
+**Cause.** The controller has not processed an object, or its status describes an older version. Despite the slug, it covers every kind with status: GatewayClasses, Gateways, ListenerSets, listeners, routes per parent, and policies. A policy gets at most one of these findings, however many of its ancestor entries are stale or pending. It never covers a DirectResponse (see KGWUI-002). An ancestor entry with a current `Accepted=False` is KGWUI-002 (or KGWUI-016 for `TargetNotFound` on the 2.5 rules), not this finding. A policy can have this finding for one ancestor entry and KGWUI-002 for another.
 
 For 60 s after the UI first sees the object's current generation, the finding is info, "Being processed by the controller", and the install reads unknown. After 60 s it is a warning, "Not yet processed by the controller". A route whose parent does not exist reads "Not attached: parent not found".
 
