@@ -469,21 +469,23 @@ func testControllerDown(t *testing.T) {
 			return !slices.ContainsFunc(h.Findings, func(f api.FindingDTO) bool { return f.Code == health.CodeProxyDisconnected })
 		})
 	})
-	// The earlier subtests restart the controller, and a proxy can still be reconnecting. Start once no
-	// proxy is waiting to reconnect, so every 60 s clock starts after the scale-down.
-	start := waitHealth(t, 2*time.Minute, "every proxy connected", func(h api.HealthResponse) bool {
-		c := checkResult(h, "proxy connection")
-		return c != nil && c.OK && c.Hold == nil && finding(h, health.CodeProxyDisconnected, "Gateway", nackID) == nil
-	}).CollectedAt
+	// A proxy still reconnecting after the earlier controller restarts keeps its disconnect clock, keyed
+	// by Pod UID. Fresh nack Pods have none, so every 60 s clock starts after the scale-down.
+	replaceProxies(t)
+	start := healthNow(t).CollectedAt
 	must(t, "-n", "kgw-a", "scale", "deploy/kgateway", "--replicas=0")
 	h := waitHealth(t, 4*time.Minute, "026 on infra/nack", func(h api.HealthResponse) bool {
 		return finding(h, health.CodeProxyDisconnected, "Gateway", nackID) != nil
 	})
-	// collectedAt and start are both the UI's clock; the proxies disconnected after start.
+	f := finding(h, health.CodeProxyDisconnected, "Gateway", nackID)
+	// collectedAt, since and start are all the UI's clock; the proxies disconnected after start.
+	t.Logf("026 since %v, start %s", f.Since, start)
+	if f.Since == nil || f.Since.Before(start) {
+		t.Errorf("026 on %s since %v, before the scale-down at %s", nackID, f.Since, start)
+	}
 	if d := h.CollectedAt.Sub(start); d < time.Minute {
 		t.Errorf("026 on %s %s after the scale-down, want at least 60 s", nackID, d)
 	}
-	f := finding(h, health.CodeProxyDisconnected, "Gateway", nackID)
 	ev, _ := f.Facts.(*health.ProxyStatsEvidence)
 	proxies := podNames(t, "infra", nackSelector)
 	if f.Severity != health.SeverityWarning || ev == nil || len(ev.Pods) == 0 {
@@ -498,6 +500,36 @@ func testControllerDown(t *testing.T) {
 	if c := checkResult(h, "xDS rejects"); c == nil || c.OK {
 		t.Errorf("xDS rejects check %+v with no controller, want not OK", c)
 	}
+}
+
+// replaceProxies deletes infra/nack's proxy Pods and waits until their replacements are Ready. A Ready
+// proxy has its xDS stream, so the replacements start connected.
+func replaceProxies(t *testing.T) {
+	t.Helper()
+	old := podNames(t, "infra", nackSelector)
+	must(t, "-n", "infra", "delete", "pod", "-l", nackSelector, "--wait=true")
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		pods := podNames(t, "infra", nackSelector)
+		if len(pods) == len(old) && !slices.ContainsFunc(pods, func(p string) bool { return slices.Contains(old, p) }) {
+			args := append([]string{"-n", "infra", "wait", "--for=condition=Ready", "--timeout=180s"}, prefixed("pod/", pods)...)
+			must(t, args...)
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("nack proxies %v never replaced %v", pods, old)
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// prefixed is each of names with p in front.
+func prefixed(p string, names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = p + n
+	}
+	return out
 }
 
 // region Analyzer (fixtures/analyzer.yaml)
