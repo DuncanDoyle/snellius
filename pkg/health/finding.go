@@ -14,6 +14,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/computed"
 	"github.com/DuncanDoyle/snellius/pkg/health/own"
 	"github.com/DuncanDoyle/snellius/pkg/install"
+	"github.com/DuncanDoyle/snellius/pkg/kgateway/kgwpolicy"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/platform"
@@ -493,6 +494,15 @@ func (in Input) conditions() ConditionTypes {
 		return KgatewayConditions()
 	}
 	return *in.Conditions
+}
+
+// withPolicyInterpreter returns in with kgateway's policy interpreter when it has none
+// and checks include Kgateway's, as for a caller that builds Input itself.
+func (in Input) withPolicyInterpreter(checks []Check) Input {
+	if in.PolicyInterpreter == nil && runsKgateway(checks) {
+		in.PolicyInterpreter = kgwpolicy.Interpreter()
+	}
+	return in
 }
 
 // ProcessData is one install's controller and per-Gateway proxy processes

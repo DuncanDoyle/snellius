@@ -211,7 +211,7 @@ var packAllowed = map[string]string{
 	"pkg/extension/pack.go":      "wiring: assembles the kgateway pack",
 	"pkg/health/backend.go":      "compatibility surface (§11): health.BackendState; KGWUI-002 is a pack check housed in pkg/health",
 	"pkg/health/checks.go":       "the proxy check's self-managed KGWUI-010 and its optional deployer-error enrichment",
-	"pkg/health/finding.go":      "compatibility surface (§11): health.Input's proxy mode and scope verification",
+	"pkg/health/finding.go":      "compatibility surface (§11): health.Input's proxy mode, scope verification and kgateway policy interpreter default",
 	"pkg/health/process.go":      "the restart and rollout checks' optional controller-log enrichment (§6)",
 	"pkg/health/proxystats.go":   "pack checks housed in pkg/health: KGWUI-025 and 026",
 	"pkg/health/withheld.go":     "pack checks housed in pkg/health: KGWUI-024",
