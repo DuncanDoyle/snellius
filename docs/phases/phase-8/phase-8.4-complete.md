@@ -4,7 +4,7 @@
 **Range:** 2635548..01f6ce2 (records in the close commit)
 **Close gate:** `make test` (52 packages) and `make lint` (0 issues) at `01f6ce2`; web typecheck, biome and 1204 unit tests at `5161e2d` (web unchanged since); CI on PR #65: see `CI_RESULT` below.
 
-CI_RESULT: pending
+CI_RESULT: all green on 8e34c5e (code as of 01f6ce2): ci (go test, lint, web, helm, image, hygiene), the kind e2e matrix (kgateway v2.3.11, v2.4.7, v2.5.0), kind-secure and bench; kind-main skipped by design
 
 ## Summary
 Fixes the seven findings of the Phase 8 phase review. KGWUI-016 ignores an outdated `Attached`. A policy link opens a detail that answers, or falls back to YAML with named get. `/policies` takes the namespace scope. kgateway's reason readings and wording live in the kgateway pack, and the kgateway checks carry that interpreter, so `/findings` and "Has problems" use the same one. `policy.Relations` applies the list-only rule (D-138). Each expanded listener row lists the policies that name its section. The docs match HEAD.
