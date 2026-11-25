@@ -1825,7 +1825,7 @@ Measured on the reference machine, 5 runs per world:
 
 **Decision:** A policy-ancestor KGWUI-002 ID hashes the install, the code, the policy (group, kind, namespace, name), the canonical ref of the ancestor whose condition was evaluated (section and port included) and the condition type. Since D-131 item 1 the finding is shown only to viewers who can read the policy and that ancestor, so every hashed value is visible to them (D-059's reasoning). Every other finding keeps D-040's ranks, including route parent KGWUI-002, whose shared basis withholds the set together. The ID uses namespace/name, not the object's UID: a finding names a diagnostic on a named resource, and it keeps its ID when the object is replaced or restored.
 
-**Consequences:** No hidden sibling and no reordering of status moves a policy-ancestor 002 ID. Existing links to these findings change once. If one controller writes two status entries for the same ancestor, both findings share an ID, as with the ranks before.
+**Consequences:** No hidden sibling and no reordering of status moves a policy-ancestor 002 ID. Existing links to these findings change once. If one controller writes two status entries for the same ancestor, the second and later get an `#n` ordinal in status order (`duplicateKeys`, 8.1 fix round 4).
 
 ## D-133 — Target and ancestor judgments need list first (2026-11-23, Phase 8)
 **Status:** accepted (user, 2026-11-23: "List before get"); amends design §7 items 3 and 4.
