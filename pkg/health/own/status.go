@@ -60,9 +60,8 @@ func status(ic InstallContext, u *unstructured.Unstructured, named Named, o *out
 			o.add(f)
 		})
 	case kinds.CategoryPolicy:
-		if !k.ListOnly {
-			policyAncestors(ic, u, named, o)
-		}
+		// A list-only policy (DirectResponse) gets these ancestor findings and nothing else (design §6.6).
+		policyAncestors(ic, u, named, o)
 	}
 }
 
@@ -121,51 +120,79 @@ func listenerBlocks(o *out, u *unstructured.Unstructured, status []objects.Liste
 // controller: a Gateway or ListenerSet one only when the install owns it.
 func policyAncestors(ic InstallContext, u *unstructured.Unstructured, named Named, o *out) {
 	required, optional := PolicyRequired(), PolicyOptional()
+	gvk := u.GroupVersionKind()
+	gk := objects.GroupKind{Group: gvk.Group, Kind: gvk.Kind}
 	for _, a := range objects.PolicyAncestors(u) {
 		if !slices.Contains(ic.ControllerNames, a.ControllerName) {
 			continue
 		}
 		ar := a.AncestorRef.Ref()
-		if inCategory(ic, ar.Group, ar.Kind, kinds.CategoryGateway, kinds.CategoryListenerSet) && !ic.Owns(ar) {
+		if !AncestorOwned(ic, ar) {
 			continue
 		}
-		if why, _, _ := BlockFreshness(u, a.Conditions, required, optional); why != "" {
+		if why, _, _ := PolicyFreshness(u, a.Conditions); why != "" {
 			continue
 		}
-		// 016 owns TargetNotFound where the rule set reads it from status (D-030).
-		fromStatus := ic.TargetFromStatus && slices.ContainsFunc(append(slices.Clone(required), optional...), func(t string) bool {
+		// 016 owns TargetNotFound where the rule set reads it from status (D-030); it never
+		// judges a list-only policy (DirectResponse), which keeps its 002 (design §6.6).
+		fromStatus := ic.TargetFromStatus && slices.Contains(ic.PolicyKinds, gk) && slices.ContainsFunc(append(slices.Clone(required), optional...), func(t string) bool {
 			c := objects.FindCondition(a.Conditions, t)
-			return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "TargetNotFound"
+			return c != nil && c.Status == metav1.ConditionFalse && c.Reason == "TargetNotFound" && !objects.IsStale(u, *c)
 		})
 		extra := "ancestor " + a.AncestorRef.Kind + " " + ar.String()
 		owner := append([]string{OwnerAncestor}, RefKey(ar)...)
 		owner = append(owner, a.AncestorRef.SectionName, strconv.Itoa(int(a.AncestorRef.Port)))
 		for _, t := range append(slices.Clone(required), optional...) {
+			// A condition older than the policy says nothing about it now (D-135).
 			cond := objects.FindCondition(a.Conditions, t)
-			if cond == nil || fromStatus && cond.Reason == "TargetNotFound" {
+			if cond == nil || objects.IsStale(u, *cond) || fromStatus && cond.Reason == "TargetNotFound" {
 				continue
 			}
-			if sev, report := policySeverity(*cond); report {
-				named.Object(ar)
-				o.add(conditionFinding(sev, *cond, extra, owner))
+			if sev, msg, report := policySeverity(ic, gk, a.AncestorRef, *cond); report {
+				// Each ancestor's finding rests on that ancestor only, so another one never withholds it;
+				// a ListenerSet's also on its parent Gateway, which its ownership comes from (D-134).
+				f := conditionFinding(sev, *cond, extra, owner)
+				if msg != "" {
+					f.message = msg
+				}
+				f.basis, f.strict = []objects.Ref{ar}, true
+				if ls, ok := named.Object(ar); ok && inCategory(ic, ar.Group, ar.Kind, kinds.CategoryListenerSet) {
+					gw := objects.ListenerSetParent(ls).Ref()
+					named.Object(gw)
+					f.basis = append(f.basis, gw)
+				}
+				o.add(f)
 			}
 		}
 	}
 }
 
-// policySeverity maps a current policy ancestor condition to a severity
-// (design §5.2: Overridden is info, PartiallyValid a warning).
-func policySeverity(c metav1.Condition) (string, bool) {
-	switch c.Reason {
-	case "PartiallyValid":
-		return severityWarning, true
-	case "Overridden":
-		return severityInfo, true
+// AncestorOwned reports whether the install of ic may report on policy
+// ancestor ar: false only for a Gateway or ListenerSet ancestor it does not own.
+func AncestorOwned(ic InstallContext, ar objects.Ref) bool {
+	return !inCategory(ic, ar.Group, ar.Kind, kinds.CategoryGateway, kinds.CategoryListenerSet) || ic.Owns(ar)
+}
+
+// policySeverity maps a current condition c on ancestor of a policy of kind gk to a severity
+// and the pack's wording of c, "" for none. Other than Pending, a reason means something only
+// through the pack's reading (design §8).
+func policySeverity(ic InstallContext, gk objects.GroupKind, ancestor objects.ParentRef, c metav1.Condition) (string, string, bool) {
+	if c.Reason == "Pending" { // an undecided Attached beside a definitive Accepted (PolicyFreshness)
+		return "", "", false
 	}
-	if c.Status == metav1.ConditionFalse {
-		return severityError, true
+	var r ConditionReading
+	if ic.PolicyReading != nil {
+		r = ic.PolicyReading(gk, ancestor, c)
 	}
-	return "", false
+	switch {
+	case r.Warning:
+		return severityWarning, r.Message, true
+	case r.Info:
+		return severityInfo, r.Message, true
+	case c.Status == metav1.ConditionFalse:
+		return severityError, r.Message, true
+	}
+	return "", "", false
 }
 
 // DelegationOnly reports whether u is an HTTPRoute whose every backendRef

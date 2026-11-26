@@ -29,6 +29,9 @@
       "paths": [
         "namespaces"
       ],
+      "policies": [
+        "namespaces"
+      ],
       "processes": [
         "namespaces"
       ],
@@ -294,6 +297,30 @@
       {
         "group": "gateway.networking.k8s.io",
         "kind": "TLSRoute"
+      },
+      {
+        "group": "gateway.networking.k8s.io",
+        "kind": "BackendTLSPolicy"
+      },
+      {
+        "group": "gateway.kgateway.dev",
+        "kind": "TrafficPolicy"
+      },
+      {
+        "group": "gateway.kgateway.dev",
+        "kind": "ListenerPolicy"
+      },
+      {
+        "group": "gateway.kgateway.dev",
+        "kind": "HTTPListenerPolicy"
+      },
+      {
+        "group": "gateway.kgateway.dev",
+        "kind": "BackendConfigPolicy"
+      },
+      {
+        "group": "gateway.kgateway.dev",
+        "kind": "DirectResponse"
       }
     ]
   },

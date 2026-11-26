@@ -1,0 +1,109 @@
+# Policy objects with status from kgateway v2.5.2's translator goldens
+# (pkg/kgateway/translator/gateway/testutils/{inputs,outputs}/<path> at the tag).
+# Generation and observedGeneration are added as in kgateway-2.3.yaml where the golden lacks them.
+# Objects marked "variant" change one field of a golden to make a case the goldens lack.
+#
+# status/target-not-found.yaml: the synthetic StatusSummary ancestor (no namespace) for the typo,
+# and the Gateway ancestor for the target that resolves.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata: {name: partial, namespace: default, generation: 2}
+spec:
+  targetRefs:
+  - {group: gateway.networking.k8s.io, kind: Gateway, name: example-gateway}
+  - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: route-b-typo}
+  cors:
+    allowOrigins: ["https://example.com"]
+status:
+  ancestors:
+  - ancestorRef: {group: gateway.kgateway.dev, kind: StatusSummary, name: StatusSummary}
+    controllerName: kgateway.dev/kgateway
+    conditions:
+    - {type: Accepted, status: "False", reason: TargetNotFound, message: HTTPRoute default/route-b-typo not found, observedGeneration: 2, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Attached, status: "False", reason: TargetNotFound, message: Policy is not attached to targets that could not be resolved, observedGeneration: 2, lastTransitionTime: "2026-11-01T10:00:00Z"}
+  - ancestorRef: {group: gateway.networking.k8s.io, kind: Gateway, name: example-gateway, namespace: default}
+    controllerName: kgateway.dev/kgateway
+    conditions:
+    - {type: Accepted, status: "True", reason: Valid, message: Policy accepted, observedGeneration: 2, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Attached, status: "True", reason: Attached, message: Attached to all targets, observedGeneration: 2, lastTransitionTime: "2026-11-01T10:00:00Z"}
+---
+# listener-policy-http/accept-http10.yaml.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: ListenerPolicy
+metadata: {name: accept-http10, namespace: default, generation: 1}
+spec:
+  targetRefs:
+  - {group: gateway.networking.k8s.io, kind: Gateway, name: example-gateway}
+  default:
+    httpSettings: {acceptHttp10: true}
+status:
+  ancestors:
+  - ancestorRef: {group: gateway.networking.k8s.io, kind: Gateway, name: example-gateway, namespace: default}
+    controllerName: kgateway.dev/kgateway
+    conditions:
+    - {type: Accepted, status: "True", reason: Valid, message: Policy accepted, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Attached, status: "True", reason: Attached, message: Attached to all targets, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+---
+# session-persistence/backendconfigpolicy-partially-valid.yaml: Accepted=True PartiallyValid.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: BackendConfigPolicy
+metadata: {name: service-partially-valid, namespace: default, generation: 1}
+spec:
+  targetRefs:
+  - {group: "", kind: Service, name: backend}
+  loadBalancer:
+    ringHash:
+      hashPolicies: [{cookie: {name: lb-cookie}}]
+  sessionPersistence:
+    absoluteTimeout: 1h
+    cookie: {lifetimeType: Session}
+status:
+  ancestors:
+  - ancestorRef: {group: "", kind: Service, name: backend, namespace: default}
+    controllerName: kgateway.dev/kgateway
+    conditions:
+    - {type: Accepted, status: "True", reason: PartiallyValid, message: spec.sessionPersistence.absoluteTimeout only has an effect for Cookie sessions with spec.sessionPersistence.cookie.lifetimeType Permanent, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Attached, status: "True", reason: Attached, message: Attached to all targets, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+---
+# Variant of the same golden: a targetRef with a port sectionName, which the controller copies
+# onto the backend ancestor (proxy_syncer/status.go:87 at v2.5.2), and an Attached=True Merged.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: BackendConfigPolicy
+metadata: {name: backend-http-port, namespace: default, generation: 1}
+spec:
+  targetRefs:
+  - {group: "", kind: Service, name: backend, sectionName: http}
+  connectTimeout: 5s
+status:
+  ancestors:
+  - ancestorRef: {group: "", kind: Service, name: backend, namespace: default, sectionName: http}
+    controllerName: kgateway.dev/kgateway
+    conditions:
+    - {type: Accepted, status: "True", reason: Valid, message: Policy accepted, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Attached, status: "True", reason: Merged, message: Merged with other policies in target(s) and attached, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+---
+# inputs/directresponse/body-format-content-type.yaml, before the controller wrote status.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: DirectResponse
+metadata: {name: direct-response, namespace: default, generation: 1}
+spec:
+  status: 200
+  bodyFormat: {contentType: text/html, text: "<div><strong>Requested Path:</strong> %REQ(:path)%</div>"}
+---
+# Variant of the listener-policy golden: an ancestor kind and a reason the core does not know.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: ListenerPolicy
+metadata: {name: future-ancestor, namespace: default, generation: 1}
+spec:
+  targetRefs:
+  - {group: gateway.networking.k8s.io, kind: Gateway, name: example-gateway}
+  perPort:
+  - port: 8080
+    httpSettings: {acceptHttp10: true}
+status:
+  ancestors:
+  - ancestorRef: {group: example.com, kind: Mesh, name: mesh-a, namespace: default}
+    controllerName: kgateway.dev/kgateway
+    conditions:
+    - {type: Accepted, status: "True", reason: SomethingNew, message: A reason this reader has not seen, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Programmed, status: "True", reason: Programmed, message: Unknown condition type, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}

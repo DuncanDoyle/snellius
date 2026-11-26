@@ -93,6 +93,9 @@ export interface CorePages {
   /** The Backends list at backends and backend detail at backends/:group/:kind/:ns/:name (sub-phase 6.3). */
   BackendsPage?: ComponentType;
   BackendPage?: ComponentType;
+  /** The Policies list at policies and policy detail at policies/:group/:kind/:ns/:name (sub-phase 8.2). */
+  PoliciesPage?: ComponentType;
+  PolicyPage?: ComponentType;
   /** Replaces the install page's Needs attention and Processes block (sub-phase 3.2). */
   DiagnosticsSection?: ComponentType<DiagnosticsSectionProps>;
 }

@@ -46,13 +46,13 @@ func parents(ic InstallContext, u *unstructured.Unstructured, named Named, o *ou
 			r.notProcessed(b.p, notProcessedMessage, b.why+within(b.desc())+hint, r.evidence(b.kind, b.observed))
 		}
 	}
-	// A parent of a kind the cache cannot read may only be missing from the
-	// cache; cluster access already reports it. An owned parent exists.
+	// A parent of a kind the cache cannot read in its namespace may only be missing
+	// from the cache; cluster access already reports it. An owned parent exists.
 	if !ic.InScope(u.GetNamespace()) {
 		return
 	}
 	for _, p := range r.v.spec {
-		if !routeParentKind(ic, p) || ic.Owns(p.Ref()) || !ic.Collected(objects.GroupKind{Group: p.Group, Kind: p.Kind}, "") {
+		if !routeParentKind(ic, p) || ic.Owns(p.Ref()) || !ic.Collected(objects.GroupKind{Group: p.Group, Kind: p.Kind}, p.Ref().Namespace) {
 			continue
 		}
 		if _, ok := named.Object(p.Ref()); ok {

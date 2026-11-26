@@ -25,6 +25,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/install"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
+	"github.com/DuncanDoyle/snellius/pkg/policy"
 	"github.com/DuncanDoyle/snellius/pkg/process"
 	"github.com/DuncanDoyle/snellius/pkg/proxymode"
 	"github.com/DuncanDoyle/snellius/pkg/proxystats"
@@ -61,13 +62,14 @@ type Registry struct {
 
 	// pack names the default pack; "" is the core. settings, version, reported
 	// and experimentalOnly are its hooks that have no exported field.
-	pack             string
-	settings         func(install.Install) install.Settings
-	version          func(install.Install) string
-	reported         func(install.Install, collect.Snapshot) (string, bool)
-	experimentalOnly func(kinds.Served, install.Install) bool
-	conditions       health.ConditionTypes
-	backendConsumers func(install.Install, *install.Owned) []objects.Consumer
+	pack              string
+	settings          func(install.Install) install.Settings
+	version           func(install.Install) string
+	reported          func(install.Install, collect.Snapshot) (string, bool)
+	experimentalOnly  func(kinds.Served, install.Install) bool
+	conditions        health.ConditionTypes
+	backendConsumers  func(install.Install, *install.Owned) []objects.Consumer
+	policyInterpreter policy.Interpreter
 	// checkPack names the pack each check belongs to, by check name; a core check has none.
 	checkPack map[string]string
 	// impls are the hooks of the other packs, and of the core once a default pack is set, by name.

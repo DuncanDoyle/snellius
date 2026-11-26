@@ -14,10 +14,12 @@ import (
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/internal/testutil/scale"
+	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/endpoints"
 	"github.com/DuncanDoyle/snellius/pkg/engine"
 	"github.com/DuncanDoyle/snellius/pkg/explore"
 	"github.com/DuncanDoyle/snellius/pkg/kgateway"
+	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/paths"
 )
@@ -30,8 +32,21 @@ func LargeHandlers(tb testing.TB) (func(authz Authorizer, opts ...HandlerOption)
 
 // TierHandlers is LargeHandlers over tier.
 func TierHandlers(tb testing.TB, tier scale.Tier) (func(authz Authorizer, opts ...HandlerOption) http.Handler, *engine.Model) {
+	return TierHandlersWith(tb, tier, nil)
+}
+
+// TierHandlersWith is TierHandlers with add's objects added to the tier's snapshot.
+func TierHandlersWith(tb testing.TB, tier scale.Tier, add func(snap *cache.Snapshot) []*unstructured.Unstructured) (func(authz Authorizer, opts ...HandlerOption) http.Handler, *engine.Model) {
 	tb.Helper()
 	snap := scale.Snapshot(tier, 1)
+	if add != nil {
+		served := testutil.ServedUpstream()
+		for _, u := range add(snap) {
+			gk := u.GroupVersionKind().GroupKind()
+			i := slices.IndexFunc(served, func(k kinds.Served) bool { return k.Group == gk.Group && k.Kind == gk.Kind })
+			snap.Objects[served[i].GVR()] = append(snap.Objects[served[i].GVR()], u)
+		}
+	}
 	for _, objs := range snap.Objects {
 		slices.SortFunc(objs, func(x, y *unstructured.Unstructured) int {
 			return strings.Compare(x.GetNamespace()+"/"+x.GetName(), y.GetNamespace()+"/"+y.GetName())

@@ -29,6 +29,8 @@ func TestAuditFiltersPerEndpoint(t *testing.T) {
 		{"GET /api/v1/installs/{id}/findings", "health=error&namespace=infra&path=error&kind=core/Service", map[string]string{"namespace": "infra", "kind": "core/Service"}},
 		{"GET /api/v1/installs/{id}/paths", "kind=HTTPRoute&state=warning&path=error&backend=core/Service/a/b", map[string]string{"kind": "HTTPRoute", "state": "warning", "backend": "core/Service/a/b"}},
 		{"GET /api/v1/installs/{id}/backends", "kind=core/Service&namespaces=a,Tok", nil},
+		{"GET /api/v1/installs/{id}/policies", "kind=gateway.kgateway.dev/TrafficPolicy&feature=cors&feature=bad%20key&hasProblems=yes&hasProblems=true&namespace=shop&limit=5&cursor=c1",
+			map[string]string{"kind": "gateway.kgateway.dev/TrafficPolicy", "feature": "cors", "hasProblems": "true", "namespace": "shop"}},
 		{"/api/ext/acme/list", "namespace=infra", nil},
 	} {
 		r := httptest.NewRequest("GET", "/api/x?"+c.query, nil)

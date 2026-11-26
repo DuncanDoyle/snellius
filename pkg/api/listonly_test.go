@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/pkg/health"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
+	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -103,6 +105,30 @@ func TestListOnlyKindsRaiseNoStatusFindings(t *testing.T) {
 	}
 	if _, ok := count(o, "GatewayExtension"); ok {
 		t.Error("GatewayExtension has a tile, like GatewayParameters it has none")
+	}
+}
+
+// A rejected DirectResponse raises its ancestor's 002 on itself; the route
+// that uses it keeps the signals it has with a DirectResponse with no status (design §6.6).
+func TestRejectedDirectResponseLeavesRouteSignals(t *testing.T) {
+	gw := testutil.GwRef("infra", "edge")
+	route := testutil.HTTPRoute("shop", "promo", []objects.ParentRef{gw}, testutil.AcceptedBy(gw, testutil.Controller))
+	route.Object["spec"].(map[string]any)["rules"] = []any{map[string]any{"filters": []any{map[string]any{"type": "ExtensionRef",
+		"extensionRef": map[string]any{"group": "gateway.kgateway.dev", "kind": "DirectResponse", "name": "dr"}}}}}
+	rejected := testutil.Policy("gateway.kgateway.dev/v1alpha1", "DirectResponse", "shop", "dr", testutil.PolicyAncestor{Ref: gw,
+		Controller: testutil.Controller, Conds: []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}})
+	read := func(dr *unstructured.Unstructured) (HealthResponse, []RouteRow) {
+		_, srv, _ := startWith(t, setup{}, isolated(route.DeepCopy(), dr)...)
+		h := get[HealthResponse](t, srv, "/api/v1/installs/kgw.kgateway/health", http.StatusOK)
+		return h, get[Page[RouteRow]](t, srv, "/api/v1/installs/kgw.kgateway/routes", http.StatusOK).Items
+	}
+	h, with := read(rejected)
+	if !hasSev(h, health.CodeConditionFalse, health.SeverityError, "shop/dr") {
+		t.Fatalf("no 002 on the rejected DirectResponse: %+v", h.Findings)
+	}
+	_, without := read(testutil.DirectResponse("shop", "dr"))
+	if len(with) == 0 || !reflect.DeepEqual(with, without) {
+		t.Fatalf("route rows differ:\n%+v\n%+v", with, without)
 	}
 }
 

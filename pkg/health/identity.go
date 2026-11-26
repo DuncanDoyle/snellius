@@ -184,11 +184,12 @@ const ownerLen = 7
 // rankOwners replaces each status-only owner of fs, a key's first ownerLen elements
 // led by tag, with label and "#k": its rank by ref among the distinct such owners of
 // one code on one resource. Status is hidden from a restricted row (design §14 rule 11).
+// A policy ancestor's KGWUI-002 keeps its owner as written (policyAncestor002).
 // owned follows each own-object finding's new key.
 func rankOwners(fs []Finding, tag, label string, owned *ownedSet) {
 	var is []int
 	for i := range fs {
-		if k := fs[i].Key; len(k) >= ownerLen && k[0] == tag {
+		if k := fs[i].Key; len(k) >= ownerLen && k[0] == tag && !policyAncestor002(&fs[i]) {
 			is = append(is, i)
 		}
 	}
@@ -218,6 +219,39 @@ func rankOwners(fs []Finding, tag, label string, owned *ownedSet) {
 	for j, i := range is {
 		f := &fs[i]
 		owned.rekey(f, func() { f.Key = append([]string{label + ordinal(rank[j])}, f.Key[ownerLen:]...) })
+	}
+}
+
+// policyAncestor002 reports whether f is a KGWUI-002 on a policy ancestor. Its id hashes the
+// ancestor ref and the condition type, unranked: a viewer shown it reads the policy and that
+// ancestor (D-131), so no ordinal hides anything, and a sibling's finding never moves it.
+func policyAncestor002(f *Finding) bool {
+	return f.Code == CodeConditionFalse && len(f.Key) > 0 && f.Key[0] == ownerAncestor
+}
+
+// duplicateKeys gives each finding of fs that match selects, after the first one with
+// the same code, resource and key, an "#n" element: its place among those exact
+// duplicates in fs order (status order). A finding with no duplicate keeps its key.
+// owned follows each own-object finding's new key.
+func duplicateKeys(fs []Finding, match func(f *Finding) bool, owned *ownedSet) {
+	type id struct {
+		code, res, key string
+	}
+	seen := map[id]int{}
+	for i := range fs {
+		f := &fs[i]
+		if !match(f) {
+			continue
+		}
+		res := ""
+		if f.Resource != nil {
+			res = f.Resource.Group + "\x00" + f.Resource.Kind + "\x00" + f.Resource.String()
+		}
+		k := id{f.Code, res, strings.Join(f.Key, "\x00")}
+		seen[k]++
+		if n := seen[k]; n > 1 {
+			owned.rekey(f, func() { f.Key = append(slices.Clip(f.Key), ordinal(n)) })
+		}
 	}
 }
 

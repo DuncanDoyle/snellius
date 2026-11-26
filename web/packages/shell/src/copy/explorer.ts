@@ -199,7 +199,7 @@ export const listenerCopy = {
   anyLabels: "Any labels", // S46
   anyLabelsInline: "any labels",
   defaultKinds: "Default kinds for the protocol", // S47
-  toggle: (open: boolean, name: string) => `${open ? "Hide" : "Show"} conditions for listener ${name}`, // S48
+  toggle: (open: boolean, name: string) => `${open ? "Hide" : "Show"} details for listener ${name}`, // S48
 };
 
 // region ListenerSet page

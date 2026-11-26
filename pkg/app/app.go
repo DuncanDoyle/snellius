@@ -46,6 +46,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/limits"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/obs"
+	"github.com/DuncanDoyle/snellius/pkg/policy"
 	"github.com/DuncanDoyle/snellius/pkg/proxystats"
 	"github.com/DuncanDoyle/snellius/pkg/setup"
 )
@@ -415,7 +416,8 @@ func Build(c Clients, o Options, reg *extension.Registry) (*App, error) {
 	}
 	hopts := []api.HandlerOption{api.WithExtMounts(mounts...), api.WithCoreCapabilities(core), api.WithCapabilitySources(reg.CapabilityStates),
 		api.WithCommands(reg.Commands), api.WithInstallCommands(commands), api.WithInstallFeatures(reg.FeaturesFor),
-		api.WithPacks(reg.Packs()...), api.WithInstallKinds(reg.KindAppliesTo), api.WithScopedReader(scoped), api.WithBackendConsumers(consumers)}
+		api.WithPacks(reg.Packs()...), api.WithInstallKinds(reg.KindAppliesTo), api.WithScopedReader(scoped), api.WithBackendConsumers(consumers),
+		api.WithPolicyInterpreters(func(i install.Install) policy.Interpreter { return reg.ImplFor(i).PolicyInterpreter })}
 	if o.AuthMode == ModeSecure {
 		// The commit wrapper compares allow expiries on the clock that stamped them.
 		var clk clock.PassiveClock = clock.RealClock{}

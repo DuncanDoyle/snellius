@@ -4,6 +4,7 @@ import { useInstalls } from "../api/hooks";
 import { aboutCopy } from "../copy/about";
 import { backendsCopy } from "../copy/backends";
 import { navCopy } from "../copy/explorer";
+import { policiesCopy } from "../copy/policies";
 import { useShellExtension } from "./extension";
 import { installLabel } from "./InstallName";
 import { ABOUT_PATH, decodeInstallId } from "./paths";
@@ -20,10 +21,12 @@ const PAGES: [string, (p: Record<string, string | undefined>) => string][] = [
   ["routes", () => navCopy.routes],
   ["listenersets", () => navCopy.listenerSets],
   ["backends", () => backendsCopy.title],
+  ["policies", () => policiesCopy.title],
   ["gateways/:ns/:name", (p) => `Gateway ${dec(p.ns)}/${dec(p.name)}`],
   ["routes/:group/:kind/:ns/:name", (p) => `${dec(p.kind)} ${dec(p.ns)}/${dec(p.name)}`],
   ["listenersets/:group/:kind/:ns/:name", (p) => `${dec(p.kind)} ${dec(p.ns)}/${dec(p.name)}`],
   ["backends/:group/:kind/:ns/:name", (p) => `${dec(p.kind)} ${dec(p.ns)}/${dec(p.name)}`],
+  ["policies/:group/:kind/:ns/:name", (p) => `${dec(p.kind)} ${dec(p.ns)}/${dec(p.name)}`],
 ];
 
 /** The page part of the title for pathname, or undefined for the bare product name; label names an install by its ID. */

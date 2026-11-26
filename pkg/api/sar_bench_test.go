@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/utils/clock"
 	clocktesting "k8s.io/utils/clock/testing"
 
@@ -30,6 +32,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/auth/oidc"
 	"github.com/DuncanDoyle/snellius/pkg/auth/sar"
 	"github.com/DuncanDoyle/snellius/pkg/auth/session"
+	"github.com/DuncanDoyle/snellius/pkg/cache"
 	"github.com/DuncanDoyle/snellius/pkg/explore"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/obs"
@@ -883,6 +886,68 @@ func TestScopedFewerColdChecksLarge(t *testing.T) {
 		t.Logf("%-14s cold SARs unscoped %d → %d, scoped to ns-000 %d → %d", p, all.sars, all.code, scoped.sars, scoped.code)
 		if p == "/routes" && (scoped.code != 200 || scoped.sars >= all.sars) {
 			t.Errorf("/routes scoped asked %d SARs (%d), unscoped %d", scoped.sars, scoped.code, all.sars)
+		}
+	}
+}
+
+// largePolicies is one TrafficPolicy per Large HTTPRoute, in the route's namespace,
+// targeting it and reported on its first parent: a policy per route.
+func largePolicies(snap *cache.Snapshot) []*unstructured.Unstructured {
+	var out []*unstructured.Unstructured
+	for _, objs := range snap.Objects {
+		for _, r := range objs {
+			if r.GetKind() != "HTTPRoute" {
+				continue
+			}
+			ps := objects.RouteParentRefs(r)
+			if len(ps) == 0 {
+				continue
+			}
+			ok := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionTrue, "Accepted"), testutil.Cond("Attached", metav1.ConditionTrue, "Attached")}
+			p := testutil.TrafficPolicy(r.GetNamespace(), "tp-"+r.GetName(), testutil.PolicyAncestor{Ref: ps[0], Controller: testutil.Controller, Conds: ok})
+			p.Object["spec"] = map[string]any{"targetRefs": []any{map[string]any{"group": objects.GatewayAPIGroup, "kind": "HTTPRoute", "name": r.GetName()}}}
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// policyReader may list TrafficPolicies everywhere and everything else in the
+// granted namespaces only, with no named get: the most named checks a policy list asks.
+func policyReader(a sar.Attributes) bool {
+	return a.Verb == "list" && (a.Resource == "trafficpolicies" || a.Namespace != "" && granted(a.Namespace))
+}
+
+// A cold Large policies list with one policy per route answers within the per-request
+// check budget for every restricted viewer (8.1 re-review: budget), and the subject
+// details that carry relations within their own bounds.
+func TestBudgetSARPoliciesLarge(t *testing.T) {
+	build, m := api.TierHandlersWith(t, scale.Large, largePolicies)
+	base := "/api/v1/installs/" + m.Installs[0].Resolved.ID()
+	ix := m.Installs[0].Index
+	route, svc := detailPages(t, ix, base)
+	k := slices.IndexFunc(ix.Gateways, func(g explore.GatewayRow) bool { return canView(g.Ref) })
+	if k < 0 {
+		t.Fatal("no visible Gateway")
+	}
+	gw := base + "/gateways/" + ix.Gateways[k].Ref.Namespace + "/" + ix.Gateways[k].Ref.Name
+	// bound is each page's cold check bound. A detail asks access only on the policies that can
+	// relate to it; without relations these pages take about 130, 15 and 320 checks.
+	bound := map[string]int64{base + "/policies?limit=1": api.CheckLimit, gw: 170, route: 30, svc: 360}
+	for _, path := range []string{base + "/policies?limit=1", gw, route, svc} {
+		for _, v := range append(slices.Clone(viewers), viewer{"policy-reader", policyReader}) {
+			c, clk := &fakeChecker{allow: v.allow}, clocktesting.NewFakeClock(t0)
+			h := build(newAuthz(c, clk, nil, lifted), api.WithSecureMode(), api.WithCommitClock(clk.Now))
+			cold := get(h, c, "u", path)
+			t.Logf("%-16s %s cold %d SARs (%d list, %d get) → %d", v.name, strings.TrimPrefix(path, base), cold.sars, c.lists.Load(), c.gets.Load(), cold.code)
+			// Every viewer opens every page, but denied-list the Service detail, as in TestBudgetSARDeniedList.
+			want := http.StatusOK
+			if v.name == "denied-list" && path == svc {
+				want = http.StatusNotFound
+			}
+			if cold.code != want || cold.sars > bound[path] {
+				t.Errorf("%s: cold %s %d (want %d) with %d SARs (bound %d)", v.name, path, cold.code, want, cold.sars, bound[path])
+			}
 		}
 	}
 }

@@ -90,6 +90,15 @@
         }
       }
     ],
+    "policyRelations": {
+      "attachedHere": [],
+      "selectors": {
+        "kinds": [],
+        "namespace": "infra",
+        "source": "declared"
+      },
+      "targeting": []
+    },
     "proxies": {
       "desired": 1,
       "observed": true,

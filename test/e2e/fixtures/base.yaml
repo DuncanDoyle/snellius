@@ -72,6 +72,15 @@ spec:
   parentRefs: [{ name: edge, namespace: infra }]
   rules: [{ backendRefs: [{ name: httpbin, port: 8000 }] }]
 ---
+# A valid policy on an existing route, for the Policies pages' round trip and axe (web/e2e). timeouts.request is in
+# the TrafficPolicy schema of v2.3.11, v2.4.7 and v2.5.0, so every matrix row accepts it.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata: { name: tp-good-timeout, namespace: shop }
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: good }]
+  timeouts: { request: 15s }
+---
 # timeouts.request exists in both the v2.3.x and v2.4.x TrafficPolicy schema.
 apiVersion: gateway.kgateway.dev/v1alpha1
 kind: TrafficPolicy

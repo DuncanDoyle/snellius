@@ -48,8 +48,9 @@ type Descriptor struct {
 	Namespaced  bool     `json:"namespaced"`
 	Category    Category `json:"category"`
 	DisplayName string   `json:"displayName"`
-	// ListOnly kinds are listed and shown per install scope, never judged for
-	// status. Their access is optional for the cluster access check.
+	// ListOnly kinds are listed and shown per install scope, never owned. Only a
+	// list-only policy's ancestor status is judged. Their access is optional for
+	// the cluster access check.
 	ListOnly bool `json:"-"`
 }
 

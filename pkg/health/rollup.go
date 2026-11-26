@@ -51,7 +51,7 @@ func RollUp(fs []Finding, cs []CheckResult) State {
 // ShownTo reports whether a viewer without the full read sees f (D-106): an
 // own-object finding when its resource and every object it named are
 // readable, a collection finding when its resource, if any, is. A named
-// object also counts when a NamedReadable may read it by name. A derived
+// object also counts when a NamedReadable may read it by name; a strict basis needs both. A derived
 // finding needs the full read, under which Project is not called.
 func (f *Finding) ShownTo(rd Readable) bool {
 	switch {
@@ -60,8 +60,18 @@ func (f *Finding) ShownTo(rd Readable) bool {
 			return false
 		}
 		nr, named := rd.(NamedReadable)
+		lr, lists := rd.(ListReadable)
+		strict := f.Basis != nil && f.Basis.Strict
 		for _, r := range f.Basis.refs() {
-			if !rd.Ref(r) && (!named || !nr.Named(r)) {
+			switch {
+			// A strict basis asks list on the kind in the namespace, then the name. A reader
+			// that cannot answer one of them answers it with Ref, as canNamed falls back to can.
+			case strict && lists && !lr.List(objects.GroupKind{Group: r.Group, Kind: r.Kind}, r.Namespace),
+				strict && !lists && !rd.Ref(r),
+				strict && named && !nr.Named(r),
+				strict && !named && !rd.Ref(r):
+				return false
+			case !strict && !rd.Ref(r) && (!named || !nr.Named(r)):
 				return false
 			}
 		}
@@ -151,7 +161,9 @@ func Withhold(rep Report, events, crds bool) Report {
 // When every check returns the same findings slice as in the last Evaluate (a memo hit,
 // or a rerun with equal findings), the findings are that report's slice, shared and
 // with the Group values diagnose.Build set on it.
+// Without a PolicyInterpreter, checks that include the kgateway checks read kgateway's policies as its pack does.
 func Evaluate(in Input, checks []Check, rt Runtime) Report {
+	in = in.withPolicyInterpreter(checks)
 	r := Report{Install: in.Install.ID(), Counts: map[Severity]int{}, CollectedAt: in.Now}
 	memoize := rt.Print != nil && rt.States != nil
 	var outputs map[string]CheckOutput

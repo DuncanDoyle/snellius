@@ -1,0 +1,88 @@
+# Policy objects with status from kgateway v2.3.11's translator goldens
+# (pkg/kgateway/translator/gateway/testutils/{inputs,outputs}/<path> at the tag).
+# The goldens omit generation and observedGeneration; each object here has generation 1
+# and its conditions observedGeneration 1, as a running controller writes them.
+#
+# delegation/traffic_policy_filter_override_merge.yaml: Attached=True Merged.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata: {name: child-policy-filter, namespace: a, generation: 1}
+spec:
+  rateLimit:
+    local:
+      tokenBucket: {maxTokens: 44, tokensPerFill: 5, fillInterval: 66s}
+  extProc:
+    extensionRef: {name: extproc-ext1}
+status:
+  ancestors:
+  - ancestorRef: {group: gateway.networking.k8s.io, kind: Gateway, name: example-gateway, namespace: infra}
+    controllerName: kgateway.dev/kgateway
+    conditions:
+    - {type: Accepted, status: "True", reason: Valid, message: Policy accepted, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Attached, status: "True", reason: Merged, message: Merged with other policies in target(s) and attached, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+---
+# Same golden: Attached=False Overridden.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata: {name: child-policy-targetref, namespace: a, generation: 1}
+spec:
+  targetRefs:
+  - {group: gateway.networking.k8s.io, kind: HTTPRoute, name: child}
+  extProc:
+    extensionRef: {name: extproc-ext2}
+status:
+  ancestors:
+  - ancestorRef: {group: gateway.networking.k8s.io, kind: Gateway, name: example-gateway, namespace: infra}
+    controllerName: kgateway.dev/kgateway
+    conditions:
+    - {type: Accepted, status: "True", reason: Valid, message: Policy accepted, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Attached, status: "False", reason: Overridden, message: Overridden due to conflict with higher priority policy in target(s), observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+---
+# httplistenerpolicy/accept-http10.yaml: an inline spec field.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: HTTPListenerPolicy
+metadata: {name: accept-http10, namespace: default, generation: 1}
+spec:
+  targetRefs:
+  - {group: gateway.networking.k8s.io, kind: Gateway, name: example-gateway}
+  acceptHttp10: true
+status:
+  ancestors:
+  - ancestorRef: {group: gateway.networking.k8s.io, kind: Gateway, name: example-gateway, namespace: default}
+    controllerName: kgateway.dev/kgateway
+    conditions:
+    - {type: Accepted, status: "True", reason: Valid, message: Policy accepted, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Attached, status: "True", reason: Attached, message: Attached to all targets, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+---
+# inputs/directresponse/body-format-content-type.yaml with outputs/directresponse.yaml's status: no targets.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: DirectResponse
+metadata: {name: direct-response, namespace: default, generation: 1}
+spec:
+  status: 200
+  bodyFormat: {contentType: text/html, text: "<div><strong>Requested Path:</strong> %REQ(:path)%</div>"}
+status:
+  ancestors:
+  - ancestorRef: {group: gateway.networking.k8s.io, kind: Gateway, name: example-gateway, namespace: default}
+    controllerName: kgateway.dev/kgateway
+    conditions:
+    - {type: Accepted, status: "True", reason: Valid, message: Policy accepted, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Attached, status: "True", reason: Attached, message: Attached to all targets, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+---
+# backendtlspolicy/conflict-resolution.yaml: Gateway API's own vocabulary (Conflicted, ResolvedRefs).
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata: {name: conflicted-without-section-name-2, namespace: default, generation: 1}
+spec:
+  targetRefs:
+  - {group: "", kind: Service, name: backendtlspolicy-conflicted-without-section-name-test}
+  validation:
+    caCertificateRefs: [{group: "", kind: ConfigMap, name: public-ca}]
+    hostname: abc.example.com
+status:
+  ancestors:
+  - ancestorRef: {group: gateway.networking.k8s.io, kind: Gateway, name: example-gateway, namespace: default}
+    controllerName: kgateway.dev/kgateway
+    conditions:
+    - {type: ResolvedRefs, status: "True", reason: ResolvedRefs, message: Resolved all references, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Accepted, status: "False", reason: Conflicted, message: Policy conflicts with higher priority policy, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}

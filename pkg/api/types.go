@@ -100,7 +100,8 @@ type MetaResponse struct {
 // client the endpoint exists (PF8, Phase 3 design §13.1). Every list the
 // namespace scope applies to lists it (D-100 item 8).
 var addedFilters = map[string][]string{"routes": {"listener", scopeParam}, "gateways": {scopeParam}, "listenersets": {scopeParam},
-	"paths": {scopeParam}, "backends": {scopeParam}, "delegation": {"rule", "ref", "outcome"}, "findings": append(slices.Clone(findingsFilters), scopeParam), "processes": {scopeParam}}
+	"paths": {scopeParam}, "backends": {scopeParam}, "delegation": {"rule", "ref", "outcome"}, "findings": append(slices.Clone(findingsFilters), scopeParam), "processes": {scopeParam},
+	"policies": {scopeParam}}
 
 // deploymentKind is listed in /api/v1/meta because finding links reach
 // controller Deployments (D-013). It is read through typed informers, not counted.

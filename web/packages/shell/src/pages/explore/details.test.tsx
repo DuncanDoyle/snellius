@@ -16,6 +16,7 @@ import type {
   GatewayDetail,
   ListenerSetDetail,
   ListenerSetList,
+  PolicyRelation,
   RouteList,
   RouteRow,
 } from "../../api/types";
@@ -114,6 +115,61 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+/** A declared TrafficPolicy relation in infra, on section when given, linked as the API links it (D-136). */
+const targets = (name: string, sectionName?: string): PolicyRelation => ({
+  policy: {
+    group: "gateway.kgateway.dev",
+    kind: "TrafficPolicy",
+    namespace: "infra",
+    name,
+    link: `${API}/policies/gateway.kgateway.dev/TrafficPolicy/infra/${name}`,
+  },
+  relation: "targets",
+  source: "declared",
+  ...(sectionName ? { sectionName } : {}),
+});
+
+it("an expanded listener row shows the policies that name its section; whole-Gateway ones stay in Policies", async () => {
+  const g = gateway();
+  g.policyRelations = {
+    ...g.policyRelations,
+    targeting: [targets("tp-gw"), targets("tp-http", "http"), targets("tp-https", "https")],
+  };
+  serve(api({ gateway: g }));
+  mount(GW_PATH);
+  const listeners = await screen.findByRole("table", { name: "Listeners" });
+  // The page's Policies section keeps all three.
+  expect(within(screen.getByTestId("relations-targeting")).getAllByTestId("policy-relation")).toHaveLength(3);
+  await userEvent.click(within(rowOf(listeners, "http")).getByRole("button", { name: /Show details/ }));
+  const http = within(screen.getByTestId("listener-http-details")).getByTestId("listener-policies");
+  expect(http).toHaveTextContent("Policies that name this listener");
+  const item = within(http).getByTestId("policy-relation");
+  expect(item).toHaveTextContent("tp-http");
+  expect(item).toHaveTextContent("Declared");
+  expect(hrefPath(within(item).getByRole("link"))).toBe(
+    `/i/${ID}/policies/gateway.kgateway.dev/TrafficPolicy/infra/tp-http`,
+  );
+  expect(http).not.toHaveTextContent("tp-gw");
+  expect(http).not.toHaveTextContent("tp-https");
+  // A listener no policy names says so.
+  await userEvent.click(within(rowOf(listeners, "tcp")).getByRole("button", { name: /Show details/ }));
+  const tcp = within(screen.getByTestId("listener-tcp-details")).getByTestId("listener-policies");
+  expect(tcp).toHaveTextContent("None.");
+  expect(within(tcp).queryByTestId("policy-relation")).toBeNull();
+});
+
+it("a ListenerSet's listener row shows the policies that name its section", async () => {
+  const l = ls(lsGolden);
+  l.policyRelations = { ...l.policyRelations, targeting: [targets("tp-ls"), targets("tp-extra", "extra")] };
+  serve(api({ ls: l }));
+  mount(LS_PATH("ls"));
+  const listeners = await screen.findByRole("table", { name: "Listeners" });
+  await userEvent.click(within(rowOf(listeners, "extra")).getByRole("button", { name: /Show details/ }));
+  const row = within(screen.getByTestId("listener-extra-details")).getByTestId("listener-policies");
+  expect(within(row).getByTestId("policy-relation")).toHaveTextContent("tp-extra");
+  expect(row).not.toHaveTextContent("tp-ls");
 });
 
 it("Gateway page shows the status count and the computed count side by side", async () => {
@@ -422,7 +478,7 @@ it("an accepted ListenerSet shows no allowed-listeners block", async () => {
   // The accepted set's invalid listener shows its condition on expand, reason as written.
   const row = rowOf(listeners, "extra");
   expect(within(row).getByText(/Programmed: False/)).toBeInTheDocument();
-  await userEvent.click(within(row).getByRole("button", { name: "Show conditions for listener extra" }));
+  await userEvent.click(within(row).getByRole("button", { name: "Show details for listener extra" }));
   const details = screen.getByTestId("listener-extra-details");
   expect(within(details).getByTestId("condition-Programmed")).toHaveTextContent("PortUnavailable");
   expect(
@@ -481,7 +537,7 @@ it("polling keeps scroll, focus and expanded rows", async () => {
   const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
   mount(GW_PATH);
   const listeners = await screen.findByRole("table", { name: "Listeners" });
-  const toggle = within(rowOf(listeners, "http")).getByRole("button", { name: "Show conditions for listener http" });
+  const toggle = within(rowOf(listeners, "http")).getByRole("button", { name: "Show details for listener http" });
   fireEvent.click(toggle);
   toggle.focus();
   const heading = screen.getByRole("heading", { level: 1 });
@@ -583,7 +639,7 @@ describe.each([controlRoomLight, controlRoomDark])("interactive styles in $id", 
     const listeners = await screen.findByRole("table", { name: "Listeners" });
     const els = [
       screen.getByRole("tab", { name: "Overview" }),
-      within(rowOf(listeners, "http")).getByRole("button", { name: /Show conditions/ }),
+      within(rowOf(listeners, "http")).getByRole("button", { name: /Show details/ }),
       within(screen.getByRole("group", { name: "Not attached" })).getAllByRole("button")[0] as HTMLElement,
       screen.getByRole("button", { name: "Copy namespace/name" }),
     ];
@@ -618,7 +674,7 @@ it("below 900 px listener names keep their words: hostname moves out and long na
   fireEvent.keyDown(document, { key: "Tab" });
   act(() => name.focus());
   expect(await screen.findByRole("tooltip")).toHaveTextContent("https");
-  await userEvent.click(within(rowOf(listeners, "http")).getByRole("button", { name: /Show conditions/ }));
+  await userEvent.click(within(rowOf(listeners, "http")).getByRole("button", { name: /Show details/ }));
   const details = screen.getByTestId("listener-http-details");
   expect(within(details).getByText("Hostname")).toBeInTheDocument();
   expect(details).toHaveTextContent("Any hostname");
@@ -638,7 +694,7 @@ it("below 900 px the listener table moves TLS and allowed routes into the expand
     .getAllByRole("columnheader")
     .map((h) => h.textContent);
   expect(headers).not.toContain("TLS");
-  await userEvent.click(within(rowOf(listeners, "https")).getByRole("button", { name: /Show conditions/ }));
+  await userEvent.click(within(rowOf(listeners, "https")).getByRole("button", { name: /Show details/ }));
   const details = screen.getByTestId("listener-https-details");
   expect(within(details).getByText("TLS")).toBeInTheDocument();
   expect(details).toHaveTextContent("Terminate");
@@ -795,7 +851,7 @@ it("listener table shows the status count and the computed count with its check"
   // Pending: the number with its waiting state.
   expect(within(rowOf(listeners, "https")).getByText("Waiting")).toBeInTheDocument();
   // The full sentence is in the expanded row.
-  await userEvent.click(within(http).getByRole("button", { name: /Show conditions/ }));
+  await userEvent.click(within(http).getByRole("button", { name: /Show details/ }));
   expect(screen.getByTestId("listener-http-details")).toHaveTextContent("Count agrees with the controller");
 });
 
@@ -821,10 +877,10 @@ it("unknown listeners show no number; a hidden Namespace hides no count", async 
   expect(cell("http")).toHaveTextContent("6");
   expect(cell("http")).not.toHaveTextContent("Hidden");
   // The expanded row never reads an unknown count as "None".
-  await userEvent.click(within(rowOf(listeners, "tcp")).getByRole("button", { name: /Show conditions/ }));
+  await userEvent.click(within(rowOf(listeners, "tcp")).getByRole("button", { name: /Show details/ }));
   const details = screen.getByTestId("listener-tcp-details");
   expect(details).toHaveTextContent("Computed routes: No count");
-  expect(details).not.toHaveTextContent("None");
+  expect(details).not.toHaveTextContent("Computed routes: None");
 });
 
 it("a count without its check shows the count and Not checked", async () => {
@@ -868,7 +924,7 @@ it("a shared plain-HTTP port shows the isolation note", async () => {
   const note = within(rowOf(listeners, "http")).getByLabelText("Envoy may serve fewer hostnames on this listener");
   expect(note).toHaveAttribute("tabindex", "0");
   expect(within(rowOf(listeners, "drift")).queryByLabelText(/fewer hostnames/)).toBeNull();
-  await userEvent.click(within(rowOf(listeners, "http")).getByRole("button", { name: /Show conditions/ }));
+  await userEvent.click(within(rowOf(listeners, "http")).getByRole("button", { name: /Show details/ }));
   expect(screen.getByTestId("listener-http-details")).toHaveTextContent(
     "Envoy may serve fewer hostnames on this listener",
   );

@@ -501,6 +501,29 @@ func TestRouteRefServiceExplanations(t *testing.T) {
 	}
 }
 
+// In a scoped snapshot, a Services watch denied in namespace other leaves
+// explanation 2 on shop's route; denied in shop, the controller's reason stays (8.1 review #6).
+func TestRouteRefServiceExplanationPerNamespace(t *testing.T) {
+	denied := cache.Access{Err: "forbidden", Denied: true}
+	for _, tc := range []struct {
+		ns   string
+		want string
+	}{{"other", RefExplainServiceMissing}, {"shop", RefExplainController}} {
+		t.Run("denied in "+tc.ns, func(t *testing.T) {
+			w := healthyWorld()
+			w.nss = append(w.nss, testutil.Namespace("other", nil))
+			w.objs[2] = refRoute("BackendNotFound", "", map[string]any{"name": "cart", "port": int64(80)})
+			w.access = map[schema.GroupVersionResource]cache.Access{cache.ServicesGVR: {OK: true}}
+			w.byNS = map[schema.GroupVersionResource]map[string]cache.Access{cache.ServicesGVR: {tc.ns: denied}}
+			in := w.input(t)
+			in.Catalog = served()
+			if _, ev := only(t, Evaluate(in, Upstream(), Runtime{}), CodeRefUnresolved, "shop/cart"); ev.Explanation != tc.want {
+				t.Fatalf("explanation %q, want %q", ev.Explanation, tc.want)
+			}
+		})
+	}
+}
+
 // Explanation 1 wins over a missing Service, as the order says.
 func TestKindNotServedBeatsMissingService(t *testing.T) {
 	w := healthyWorld()

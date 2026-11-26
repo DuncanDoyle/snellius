@@ -1,0 +1,72 @@
+# Policy objects with status from kgateway v2.4.8's translator goldens
+# (pkg/kgateway/translator/gateway/testutils/{inputs,outputs}/<path> at the tag).
+# Generation and observedGeneration are added as in kgateway-2.3.yaml. Objects marked
+# "variant" change one field of a golden to make a case the goldens lack.
+#
+# backendconfigpolicy/tls-overridden-by-backendtlspolicy.yaml: a Service ancestor (core group "")
+# and a third condition type the core does not know, naming the BackendTLSPolicy.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: BackendConfigPolicy
+metadata: {name: httpbin-policy, namespace: default, generation: 1}
+spec:
+  targetRefs:
+  - {name: httpbin, group: "", kind: Service}
+  tls: {insecureSkipVerify: true, sni: from-bcp.example.com}
+status:
+  ancestors:
+  - ancestorRef: {group: "", kind: Service, name: httpbin, namespace: default}
+    controllerName: kgateway.dev/kgateway
+    conditions:
+    - {type: Accepted, status: "True", reason: Valid, message: Policy accepted, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Attached, status: "True", reason: Attached, message: Attached to all targets, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Overridden, status: "True", reason: ConflictedWithBackendTLSPolicy, message: spec.tls overridden by BackendTLSPolicy default/httpbin-tls-policy, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+---
+# traffic-policy/transformation-deep-merge.yaml: a precedence annotation and a listener section.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: listener-attachment-1
+  namespace: default
+  generation: 1
+  annotations: {kgateway.dev/policy-weight: "-1", example.com/unrelated: "x"}
+spec:
+  targetRefs:
+  - {group: gateway.networking.k8s.io, kind: Gateway, name: test, sectionName: http}
+  transformation:
+    request:
+      set: [{name: source, value: listener-attachment-1}]
+status:
+  ancestors:
+  - ancestorRef: {group: gateway.networking.k8s.io, kind: Gateway, name: test, namespace: default}
+    controllerName: kgateway.dev/kgateway
+    conditions:
+    - {type: Accepted, status: "True", reason: Valid, message: Policy accepted, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Attached, status: "True", reason: Attached, message: Attached to all targets, observedGeneration: 1, lastTransitionTime: "2026-11-01T10:00:00Z"}
+---
+# Variant of gateway-attachment-2 (same golden): generation 3 after an edit the controller has not
+# processed, and a second ancestor written by another controller.
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: gateway-attachment-2
+  namespace: default
+  generation: 3
+  annotations: {kgateway.dev/policy-weight: "5"}
+spec:
+  targetRefs:
+  - {group: gateway.networking.k8s.io, kind: Gateway, name: test}
+  transformation:
+    request:
+      set: [{name: source, value: gateway-attachment-2}]
+status:
+  ancestors:
+  - ancestorRef: {group: gateway.networking.k8s.io, kind: Gateway, name: test, namespace: default}
+    controllerName: kgateway.dev/kgateway
+    conditions:
+    - {type: Accepted, status: "True", reason: Valid, message: Policy accepted, observedGeneration: 2, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Attached, status: "True", reason: Attached, message: Attached to all targets, observedGeneration: 2, lastTransitionTime: "2026-11-01T10:00:00Z"}
+  - ancestorRef: {group: gateway.networking.k8s.io, kind: Gateway, name: test, namespace: default}
+    controllerName: example.com/other-controller
+    conditions:
+    - {type: Accepted, status: "True", reason: Valid, message: Policy accepted, observedGeneration: 3, lastTransitionTime: "2026-11-01T10:00:00Z"}
+    - {type: Attached, status: "True", reason: Attached, message: Attached to all targets, observedGeneration: 3, lastTransitionTime: "2026-11-01T10:00:00Z"}

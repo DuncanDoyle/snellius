@@ -28,6 +28,8 @@ const (
 	LinkNone Link = "none"
 )
 
+// A policy's link is neither: it is its detail endpoint path, which policyLink builds (D-136).
+
 // LinkedRef is a reference with its link.
 type LinkedRef struct {
 	objects.Ref
@@ -366,6 +368,8 @@ type GatewayDetail struct {
 	DataPlane   *DataPlaneDTO  `json:"dataPlane,omitempty"`
 	Proxies     *ProcessSetDTO `json:"proxies,omitempty"`
 	CollectedAt time.Time      `json:"collectedAt"`
+	// PolicyRelations are the readable policies that name this object (Phase 8 design §6.5).
+	PolicyRelations PolicyRelationsDTO `json:"policyRelations"`
 }
 
 // AllowedListenersDTO is the parent Gateway's spec.allowedListeners as written; CRDHint is set
@@ -401,6 +405,8 @@ type ListenerSetDetail struct {
 	RouteCounts            RouteCounts          `json:"routeCounts"`
 	ParentAllowedListeners *AllowedListenersDTO `json:"parentAllowedListeners,omitempty"`
 	CollectedAt            time.Time            `json:"collectedAt"`
+	// PolicyRelations are the readable policies that name this object (Phase 8 design §6.5).
+	PolicyRelations PolicyRelationsDTO `json:"policyRelations"`
 }
 
 // RouteAnnotations are the route annotations the UI reads. A nil field is
@@ -443,6 +449,8 @@ type RouteDetail struct {
 	// Config and Path are as on RouteRow; Health is their summary.
 	Config RouteSignal `json:"config"`
 	Path   PathSignal  `json:"path"`
+	// PolicyRelations are the readable policies that name this object (Phase 8 design §6.5).
+	PolicyRelations PolicyRelationsDTO `json:"policyRelations"`
 }
 
 // PathMatchDTO is a path match after defaults.

@@ -276,6 +276,7 @@ func (h *handler) gatewayDetail(w http.ResponseWriter, r *http.Request) {
 		Listeners: d.listeners(u, v.Listeners, v.ListenerStatus), AttachedListenerSets: v.AttachedListenerSets,
 		ListenerSets: d.listenerSetCount(ref), RouteCounts: d.routeCounts(ref), CollectedAt: wireTime(d.p.ConfirmedAt)}
 	out.Reason = d.reason(ref, st)
+	out.PolicyRelations = d.h.policyRelations(d.p, d.i, d.v, d.l, ref, gatewayRelations)
 	if cand == nil {
 		out.DataPlane, out.Proxies = d.dataPlane(ref)
 		if d.v.projects() {
@@ -480,6 +481,7 @@ func (h *handler) listenerSetDetail(w http.ResponseWriter, r *http.Request) {
 	if len(v.Conditions) == 0 && len(v.ListenerStatus) == 0 && d.i.Resolved.Experimental(k) {
 		out.ExperimentalHint = experimentalHint(k)
 	}
+	out.PolicyRelations = d.h.policyRelations(d.p, d.i, d.v, d.l, ref, listenerSetRelations)
 	// The parent is read only when it opens: a hidden, absent or unadmitted
 	// parent reads as not found, and admission never follows chains (D-013).
 	var pu *unstructured.Unstructured
@@ -591,6 +593,7 @@ func (h *handler) routeDetail(w http.ResponseWriter, r *http.Request) {
 	out.Effective, out.EffectiveTruncated = d.effective(ref, v.InheritParentMatcher)
 	out.Ancestors, out.AncestorsTruncated = d.ancestors(ref)
 	out.DelegationNotChecked = d.v.noDelegation()
+	out.PolicyRelations = d.h.policyRelations(d.p, d.i, d.v, d.l, ref, routeRelations)
 	writeJSON(w, out)
 }
 

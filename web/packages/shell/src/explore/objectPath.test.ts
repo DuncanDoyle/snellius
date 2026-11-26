@@ -1,5 +1,5 @@
 import type { LinkedRef } from "../api/types";
-import { linkTarget, objectPath, withVia } from "./objectPath";
+import { linkTarget, objectPath, setPolicyKinds, withVia } from "./objectPath";
 
 const gw = "gateway.networking.k8s.io";
 const ref: LinkedRef = { group: gw, kind: "HTTPRoute", namespace: "shop", name: "x", link: "detail" };
@@ -59,4 +59,45 @@ test("linkTarget adds the trail and params to where the link opens", () => {
   expect(linkTarget("a.b", ref)).toBe("/i/a.b/routes/gateway.networking.k8s.io/HTTPRoute/shop/x");
   expect(linkTarget("a.b", { ...ref, link: "none" }, "a.b/x")).toBeUndefined();
   expect(withVia("/i/a.b/routes?q=1", "v")).toBe("/i/a.b/routes?q=1&via=v");
+});
+
+test("a policy kind's detail link opens the policy page, with its group; /meta names the kinds", () => {
+  const tp = {
+    group: "gateway.kgateway.dev",
+    kind: "TrafficPolicy",
+    namespace: "shop",
+    name: "tp",
+    link: "detail",
+  } as const;
+  // Gateway API's own policy kind is known before /meta loads.
+  expect(objectPath("a.b", { ...tp, group: gw, kind: "BackendTLSPolicy" })).toBe(
+    "/i/a.b/policies/gateway.networking.k8s.io/BackendTLSPolicy/shop/tp",
+  );
+  setPolicyKinds([
+    { group: "gateway.kgateway.dev", kind: "TrafficPolicy", category: "policy" },
+    { group: "acme.io", kind: "EdgeSet", category: "listenerset" },
+  ]);
+  expect(objectPath("a.b", tp)).toBe("/i/a.b/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp");
+  // A kind of another category keeps its page.
+  expect(objectPath("a.b", { ...tp, group: "acme.io", kind: "EdgeSet" })).toBe(
+    "/i/a.b/listenersets/acme.io/EdgeSet/shop/tp",
+  );
+});
+
+test("a policy link carries the policies endpoint path and opens the policy page without /meta (8.2 review #8)", () => {
+  // An unregistered kind in another group: only the link itself can say where it goes.
+  const r = { group: "acme.io", kind: "AcmePolicy", namespace: "shop", name: "p" };
+  expect(objectPath("kgw.a", { ...r, link: "/api/v1/installs/kgw.a/policies/acme.io/AcmePolicy/shop/p" })).toBe(
+    "/i/kgw.a/policies/acme.io/AcmePolicy/shop/p",
+  );
+  // An empty group is "-" in the path, as the endpoint takes it.
+  expect(objectPath("kgw.a", { ...r, group: "", link: "/api/v1/installs/kgw.a/policies/-/AcmePolicy/shop/p" })).toBe(
+    "/i/kgw.a/policies/-/AcmePolicy/shop/p",
+  );
+  // An install ID that needs escaping is encoded once.
+  expect(objectPath("a/b c", { ...r, link: "/api/v1/installs/a%2Fb%20c/policies/acme.io/AcmePolicy/shop/p" })).toBe(
+    "/i/a%2Fb%20c/policies/acme.io/AcmePolicy/shop/p",
+  );
+  // A link without a destination stays text.
+  expect(objectPath("kgw.a", { ...r } as LinkedRef)).toBeUndefined();
 });

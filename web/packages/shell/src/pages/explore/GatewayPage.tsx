@@ -17,6 +17,7 @@ import { useTwoColumns } from "../../shell/layout";
 import { installPath } from "../../shell/paths";
 import { InlineLink } from "../../states/controls";
 import { MapTab } from "../map/MapTab";
+import { PolicyRelationsSection } from "../policies/PolicyRelationsSection";
 import { DetailFrame, type ExtraTab, expectedRows, Facts, refParam, Section, SubList } from "./detailParts";
 import { DataPlaneSection } from "./gateway/DataPlaneSection";
 import { ListenerTable } from "./gateway/ListenerTable";
@@ -129,6 +130,7 @@ export function GatewayPage({ stylesOverride }: GatewayPageProps = {}) {
               </dd>
             </Facts>
           </Section>
+          <PolicyRelationsSection installId={id} subject={ref} relations={data.policyRelations} />
           {/* Sent for a Gateway the install owns; it arrives with the detail, so nothing below moves. */}
           {dataPlane && data.dataPlane ? <DataPlaneSection installId={id} dataPlane={data.dataPlane} /> : null}
           {processes && data.proxies ? <ProxiesSection gateway={ref} proxies={data.proxies} /> : null}
@@ -142,7 +144,12 @@ export function GatewayPage({ stylesOverride }: GatewayPageProps = {}) {
             <h2 id="gw-listeners">
               {gatewayCopy.listeners} <span className="note">{data.listeners.length}</span>
             </h2>
-            <ListenerTable listeners={data.listeners} generation={data.generation} />
+            <ListenerTable
+              listeners={data.listeners}
+              generation={data.generation}
+              installId={id}
+              policies={data.policyRelations?.targeting}
+            />
           </Section>
           <Section aria-labelledby="gw-listenersets">
             <h2 id="gw-listenersets">

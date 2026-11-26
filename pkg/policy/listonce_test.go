@@ -1,0 +1,236 @@
+package policy_test
+
+import (
+	"context"
+	"slices"
+	"testing"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/DuncanDoyle/snellius/internal/testutil"
+	"github.com/DuncanDoyle/snellius/pkg/cache"
+	"github.com/DuncanDoyle/snellius/pkg/computed"
+	"github.com/DuncanDoyle/snellius/pkg/computed/rulesets"
+	"github.com/DuncanDoyle/snellius/pkg/kgateway"
+	"github.com/DuncanDoyle/snellius/pkg/kinds"
+	"github.com/DuncanDoyle/snellius/pkg/objects"
+	"github.com/DuncanDoyle/snellius/pkg/policy"
+)
+
+// snapshotLookup answers from a one-shot snapshot, as a CLI does: what the
+// user's own credentials listed is what they may read.
+type snapshotLookup struct {
+	snap   *cache.Snapshot
+	served []kinds.Served
+}
+
+func (l snapshotLookup) gvr(gk objects.GroupKind) (schema.GroupVersionResource, bool) {
+	for _, s := range l.served {
+		if s.Group == gk.Group && s.Kind == gk.Kind {
+			return s.GVR(), true
+		}
+	}
+	return schema.GroupVersionResource{}, false
+}
+
+func (l snapshotLookup) Object(r objects.Ref) (*unstructured.Unstructured, bool) {
+	gvr, ok := l.gvr(objects.GroupKind{Group: r.Group, Kind: r.Kind})
+	if !ok {
+		return nil, false
+	}
+	i := slices.IndexFunc(l.snap.Objects[gvr], func(u *unstructured.Unstructured) bool {
+		return u.GetNamespace() == r.Namespace && u.GetName() == r.Name
+	})
+	if i < 0 {
+		return nil, false
+	}
+	return l.snap.Objects[gvr][i], true
+}
+
+// Watched answers a scoped snapshot from ns's access alone, as health.Collected does.
+func (l snapshotLookup) Watched(gk objects.GroupKind, ns string) bool {
+	gvr, ok := l.gvr(gk)
+	switch {
+	case !ok:
+		return false
+	case ns == "" || len(l.snap.RequestedNamespaces) == 0:
+		return l.snap.Access[gvr].OK
+	}
+	return l.snap.NamespaceAccess[gvr][ns].OK
+}
+
+func (l snapshotLookup) CanGet(r objects.Ref) bool {
+	return l.Watched(objects.GroupKind{Group: r.Group, Kind: r.Kind}, r.Namespace)
+}
+
+func (l snapshotLookup) CanList(gk objects.GroupKind, ns string) bool { return l.Watched(gk, ns) }
+
+// snapshotGuard is the ancestor guard a CLI builds from its snapshot: the install
+// owns the Gateways of a GatewayClass one of controllers writes, and the
+// ListenerSets on those Gateways; freshness is the policy findings' own.
+func snapshotGuard(snap *cache.Snapshot, served []kinds.Served, controllers []string) policy.Guard {
+	of := func(kind string) []*unstructured.Unstructured {
+		for _, s := range served {
+			if s.Group == gw && s.Kind == kind {
+				return snap.Objects[s.GVR()]
+			}
+		}
+		return nil
+	}
+	classes := map[string]bool{}
+	for _, c := range of("GatewayClass") {
+		name, _, _ := unstructured.NestedString(c.Object, "spec", "controllerName")
+		classes[c.GetName()] = slices.Contains(controllers, name)
+	}
+	owned := map[objects.Ref]bool{}
+	for _, g := range of("Gateway") {
+		class, _, _ := unstructured.NestedString(g.Object, "spec", "gatewayClassName")
+		owned[objects.RefOf(g)] = classes[class]
+	}
+	for _, ls := range of("ListenerSet") {
+		owned[objects.RefOf(ls)] = owned[objects.ListenerSetParent(ls).Ref()]
+	}
+	return policy.Guard{ControllerNames: controllers, Fresh: fresh, Owns: func(r objects.Ref) bool {
+		if r.Group == gw && (r.Kind == "Gateway" || r.Kind == "ListenerSet") {
+			return owned[r]
+		}
+		return true
+	}}
+}
+
+// The model builds from a cache.ListOnce snapshot with no pkg/api import, its
+// guard from the same snapshot, as kgwctl's one-shot flow does (design §11, E7).
+func TestModelFromListOnce(t *testing.T) {
+	w, us := relationWorld()
+	var objs []runtime.Object
+	for _, u := range w.objs {
+		if u.GetKind() != "Service" { // Services are typed objects in the cache, not served kinds
+			objs = append(objs, u)
+		}
+	}
+	for _, u := range us {
+		objs = append(objs, u)
+	}
+	objs = append(objs, load(t, "kgateway-2.5.yaml")[0]) // default/partial, with the summary ancestor
+	// The install's class, another install's class and Gateway, and ancestors on each.
+	gwRef := map[string]any{"group": gw, "kind": "Gateway", "name": "gw", "namespace": "infra"}
+	pending := ancestor(gwRef, kgwController, "True", 1)
+	pending["conditions"].([]any)[0].(map[string]any)["reason"] = "Pending"
+	extra := []*unstructured.Unstructured{
+		trafficPolicy("infra", "p-foreign-gw", nil, ancestor(map[string]any{"group": gw, "kind": "Gateway", "name": "other-gw", "namespace": "infra"},
+			kgwController, "True", 1)),
+		trafficPolicy("infra", "p-ls-att", nil, ancestor(map[string]any{"group": gw, "kind": "ListenerSet", "name": "ls", "namespace": "infra"},
+			kgwController, "True", 1)),
+		trafficPolicy("infra", "p-pending", nil, pending),
+	}
+	other := gateway("infra", "other-gw", "http")
+	other.Object["spec"].(map[string]any)["gatewayClassName"] = "other"
+	objs = append(objs, testutil.GatewayClass("kgateway", kgwController, true), testutil.GatewayClass("other", "example.com/other", true), other)
+	for _, u := range extra {
+		objs = append(objs, u)
+	}
+	served := testutil.ServedUpstream()
+	dyn, kube := testutil.Clients(t, objs...)
+	snap, err := cache.ListOnce(context.Background(), cache.Config{Dynamic: dyn, Kube: kube, Served: served})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Mode != cache.ModeList || !snap.Synced {
+		t.Fatalf("snapshot mode %q synced %v", snap.Mode, snap.Synced)
+	}
+
+	// Every policy kind in the snapshot, read with the kgateway pack and a guard built from the snapshot.
+	g := snapshotGuard(snap, served, []string{kgwController})
+	var ps []policy.Policy
+	for _, s := range served {
+		if s.Category != kinds.CategoryPolicy {
+			continue
+		}
+		for _, u := range snap.Objects[s.GVR()] {
+			ps = append(ps, policy.Read(u, kgateway.PolicyInterpreter(), g))
+		}
+	}
+	if len(ps) != len(us)+len(extra)+1 {
+		t.Fatalf("read %d policies, want %d", len(ps), len(us)+len(extra)+1)
+	}
+	in := policy.Inputs{Policies: ps, Lookup: snapshotLookup{snap: snap, served: served},
+		Targeter: computed.Selection{Rules: rulesets.Select("v2.4.7").Rules}.PolicyTargeter(), ScopeKnown: true}
+
+	var got []string
+	for _, r := range policy.Relations(policy.Subject{Ref: objects.Ref{Group: gw, Kind: "HTTPRoute", Namespace: "shop", Name: "r-ls"}}, in) {
+		got = append(got, rel(r))
+	}
+	want := []string{
+		"targets-parent infra/p-gw declared -> HTTPRoute shop/r-ls via ListenerSet infra/ls, Gateway infra/gw",
+		"targets-parent infra/p-ls declared -> HTTPRoute shop/r-ls via ListenerSet infra/ls"}
+	if !slices.Equal(got, want) {
+		t.Errorf("relations:\n got %q\nwant %q", got, want)
+	}
+
+	outcome := func(ns, name string) string {
+		i := slices.IndexFunc(ps, func(p policy.Policy) bool { return p.Ref.Namespace == ns && p.Ref.Name == name })
+		return policy.CheckTargets(ps[i], in)[0].Outcome
+	}
+	if o := outcome("infra", "p-gw-https"); o != computed.TargetFound {
+		t.Errorf("p-gw-https: %s, want found", o)
+	}
+	if o := outcome("shop", "p-gw-shop"); o != computed.TargetNotFound {
+		t.Errorf("p-gw-shop: %s, want not found", o)
+	}
+	// The snapshot's guard tells the install's Gateway and ListenerSet from another install's, and holds a pending one back.
+	for name, want := range map[string]string{"partial": "", "p-att": "", "p-ls-att": "", "p-foreign-gw": policy.NotCurrentNotOwned,
+		"p-pending": policy.NotCurrentPending} {
+		i := slices.IndexFunc(ps, func(p policy.Policy) bool { return p.Ref.Name == name })
+		if a := ps[i].Ancestors[0]; a.Current != (want == "") || a.NotCurrent != want || name == "partial" && !a.Summary {
+			t.Errorf("%s's ancestor: current %v, not current %q, summary %v; want not current %q", name, a.Current, a.NotCurrent, a.Summary, want)
+		}
+	}
+}
+
+// scope makes snap scoped to namespaces nss, every input read in each, except
+// gk denied in deny; the kind's aggregate is then the worst, as the cache's is.
+func scope(snap *cache.Snapshot, served []kinds.Served, nss []string, gk objects.GroupKind, deny string) {
+	snap.RequestedNamespaces = nss
+	snap.NamespaceAccess = map[schema.GroupVersionResource]map[string]cache.Access{}
+	for gvr := range snap.Access {
+		snap.NamespaceAccess[gvr] = map[string]cache.Access{}
+		for _, ns := range nss {
+			snap.NamespaceAccess[gvr][ns] = cache.Access{OK: true}
+		}
+	}
+	gvr, _ := snapshotLookup{snap: snap, served: served}.gvr(gk)
+	denied := cache.Access{Err: "forbidden", Denied: true}
+	snap.NamespaceAccess[gvr][deny], snap.Access[gvr] = denied, denied
+}
+
+// In a scoped snapshot whose Gateway list is denied in infra only, a target
+// check in shop still answers and one in infra is unknown (8.1 re-review: E7 fixture).
+func TestModelFromScopedListOnce(t *testing.T) {
+	w, us := relationWorld()
+	var objs []runtime.Object
+	for _, u := range w.objs {
+		if u.GetKind() != "Service" {
+			objs = append(objs, u)
+		}
+	}
+	for _, u := range us {
+		objs = append(objs, u)
+	}
+	served := testutil.ServedUpstream()
+	dyn, kube := testutil.Clients(t, objs...)
+	snap, err := cache.ListOnce(context.Background(), cache.Config{Dynamic: dyn, Kube: kube, Served: served})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope(snap, served, []string{"infra", "shop"}, objects.GroupKind{Group: gw, Kind: "Gateway"}, "infra")
+	in := policy.Inputs{Lookup: snapshotLookup{snap: snap, served: served},
+		Targeter: computed.Selection{Rules: rulesets.Select("v2.4.7").Rules}.PolicyTargeter(), ScopeKnown: true}
+	for name, want := range map[string]string{"p-gw-shop": computed.TargetNotFound, "p-gw-https": computed.TargetUnknown} {
+		i := slices.IndexFunc(us, func(u *unstructured.Unstructured) bool { return u.GetName() == name })
+		if o := policy.CheckTargets(policy.Read(us[i], nil, policy.Guard{}), in)[0].Outcome; o != want {
+			t.Errorf("%s: %s, want %s", name, o, want)
+		}
+	}
+}

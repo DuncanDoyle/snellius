@@ -55,6 +55,16 @@ type InstallContext struct {
 	// TargetFromStatus is true when the rule set reads a policy's
 	// TargetNotFound from status as KGWUI-016 (D-020 rule 5).
 	TargetFromStatus bool
+	// PolicyReading is the pack's reading of a current condition c on a policy of kind gk
+	// (design §8). Nil reads none.
+	PolicyReading func(gk objects.GroupKind, ancestor objects.ParentRef, c metav1.Condition) ConditionReading
+}
+
+// ConditionReading is a pack's reading of a policy condition: a warning, an info or neither,
+// and its wording of the condition, "" for the core's neutral one.
+type ConditionReading struct {
+	Warning, Info bool
+	Message       string
 }
 
 // Named resolves the objects a resource names. Every ref asked is recorded
@@ -75,8 +85,18 @@ type Finding struct {
 	evidence             []objects.Ref
 	facts                any
 	parent               *objects.ParentRef
+	basis                []objects.Ref
+	strict               bool
 	sealed               bool
 }
+
+// Basis are the named objects this finding alone rests on, a subset of what its
+// analyzer named; nil when it rests on everything the analyzer named for the resource.
+func (f Finding) Basis() []objects.Ref { return slices.Clone(f.basis) }
+
+// StrictBasis reports whether each object of Basis must be readable as a population
+// member and by name, as a policy page needs for an ancestor (D-131 item 3, D-133).
+func (f Finding) StrictBasis() bool { return f.strict }
 
 // Code is the finding code, such as KGWUI-002.
 func (f Finding) Code() string { return f.code }
@@ -289,10 +309,6 @@ func reasonMessage(reason string) (string, bool) {
 		return "Invalid configuration", true
 	case "TargetNotFound":
 		return "Policy target not found", true
-	case "PartiallyValid":
-		return "Partially valid; some settings were ignored", true
-	case "Overridden":
-		return "Overridden by another policy", true
 	case "AddressNotAssigned":
 		return "No address assigned", true
 	case "InvalidParameters":
@@ -350,12 +366,28 @@ func within(extra string) string {
 // and, for a stale block, the lowest observed generation; "" when it is
 // current. Kinds are tried in §10.1 order (D-006).
 func BlockFreshness(u *unstructured.Unstructured, cs []metav1.Condition, required, optional []string) (why, kind string, observed int64) {
+	return blockFreshness(u, cs, required, optional, true)
+}
+
+// PolicyFreshness is BlockFreshness for one status.ancestors entry of policy u.
+// Accepted alone decides (D-135): kgateway keeps Attached=False/Pending beside a
+// definitive Accepted, and an older Attached does not make the block stale.
+func PolicyFreshness(u *unstructured.Unstructured, cs []metav1.Condition) (why, kind string, observed int64) {
+	return blockFreshness(u, cs, PolicyRequired(), PolicyOptional(), false)
+}
+
+// blockFreshness is BlockFreshness; pendingOptional makes an optional condition judged too, stale or Pending.
+func blockFreshness(u *unstructured.Unstructured, cs []metav1.Condition, required, optional []string, pendingOptional bool) (why, kind string, observed int64) {
 	if crdDefaultOnly(cs) {
 		return NoControllerStatus, FreshnessNeverWritten, 0
 	}
 	types := [2][]string{required, optional}
+	judged := types[:1]
+	if pendingOptional {
+		judged = types[:]
+	}
 	stale, gen := false, u.GetGeneration() // objects.IsStale's comparison, with the generation read once
-	for _, ts := range types {
+	for _, ts := range judged {
 		for _, t := range ts {
 			if c := objects.FindCondition(cs, t); c != nil && c.ObservedGeneration < gen && (!stale || c.ObservedGeneration < observed) {
 				stale, observed = true, c.ObservedGeneration
@@ -370,7 +402,7 @@ func BlockFreshness(u *unstructured.Unstructured, cs []metav1.Condition, require
 			return fmt.Sprintf("No %s condition", t), FreshnessPending, 0
 		}
 	}
-	for _, ts := range types {
+	for _, ts := range judged {
 		for _, t := range ts {
 			if c := objects.FindCondition(cs, t); c != nil && c.Reason == "Pending" {
 				return t + " is Pending", FreshnessPending, 0

@@ -220,6 +220,12 @@ func (v *view) readsAll() bool {
 	return v.all
 }
 
+// downstreamDenies reports whether v's policy already refuses ref, so asking the base
+// authoriser about it could only cost a check, or fail the request (8.2 review #1).
+func (v *view) downstreamDenies(ref objects.Ref, named bool) bool {
+	return v.policy != nil && !v.readsAll() && !v.policyAllows(ref, named)
+}
+
 // policyAllows reports whether v's policy, if any, lets the caller see ref.
 func (v *view) policyAllows(ref objects.Ref, named bool) bool {
 	switch {
@@ -499,6 +505,9 @@ func (v *view) Ref(ref objects.Ref) bool { return v.can(ref) }
 // Named implements health.NamedReadable: whether the caller may read ref by name (D-100 item 1).
 func (v *view) Named(ref objects.Ref) bool { return v.canNamed(ref) }
 
+// List implements health.ListReadable: whether the caller may list gk in namespace.
+func (v *view) List(gk objects.GroupKind, namespace string) bool { return v.canList(gk, namespace) }
+
 // projects reports whether v projects findings and check results (D-106):
 // secure mode without the full read.
 func (v *view) projects() bool { return v.secure && v.off&stepFindings == 0 && !v.readsAll() }
@@ -745,3 +754,8 @@ func (n namedSubject) Ref(r objects.Ref) bool {
 
 // Named implements health.NamedReadable, as the view does.
 func (n namedSubject) Named(r objects.Ref) bool { return n.v.canNamed(r) }
+
+// List implements health.ListReadable, as the view does.
+func (n namedSubject) List(gk objects.GroupKind, namespace string) bool {
+	return n.v.canList(gk, namespace)
+}

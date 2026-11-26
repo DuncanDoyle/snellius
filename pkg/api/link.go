@@ -6,6 +6,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/engine"
 	"github.com/DuncanDoyle/snellius/pkg/explore"
 	"github.com/DuncanDoyle/snellius/pkg/health"
+	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/paths"
 )
@@ -18,6 +19,8 @@ type linker struct {
 	m      *engine.Model
 	i      *engine.InstallModel
 	detail map[objects.GroupKind]bool
+	// policy are the policy kinds, whose links are their detail endpoint paths (D-136).
+	policy map[objects.GroupKind]bool
 	// backend reports whether backendDetail serves this caller a ref, named as
 	// its subject or else as a list row; nil links no backend.
 	backend func(ref objects.Ref, named bool) bool
@@ -25,11 +28,16 @@ type linker struct {
 
 // linkerFor returns the linker for the caller of v and install i of m, without backend links.
 func linkerFor(v *view, m *engine.Model, i *engine.InstallModel) linker {
-	detail := map[objects.GroupKind]bool{}
+	detail, pol := map[objects.GroupKind]bool{}, map[objects.GroupKind]bool{}
 	for _, gk := range explore.DetailKinds(m.Served) {
 		detail[gk] = true
 	}
-	return linker{v: v, m: m, i: i, detail: detail}
+	for _, k := range m.Served {
+		if k.Category == kinds.CategoryPolicy {
+			pol[objects.GroupKind{Group: k.Group, Kind: k.Kind}] = true
+		}
+	}
+	return linker{v: v, m: m, i: i, detail: detail, policy: pol}
 }
 
 // linker returns the linker for the caller of v and install i of p. Its
@@ -61,6 +69,10 @@ func (l linker) linkNamed(ref objects.Ref) Link {
 
 func (l linker) linkWith(ref objects.Ref, named bool) Link {
 	k := l.admitWith(ref, named)
+	// A policy links only to its own detail, never to a backend page (D-136).
+	if l.policy[objects.GroupKind{Group: ref.Group, Kind: ref.Kind}] {
+		return k
+	}
 	if k != LinkDetail && l.backend != nil && l.check(named)(ref) && l.backend(ref, named) {
 		return LinkBackend
 	}
@@ -109,7 +121,19 @@ func (l linker) admitWith(ref objects.Ref, named bool) Link {
 	if u, d := stored(l.m, ref); u == nil && d == nil {
 		return LinkNone
 	}
-	if candidate && l.detail[objects.GroupKind{Group: ref.Group, Kind: ref.Kind}] {
+	gk := objects.GroupKind{Group: ref.Group, Kind: ref.Kind}
+	// A policy link needs named get (8.2 re-review). Its detail serves only the
+	// install's own and listed policies; any other referenced policy is YAML (Q8.4-2).
+	if candidate && l.policy[gk] {
+		switch {
+		case !l.v.canNamed(ref):
+			return LinkNone
+		case !a.Owned:
+			return LinkYAML
+		}
+		return policyLink(l.i.Resolved.ID(), ref)
+	}
+	if candidate && l.detail[gk] {
 		return LinkDetail
 	}
 	return LinkYAML

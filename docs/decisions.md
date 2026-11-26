@@ -1729,3 +1729,150 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** Under the full read, Snellius also asks cluster-wide `list` on Events and on CRDs (one cached check each). A reader without them gets what a restricted viewer gets for those inputs: no KGWUI-020 and no KGWUI-022 on a CRD, the probe check reads "Not checked", check text and admission do not depend on them, and timestamps follow D-109. Collection status is the exception, as for every viewer: a failing or recovered Events or CRD watch still shows in the check's availability and in `/meta`.
 
 **Consequences:** Full-read `/routes` costs 24 cold checks instead of 22. A full reader needs cluster-wide `list` on CRDs to see CRD bundle skew; the README's RBAC section says so.
+
+## D-121 — Phase 8 is declared policy visibility; Snellius never resolves policy (2026-11-22, Phase 8)
+**Status:** accepted (user, 2026-11-23: "Approved"); from (Phase 8 design §12), from the user's Phase 8 brief (2026-11-22) and program P-008.
+
+**Context:** The roadmap promised "the direct, inherited and effective policy for a route, with provenance" and merge and override conflicts. kgateway reports policy status per Gateway, not per route, and never names the winning policy (Phase 8 design §4). Its only per-field provenance is level-local `merge.*` xDS metadata. The user: "Snellius must NEVER become a second implementation of kgateway's policy resolution and translation logic."
+
+**Decision:** Phase 8 shows declared policy (targets, annotations, spec sections) and controller-reported status, each labelled with its source. No code infers attachment, inheritance, precedence, merge, override or conflicts. The term "effective policy" is not used.
+
+**Supersedes:** the roadmap's Phase 8 scope text; D-005's consequence "effective policy must build on policy ancestor status". The rest of D-005 stands.
+
+**Consequences:** "Which policies apply to route R" stays unanswered until the controller reports it (design §10). The gap is raised upstream through the program (U-asks), when the owner decides.
+
+## D-122 — Every policy value carries its source (2026-11-22, Phase 8)
+**Status:** accepted (user, 2026-11-23: "Approved"); from (Phase 8 design §3.2; program P-008 point 4).
+
+**Decision:** One of `declared`, `controller-reported`, `controller-reported-contribution`, `inferred`, `unknown`, on every value in the policy model, API and UI. Raw status conditions are `controller-reported` whatever they say. The program's "controller-reported attached" is a relation built only from a current `Attached=True` condition, with source `controller-reported`. Summaries over reported status (worst accepted, has problems) are `inferred`. A later source (such as a registered policy mirror, P-008 point 7) adds a constant, not a field. (Revised after Codex design review #2.)
+
+## D-123 — `pkg/policy` is an exported contract (E7) (2026-11-22, Phase 8)
+**Status:** accepted (user, 2026-11-23: "Approved"); from (Phase 8 design §5; program handoff 2026-11-22).
+
+**Decision:** kgwctl Phase 6 imports `pkg/policy` (`Read`, `Relations`, section-aware `Subject`, the source constants) for `describe`. The caller supplies the objects and a target lookup: `pkg/api` passes viewer-scoped ones, kgwctl a `cache.ListOnce` snapshot. The package knows nothing of viewers. This is Snellius's part of E7; route-level xDS evidence comes from xdsview. Changes are additive within a minor.
+
+## D-124 — The runtime policy view belongs to Phase 12 (2026-11-22, Phase 8)
+**Status:** accepted (user, 2026-11-23: "Agree, Phase 12"); from Phase 8 design §9; program P-008, P-009).
+
+**Context:** Showing `merge.*` contributions or the runtime filter chain needs Envoy or controller admin access, which the chart forbids (`pods/portforward`, `pods/proxy`), redaction of raw filter config, and xdsview `v0.5.0` (E13). P-009 withdrew comparing the controller's snapshot with the config Envoy accepted.
+
+**Decision:** Phase 12 builds the runtime view and decides access, transport and redaction. Runtime evidence is a separate xdsview-backed result joined on the policy ref, not a field of the Phase 8 model. Phase 12 inherits one rule now: a runtime block is shown only when the viewer may read its full evidence scope (Gateway, routes and every reported policy); otherwise the whole block is withheld, identically whether hidden configuration exists or not (Codex design review #3). Snellius works without xDS (P-008 point 6).
+
+**Supersedes:** in principle 4 and D-006, the Phase 12 (earlier "Phase 9") signal "differences between the controller's xDS snapshot and the config Envoy accepted"; roadmap Phase 12 bullet 2. The rest of D-006 stands.
+
+**Consequences:** Phase 12 = runtime filter chain (E4, E5, E13) plus M-1's optional xDS cross-check. Convergence findings, if any, come later through E14; Snellius stays the owner of findings.
+
+## D-125 — Label selectors are never resolved (2026-11-22, Phase 8)
+**Status:** accepted (user, 2026-11-23: "Approved"); from (Phase 8 design §5.3; program M-2).
+
+**Decision:** targetSelectors are shown as written. Snellius never lists the objects a selector matches, since kgateway's choice depends on controller rules such as the global policy namespace. KGWUI-016's zero-candidate diagnostic stays (M-2) and is never presented as attachment. Retires with kgateway#14998 (U6).
+
+## D-126 — Precedence annotations are shown, not evaluated (2026-11-22, Phase 8)
+**Status:** accepted (user, 2026-11-23: "Approved"); from (Phase 8 design §5.2).
+
+**Decision:** `kgateway.dev/inherited-policy-priority` and `kgateway.dev/policy-weight` appear as written, with a note that kgateway evaluates them. Policy lists are sorted by namespace and name and say so. This answers the Phase 2 concern "a list without precedence can mislead" (user, 2026-10-23) by not presenting any order as precedence.
+
+## D-127 — Phase 8 adds no policy input to route signals (2026-11-22, Phase 8)
+**Status:** accepted (user, 2026-11-23: "Approved"); from (Phase 8 design §6.4).
+
+**Context:** D-087 said Policies would add "inherited policy problems" to the route's traffic-path signal. Without per-route status, deciding that a parent's policy problem affects a route is inference.
+
+**Decision:** Route signals are unchanged in Phase 8. Policy findings stay on the policy (DirectResponse joins them, design §6.5). Revisit when the controller reports per route (U4).
+
+**Supersedes:** D-087's consequence "Policies (Phase 8) adds inherited policy problems to the same signal". The rest of D-087 stands.
+
+## D-128 — M-1's register entry, its conformance status and rule-set selection (2026-11-22, Phase 8)
+**Status:** accepted (user, 2026-11-23: "Approved"); from (Phase 8 design §12); answers program open questions 1 and 3.
+
+**Decision:**
+1. **M-1 rule 1:** D-020's computed views mirror kgateway route→listener attachment (view A), delegation child selection (view B) and the delegated child's merged matcher, `pkg/kgateway/utils/delegation` `MergeParentChildRouteMatch` (view C), in rule sets `kgw23`–`kgw25` for kgateway 2.3–2.5. View C retires with U10.
+2. **Open question 1:** rule 2 is not met for the matcher. The goldens (`pkg/computed/golden_test.go`, `testdata/kgateway-2.{3,4,5}`) are hand-transcribed; delegation cases cite kgateway's translator goldens per tag, but no test loads or compares them. The e2e matrix checks delegation against status only. A conformance test that compares the matcher with the cited upstream goldens per tag is tracked, outside Phase 8.
+3. **Open question 3:** selection already goes through the pack (`Hooks.RulesFor`). The core keeps `pkg/engine`'s fallbacks (`rulesets.Select`, `IsVersion`, `ExpectedGatewayAPI`) and `pkg/api`'s Gateway CRD table. Moving them behind the pack is a separate refactor, outside Phase 8.
+
+## D-129 — Parent joins are declared; DirectResponse gains status findings only (2026-11-22, Phase 8)
+**Status:** accepted (user, 2026-11-23: "Approved"); from (Phase 8 design §5.3, §6.6), from Codex design review #4 and #9.
+
+**Decision:**
+1. "Targeting a parent" joins on the subject's own `spec.parentRefs`, never on status, computed attachment (D-020) or an up-chain walk. A sectioned parentRef relates the Gateway's unsectioned policies and that section's; an unsectioned or port-only one relates only unsectioned policies. A ListenerSet parent adds its Gateway's unsectioned policies (the only two-hop join). Every object on the path must be readable.
+2. DirectResponse stays list-only (no ownership, freshness or route attribution change). Its ancestors feed only the policy ancestor findings. Amends D-058 item 6.
+
+**Consequences:** A route whose parentRef names a whole Gateway shows no listener-level policies; the Gateway page does. Finding changes for DirectResponse update `docs/findings.md`, snellius.dev (P-006) and snellius-demo (P-007).
+
+## D-130 — `policy.Read` takes the ancestor guards as a value (2026-11-23, Phase 8)
+**Status:** accepted (user, 2026-11-23: "Yes"; sub-phase 8.1); from (Phase 8 design §5.1, §6.4).
+
+**Decision:** `policy.Read(u, interp, g Guard)`. `Guard` carries the install's controller names and two functions, ownership and freshness, which callers build from the guards the policy findings use (`own.BlockFreshness`, `policyAncestors`). `Read` stays pure: no lookups. `pkg/policy` does not import `pkg/health`. A nil function makes no ancestor current. A non-current ancestor carries why: `other-controller`, `not-owned` or `not-fresh` (stale or pending).
+
+**Consequences:** kgwctl (E7) builds a `Guard` too; a zero `Guard` gives verbatim ancestors with none current. The design's "stale" mark reads "not fresh" in the model; UI copy is decided in 8.2.
+
+## D-131 — 8.1 review fixes: per-finding basis for policy ancestors; stricter target checks (2026-11-23, Phase 8)
+**Status:** accepted (user, 2026-11-23: "Yes accepted"; sub-phase 8.1, from `phases/phase-8/reviews/8.1-codex.md` #1, #2, #3, #6, #8); amends D-108 item 4, D-130 and design §7 item 4.
+
+**Decision:**
+1. A policy ancestor finding (KGWUI-002) rests only on the ancestor it names. A hidden second ancestor no longer withholds the finding about a readable one. This predates Phase 8 for TrafficPolicy. Amends D-108 item 4 for policy ancestors only; route parent findings keep the shared basis, since parent Gateways are install membership (D-107).
+2. A target check of "not found" needs `list` on the kind in the namespace and named `get` on the target, so a narrowing authoriser (D-119) gives `unknown` whether or not the target exists. Stricter than design §7 item 4.
+3. An ancestor the viewer cannot `get` is never current for that viewer and carries the reason `unreadable` instead of an ownership reason. Extends D-130's reasons.
+4. Snellius's judgments about an ancestor or target (current and its reason, summary marker, staleness, linked health) carry source `inferred`, apart from the controller's verbatim conditions (D-122).
+5. Collection is checked in the namespace asked, not against the kind-wide aggregate. This also changes two existing callers: KGWUI-013's Service explanations, and KGWUI-003 "parent does not exist", which no longer fires for a parent in a namespace a scoped cache does not read.
+6. Until 8.2 adds policy pages, policy links in API responses use the YAML path; detail targets carry a full ref in the policy's namespace. "Has problems" counts a section not found, as KGWUI-016 does.
+
+**Consequences:** A restricted viewer can see more policy 002s than before (item 1) and fewer target verdicts (item 2). kgwctl builds a `Guard` and a `Lookup` with these rules (E7).
+
+## D-132 — A policy ancestor finding's ID hashes its ancestor (2026-11-23, Phase 8)
+**Status:** accepted (user, 2026-11-23: option 2, durable IDs; UID rejected after a Codex review, `phases/phase-8/reviews/8.1-ids-codex.md`); amends D-040 for policy-ancestor KGWUI-002 only.
+
+**Context:** D-040 ranked status-only owners among the owners with findings. A hidden ancestor gaining a finding then shifted a readable finding's ID (`reviews/8.1-fix-codex.md`, first P1), against D-085.
+
+**Decision:** A policy-ancestor KGWUI-002 ID hashes the install, the code, the policy (group, kind, namespace, name), the canonical ref of the ancestor whose condition was evaluated (section and port included) and the condition type. Since D-131 item 1 the finding is shown only to viewers who can read the policy and that ancestor, so every hashed value is visible to them (D-059's reasoning). Every other finding keeps D-040's ranks, including route parent KGWUI-002, whose shared basis withholds the set together. The ID uses namespace/name, not the object's UID: a finding names a diagnostic on a named resource, and it keeps its ID when the object is replaced or restored.
+
+**Consequences:** No hidden sibling moves a policy-ancestor 002 ID, and neither does reordering entries for other ancestors. Existing links to these findings change once. Findings with the same install, code, policy and key (ancestor ref, section, port and condition type) get an `#n` ordinal after the first, in status order (`duplicateKeys`, 8.1 fix round 4). So reordering duplicate entries for the same ancestor can swap which finding has which ID.
+
+## D-133 — Target and ancestor judgments need list first (2026-11-23, Phase 8)
+**Status:** accepted (user, 2026-11-23: "List before get"); amends design §7 items 3 and 4.
+
+**Decision:** A target check (found, section not found, not found) and an ancestor's currentness are judged only when the viewer may `list` the kind in that namespace, then named `get` as before. Otherwise the check is `unknown` and the ancestor `unreadable`. This keeps the policies list within the per-request check budget: a cold `/policies?limit=1` on the Large world with one policy per route takes 391 checks for a viewer who may list policies everywhere (was 1000, a 503).
+
+**Consequences:** A viewer allowed only by `resourceNames` sees unknown target checks and unreadable ancestors. kgwctl's `Lookup` (E7) asks list before get.
+
+## D-134 — Ownership of a policy's ancestors and targets is install membership (2026-11-23, Phase 8)
+**Status:** accepted (user, 2026-11-23: "Yes, membership"); clarifies D-107 for Phase 8, from `phases/phase-8/reviews/8.1-fix2-codex.md`.
+
+**Decision:** Whether a Gateway or ListenerSet belongs to the install is install context (D-107), also when it is a policy's ancestor or target and the policy stays in the install. A hidden change to that membership (a GatewayClass `controllerName`, a ListenerSet's parent Gateway) may change a readable policy's summaries, ancestor marks, target links and ancestor findings. The stricter checks built in 8.1 stay: an ancestor the viewer cannot read is `unreadable` (D-131), and a ListenerSet ancestor needs its parent Gateway readable.
+
+**Consequences:** The byte tests treat these membership changes like the other D-107 changes. No GatewayClass checks are added to policy reads. A KGWUI-002 about a ListenerSet ancestor rests on the ListenerSet and its parent Gateway, and a policy-ancestor KGWUI-002 is shown only when the viewer may both list and `get` by name every object it rests on, matching the policy page (8.2 review #6 and re-review).
+
+## D-135 — A policy ancestor's freshness is judged on Accepted alone (2026-11-23, Phase 8)
+**Status:** accepted (bug fix found in sub-phase 8.2; our call, reported to the user); corrects phase-1 design §5.2 item 2.
+
+**Context:** kgateway v2.3.11, v2.4.8 and v2.5.2 write `Accepted=False/Invalid` and `Attached=False/Pending` at the current generation for a policy they reject. `own.BlockFreshness` treated Pending on any condition as a pending block, so a rejected policy raised KGWUI-003 "Not yet processed" instead of KGWUI-002, and the policies API counted it as not current. Phase-1 design §5.2 item 2 assumed the Pending defaults exist only before translation; that holds for `Accepted`, not for `Attached`.
+
+**Decision:** A policy ancestor block is pending only when `Accepted` is missing, Pending or Unknown, and stale only when `Accepted` describes an older generation; a Pending `Attached` neither makes it pending nor counts as a problem. An `Attached` condition older than the policy's generation is ignored: no attachment evidence, no problem, no KGWUI-002 (8.2 review #5 and re-review). Gateways, listeners and routes keep `BlockFreshness` (kgateway writes Pending only on policy ancestors). The model's non-current reason splits into `stale` and `pending` (amends D-130); `not-fresh` remains only for a `Guard` without a freshness function.
+
+**Consequences:** Rejected policies raise KGWUI-002 on every supported version; accepted policies with a Pending `Attached` no longer raise KGWUI-003. `explore.StatusTrueFor` counts an Accepted policy whose `Attached` is Pending. `docs/findings.md` and snellius.dev follow in 8.3.
+
+## D-136 — Policy links open the policy detail page (2026-11-23, Phase 8)
+**Status:** accepted (user, 2026-11-24: "accept"; sub-phase 8.2); replaces D-131 item 6's interim YAML links.
+
+**Decision:** Every policy link in API v1 responses is the policy endpoint path `/api/v1/installs/{install}/policies/{group}/{kind}/{ns}/{name}` (segments path-escaped, `-` for the core group), so a shell routes it without `/meta` (8.2 review #8); `/meta` `views` lists the policy kinds. Wherever a policy link appears (list rows, subject relations, findings, diagnostics, finding details) it is present only when the viewer may `get` the policy by name; otherwise rows and relations omit it and findings carry `"none"` (8.2 review #3 and re-review). This changes existing `link` values (findings, diagnostics, finding details, the policies endpoints), not only adds fields.
+
+**Consequences:** Ten API goldens change (link values; `/meta` views). A downstream shell older than 8.2 does not know the new link value and shows policy refs without a link; the 8.3 upgrade notes say to upgrade the shell with the backend. A client that followed a policy's `yaml` link from those responses now gets a detail link; the YAML stays reachable from the detail page and the install-scoped YAML path.
+
+**Consequence (2026-11-25, 8.4):** A policy link is the policy detail path only when the policy belongs to the linking install (owned or listed) and the viewer may `get` it by name. A policy that a route references from another install gets a YAML link (phase review finding 2).
+
+## D-137 — An authorization outage may answer 503 to any viewer (2026-11-24, Phase 8)
+**Status:** accepted (user, 2026-11-24: "Record an exception"); from `phases/phase-8/reviews/8.2-fix-codex.md`; an exception to D-085 next to D-112's size-limit exception.
+
+**Context:** When a Kubernetes access check fails (the API server or a downstream authoriser returns an error, not a denial), the request answers `503 authz-unavailable`. Which checks a request runs can depend on objects the viewer cannot read, through the findings projection and the order of base and downstream authorisation (Phase 7). During such an outage, 503 instead of 200 or 404 can therefore reveal that a hidden object exists. Three review rounds each closed one path and found the next.
+
+**Decision:** An authorization outage is an availability failure, not a visibility result. A response may become 503 whenever a check fails, including a check that a hidden object triggered. With every check answering, a hidden object never changes bytes or status (D-085 holds). Cheap orderings that avoid needless checks stay: a policy the downstream authoriser denies gets no SAR, and a named check runs before any broader probe where that is cheaper.
+
+**Consequences:** No further work closes outage-only paths. A test shows that with all checks answering, hidden and downstream-denied policies change nothing on the policy list, policy detail and subject details. Reopen if a viewer can cause check failures on purpose.
+
+## D-138 — `policy.Relations` owns the list-only rule (2026-11-25, Phase 8.4, amends D-123)
+**Status:** accepted (8.4 stabilization; phase review finding 5)
+
+**Context:** D-129 keeps a list-only kind's ancestors, such as DirectResponse's, out of subject relations. `pkg/api` applied that rule before it called `policy.Relations`, so a kgwctl caller that followed the README got an `attached-on-ancestor` relation the API never returns.
+
+**Decision:** `policy.Inputs.ListOnlyKinds` carries the caller's list-only classification, and `Relations` makes no `attached-on-ancestor` relation for a policy of those kinds. Nil means no kind is list-only. The API passes its served list-only kinds and drops its own filter.
+
+**Consequences:** Every consumer gets the same relations from the same inputs. The field is additive within the minor (D-123). The README's one-shot caller example names the field.

@@ -9,7 +9,15 @@ import { useNamespaceScope } from "../shell/namespaceScopeStore";
 import { type ParamChanges, useUrlParams } from "../shell/urlParams";
 
 // region Helpers
-export type ListName = "routes" | "gateways" | "listenersets" | "findings" | "processes" | "paths" | "backends";
+export type ListName =
+  | "routes"
+  | "gateways"
+  | "listenersets"
+  | "findings"
+  | "processes"
+  | "paths"
+  | "backends"
+  | "policies";
 
 /** The params each list's server documents (design §7.2), in the order they are sent. listener is 2.3 and never sent. */
 const API_PARAMS: Record<ListName, string[]> = {
@@ -33,6 +41,8 @@ const API_PARAMS: Record<ListName, string[]> = {
   processes: ["health", "q", "skew", "restarts", "cursor"],
   paths: ["gateway", "listener", "route", "backend", "namespace", "state", "kind", "mirror", "q", "sort", "cursor"],
   backends: ["kind", "namespace", "state", "used", "gateway", "q", "sort", "cursor"],
+  // The server has no text search or sort: it lists by namespace and name, never by precedence (design §5.5).
+  policies: ["kind", "feature", "namespace", "hasProblems", "cursor"],
 };
 /** The server's default sort per list, as the URL writes it. */
 const DEFAULT_SORT: Record<ListName, string> = {
@@ -43,6 +53,7 @@ const DEFAULT_SORT: Record<ListName, string> = {
   processes: "name.asc",
   paths: "problem.asc",
   backends: "problem.asc",
+  policies: "name.asc",
 };
 /** Repeatable params; the page URL holds them comma-joined (no value of theirs can contain a comma). */
 const REPEATED = new Set([
@@ -56,6 +67,7 @@ const REPEATED = new Set([
   "severity",
   "code",
   "gateway",
+  "feature",
 ]);
 /** Params a list takes once although other lists repeat them; only the first URL value is sent. */
 const SINGLE: Partial<Record<ListName, Set<string>>> = {
@@ -83,6 +95,8 @@ export const FILTER_PARAMS = [
   "group",
   "skew",
   "restarts",
+  "feature",
+  "hasProblems",
   "q",
 ];
 
