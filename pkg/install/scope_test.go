@@ -1,6 +1,7 @@
 package install
 
 import (
+	"slices"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -211,5 +212,29 @@ func TestExperimentalOnlyNilIsNone(t *testing.T) {
 	co := ResolveWith([]Install{kgw}, func(Install) (ScopeProvider, func(Install) Settings) { return nil, nil })[0]
 	if co.Experimental(tcp) || (Resolved{Install: kgw}).Experimental(tcp) {
 		t.Fatal("without a hook no kind is experimental-only")
+	}
+}
+
+func TestExcludedNamesNamespacesOutOfScope(t *testing.T) {
+	a := ns("a", map[string]string{"team": "a"})
+	b := ns("b", map[string]string{"team": "b"})
+	c := ns("c", nil)
+	all := []*corev1.Namespace{c, b, a}
+	cases := []struct {
+		name, raw string
+		want      []string
+		known     bool
+	}{
+		{"all namespaces", "[]", nil, true},
+		{"selectors", `[{"matchLabels":{"team":"a"}}]`, []string{"b", "c"}, true},
+		{"unknown scope", `[{`, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, known := ParseSelectors(tc.raw).Excluded(all)
+			if known != tc.known || !slices.Equal(got, tc.want) {
+				t.Fatalf("want %v known=%v, got %v known=%v", tc.want, tc.known, got, known)
+			}
+		})
 	}
 }
