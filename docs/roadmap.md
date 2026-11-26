@@ -129,7 +129,7 @@ Inserted 2026-11-14 (D-084): authentication and authorisation come before any ne
 - Not in scope: remote MCP, multi-cluster, a trusted-proxy identity mode (added when a user needs it), views beyond RBAC.
 
 ### Phase 8 — Policies & Filters
-**Status:** Complete 2026-11-25 (`phases/phase-8/phase-8-complete.md`); release `v0.9.0` pending
+**Status:** Complete 2026-11-25 (`phases/phase-8/phase-8-complete.md`); merged in #65 and released as `v0.9.0` (2026-11-26)
 **Docs:** `docs/phases/phase-8/`
 
 Rescoped 2026-11-22 (D-121): declared policy visibility. Snellius never resolves policy; "effective policy" is not used.

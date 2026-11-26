@@ -1,21 +1,21 @@
 # Phase status
 
 ## Phase
-Phase: 8 — Policies & Filters
-Base: b01b677
-Docs: docs/phases/phase-8/
-Status: design approved (user, 2026-11-23); D-121 … D-129 accepted; runtime view in Phase 12. 8.1 closed 2026-11-23 (D-130 … D-134). 8.2 closed 2026-11-25 (D-135 … D-137; phases/phase-8/phase-8.2-complete.md). 8.3 closed 2026-11-25 (docs; phases/phase-8/phase-8.3-complete.md). Phase review done 2026-11-25 (phases/phase-8/reviews/phase-codex.md): 2 P1 and 5 P2 accepted and fixed in stabilization sub-phase 8.4, closed 2026-11-25 (phases/phase-8/phase-8.4-complete.md). Phase closed 2026-11-25 (phases/phase-8/phase-8-complete.md). Release steps await the user: merge #65, tag `v0.9.0`, then file the four 8.3 notices and update the program file (approved 2026-11-25). Then reset this file to Phase 9. Phase start: program read, scope endpoint filed as kgateway#15070, kgateway#14815 still open.
-Author: claude (Opus 5.5)
+Phase: 9 — Search & Route Tester
+Base: n/a (set when the phase starts)
+Docs: docs/phases/phase-9/
+Status: not started. The user decides when it starts. At the start: read the program file, check kgateway#15070 (M-4) and kgateway#14815, audit the remaining D-040 rank-based IDs against P-011 rule 2, then design.
+Author: n/a
 
 ## Sub-phase
 none
 
 ## Program
-Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md (read 2026-11-22 at `bd1f17d`; merged on main at `090fd7e`, which adds M-4 and U12: P-008, P-009, M-1, M-2, E7, E13, E14).
-Waiting on: nothing for 8.1 and 8.2. Phase 12 needs xdsview `v0.5.0` (E13), tagged 2026-11-22; no impact before Phase 12. Program file latest: kgateway-tooling `56c8868` (U12 → kgateway#15070).
-Provides: E7 to kgwctl Phase 6, the declared-policy model `pkg/policy` (D-123). At phase close: update E7, M-1 (rule-1 entry, rule-2 status, D-128) and M-2 in the program file; notify kgwctl.
-Consumers: E2, E3, E8 delivered through `v0.8.0` (kgwctl#3 … #8).
-Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; unchanged). The xdsview session will ask which of KGWUI-001, 006, 008, 025, 026 and the withheld-config signal answer the convergence questions (P-009 q6): answer it directly.
+Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md (last read 2026-11-26 at `dbf7140`).
+Waiting on: nothing for Phase 9. Phase 12 targets xdsview `v0.7.0` (E15, released 2026-11-26, #71).
+Provides: E7 (`pkg/policy`) and E2 (`install.Scope.Excluded`) delivered in `v0.9.0` (kgwctl#16). Program-file update for E7, M-1 and open questions 1 and 3 is drafted (`.agents-tmp/phase8.3/notices.md` §4 in the Phase 8 worktree); it is committed after the program session commits its own E15 edits to the same file.
+Consumers: E2, E3, E8 delivered through `v0.8.0` (kgwctl#3 … #8); E7 and E2's `Excluded` in `v0.9.0`.
+Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12), #71 (xdsview `v0.7.0`, E15, for Phase 12).
 
 ## Carry-over (deferred to later phases)
 - (P4) Phase 8 and 9 (phase review PH6): extensions receive the raw publication beside per-object visibility helpers; policy relations (Phase 8, no inherited policy, D-121) and winning-route predictions must use viewer-scoped computations so a hidden input cannot change a readable result (D-085) — src: phases/phase-7/reviews/phase-codex.md
@@ -29,7 +29,6 @@ Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; uncha
 - (P3) kgateway#14998 (upstream): once the controller reports a selector that matches nothing, the 3.5 S7 computed rule can go — src: phases/phase-3/phase-3.5-complete.md
 - (P3) R59: proxy Pod ownership by UID needs a ReplicaSet watch; the name check (R50) stays until then — src: phases/phase-3/phase-3.2-complete.md
 - (P3) D-058 item 1: 023 proxy membership evidence needs a port-aware reverse mapping (xdsview `origin`, Phase 12) — src: phases/phase-3/phase-3.4-complete.md
-- (P3) D-058 item 6: DirectResponse status is not judged — Phase 8.1 (design §6.5) — src: phases/phase-3/phase-3.4-complete.md
 - (P3) Dense memory: peak live memory at the default edge cap is logged, not gated (D-039). Retained heap is +39.3 of 48 MiB (D-057); Phase 5 must keep the shared cache in the core — src: phases/phase-3/reviews/3.0-gate-codex.md#2
 - (P3) A live `warm_withheld` capture for KGWUI-024's error; on kind the gauge never outlasts a scrape — src: phases/phase-3/phase-3.4-complete.md
 - (P3) README Install: say that installing the chart needs rights to create a ClusterRole and ClusterRoleBinding (usually cluster-admin), since Kubernetes only lets you bind permissions you hold. Next release (2026-11-09)
@@ -41,7 +40,6 @@ Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; uncha
 - Smaller Phase 2 and Phase 3 items (parked tasks, test gaps, layout at 720 px, P4 polish) — src: phases/phase-2/phase-2-complete.md and phases/phase-3/phase-3-complete.md, Deferred / open
 
 ## Carry-over added 2026-11-25 (8.2)
-- (P1) moved to the 8.4 queue (Q8.4-1)
 - (P2, phase review) Base authorization runs before the downstream authoriser outside the policy paths; prefetch of downstream-denied refs pays needless checks (cost and order; D-137 covers the outage leak) — src: phases/phase-8/phase-8.2-complete.md
 - (P3) Measure the `/findings` cost of policy links and strict bases in a bench world with policy findings — src: phases/phase-8/phase-8.2-complete.md
 - (P4) A downstream ListenerSet kind is covered in `pkg/policy` only, not in the API rule world — src: phases/phase-8/phase-8.2-complete.md
@@ -51,17 +49,17 @@ Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; uncha
 ## Carry-over added 2026-11-23 (8.1)
 - (P4) Route parent KGWUI-002s keep a shared basis and D-040 ranks (D-131 item 1); revisit at the phase review — src: phases/phase-8/phase-8.1-complete.md
 - (P4) Exact duplicate status entries: ID follows status order among the duplicates (D-132) — src: phases/phase-8/phase-8.1-complete.md
-- At phase close, the E7 notice to kgwctl names D-130, D-131 and D-133 (Guard, collection per namespace, list before get)
 
 ## Carry-over added 2026-11-22
 - (P3) M-1 rule 2: compare the delegated child's matcher with kgateway's cited translator goldens per tag (D-128) — program order "next"
 - (P4) Move engine's rule-set fallbacks and the Gateway CRD table behind the pack (D-128, program open question 3)
 
 ## Notes
+- 2026-11-26: `v0.9.0` released from main `c60a707` (Phase 8 in #65, `Scope.Excluded` in #67). Notices filed: snellius.dev#5 (P-006, the release is not done until the site is live), snellius-demo#3 (P-007), kgwctl#16 (E7, E2). Next: snellius#68, then Phase 9 when the user says so.
+- 2026-11-26: xdsview sent a draft of route-visibility strategies for D-085 (`require-dump-access`, `require-route-metadata`, `require-all-route-candidates`, `trust-current-route-inventory`). Snellius owns the decision. Copy it into `docs/phases/phase-12/` at the Phase 12 design, without its local paths, and answer its §8 there. Leaning: default `require-route-metadata` in secure mode; don't offer `trust-current-route-inventory` (it breaks D-085 rule 2).
 - 2026-11-25: xdsview Phase 9 (E15, snellius#70): Snellius review posted (1 P1, 2 P2, 3 P3); xdsview accepted all six. For Phase 12: `Dependencies(block).Objects` is `[]Dependent{Object, Kind}`; new gaps `policyRecord`, dropped Compose claims and `gatewaySource` (a consumer may close it with its captured Gateway; ListenerSet listeners show the gap); ambiguous candidates complete; `kgateway.Names()` names its checked minors; an empty `Gaps` means every expected input is attributed. Lands in xdsview `v0.7.0`. Update 2026-11-25: `Dependencies` is fail-closed. On the kgateway OSS corpus these always give gaps: routes whose names read several ways without `route_source` metadata, listeners without Gateway metadata (close with the captured Gateway), static bootstrap listeners, non-HCM network filters, mirror clusters. Expect Phase 12 to withhold more than it shows until kgateway emits route source metadata. Gap gains `Slot`, `Level`, `Cluster` (xdsview design §5, branch `duncandoyle/phase9`). Confirmed at xdsview `a348b52` (2026-11-26, snellius#70; one P2: direct-response route action needs an input). Phase 12 rules from that review: add the captured Gateway to every block (bootstrap inputs add no object); closing `gatewaySource` also requires every ListenerSet on that Gateway; never render raw `Metadata`, index warnings or any part of a withheld block; never pass hidden HTTPRoutes to `Query.Known`; review result changes at each xdsview bump. Phase 8 design §9 still names `origin.Policies` and `v0.5.0`: update at the Phase 12 design.
 - 2026-11-25: snellius#68 (from xdsview, E14): make "Config accepted" also require no KGWUI-025 or 026, or reword it; optional proxy-only version differences. User ruling 2026-11-25: keep the "Config accepted" label, show it only when 001, 024, 025 and 026 are all absent, no tooltip; document in the docs and site that Snellius does not compare config versions, so a connected proxy on old config still reads as accepted. Version differences wait for Phase 12. After the `v0.9.0` tag. Program read at kgateway-tooling `70fda55`.
 - 2026-11-25: KGWUI-026 e2e flake fixed in its own PR #69 (test bug: proxies kept the disconnect onset from earlier controller restarts).
-- 2026-11-22: `Scope.Excluded` (#66, PR #67) is for kgwctl Phase 4 task 4.2.2, which it does not block. kgwctl expects it in `v0.9.0` (owner's decision, 2026-11-23); send kgwctl the tag (`cross-repo` issue naming E2), or tell kgwctl if `v0.9.0` ships without it.
 - 2026-11-23: Phase 12 targets the xdsview Phase 9 tag (P-010, E15). xdsview will ask for a review of its Phase 9 design (`cross-repo` issue, program open question 7): check it against roadmap Phase 12.
 - 2026-11-14: `v0.7.1` released (walkthrough fixes, #42 and #43, D-079 … D-083; phases/phase-6/phase-6-complete.md, Patch release v0.7.1). API v1 changes are additive. The snellius.dev sync now covers `v0.7.0` and `v0.7.1`.
 - 2026-11-12: Phase 6 closed (phases/phase-6/phase-6-complete.md), merged in #36 and released as `v0.7.0`. Its snellius.dev gate is still open: sync the site for `v0.7.0`. Open items from the record's Deferred / open: the KGWUI-023 title, the map's reserved rule column, export scope, the D-078 review. The user decides when Phase 7 starts; read the program file and set Base then.
@@ -73,15 +71,8 @@ Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12; uncha
 - The first release tag freezes API v1, install IDs and SPA URLs; make the ghcr packages public first (phase-1-complete.md).
 - The repo is public: per the public-repo hygiene rules, vendor and commercial edition names must not appear in code, file names, commit messages or PR text. Refer to them as "downstream distributions".
 
-## 8.4 queue (stabilization, from reviews/phase-codex.md; started 2026-11-25)
-- [x] Q8.4-1 (P1 correctness) 2.5 rules: an `Attached` older than the policy raises KGWUI-016 — 3e2b00e: `statusTargetFinding` read Attached without its generation; now skips a stale one
-- [x] Q8.4-2 (P1 correctness) a policy referenced by a route in another install gets a policy link whose detail returns 404 — 668ea2c, 21e5bda, 2b80fae: links and detail used different membership; policy link only for members with named get, else YAML with named get
-- [x] Q8.4-3 (P2 architecture) `/policies` ignores the namespace scope (D-100 item 8) — 1baf8c8: /policies takes the scope, intersected with its namespace filter
-- [x] Q8.4-4 (P2 architecture) `PartiallyValid` and `Overridden` read in core for every policy kind, not via the interpreter (design §8) — 3e2b00e, b5867bf, 827a61d, 4e9e8c5, 479bf06, 379ecad, 01f6ce2: readings and wording from the pack; kgateway checks carry their interpreter; one resolution point; the reading decides Has problems
-- [x] Q8.4-5 (P2 architecture) list-only ancestor rule lives in the API, not in `pkg/policy.Relations` (D-123, D-129) — 6dfb034: `policy.Inputs.ListOnlyKinds` (D-138)
-- [x] Q8.4-6 (P2 correctness) listener-specific policy view (design §§2, 6.5): build or defer (user) — 77fb09c, df23ed8: option B, policies in each expanded listener row
-- [x] Q8.4-7 (P2 correctness) upgrade and site notes overstate finding rules — 5161e2d, a6b79fd
-- Phase 10 design: an empty declared-policy group is not evidence that a route lacks auth — src: #carry-overs
+## Carry-over added 2026-11-25 (phase review)
+- Phase 10 design: an empty declared-policy group is not evidence that a route lacks auth — src: phases/phase-8/phase-8-complete.md
 
 ## Program rules added 2026-11-25 (kgateway-tooling `dbf7140`)
 - P-011 (identity): at the Phase 9 start, audit the remaining D-040 rank-based IDs against P-011 rule 2 (D-102 and D-132 comply)
