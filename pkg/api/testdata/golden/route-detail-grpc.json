@@ -299,6 +299,15 @@
       },
       "state": "error"
     },
+    "policyRelations": {
+      "selectors": {
+        "kinds": [],
+        "namespace": "shop",
+        "source": "declared"
+      },
+      "targeting": [],
+      "targetingParent": []
+    },
     "ref": {
       "group": "gateway.networking.k8s.io",
       "kind": "GRPCRoute",

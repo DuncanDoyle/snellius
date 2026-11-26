@@ -145,6 +145,15 @@
     },
     "install": "kgw.kgateway",
     "kind": "Backend · Static",
+    "policyRelations": {
+      "attachedHere": [],
+      "selectors": {
+        "kinds": [],
+        "namespace": "shop",
+        "source": "declared"
+      },
+      "targeting": []
+    },
     "portChain": [],
     "problem": {
       "signals": [

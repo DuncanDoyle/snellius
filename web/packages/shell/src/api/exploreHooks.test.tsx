@@ -1,4 +1,5 @@
 import { act, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { renderWithTheme, stubApi } from "../test/render";
 import {
   useGatewayDetail,
@@ -74,6 +75,38 @@ it("never shows the previous install's rows on a switch", async () => {
   expect(screen.getByText("loading")).toBeInTheDocument();
   release?.();
   expect(await screen.findByText("rows new")).toBeInTheDocument();
+});
+
+// The query switches in place, so the SWR cache from renderWithTheme stays.
+function LaggyProbe() {
+  const [query, setQuery] = useState("");
+  const { data, isLaggy } = useRoutes("a.one", new URLSearchParams(query));
+  return (
+    <button type="button" onClick={() => setQuery("namespace=shop")}>
+      {data ? `rows ${data.items.map((r) => r.ref.name).join(",")}${isLaggy ? " busy" : ""}` : "loading"}
+    </button>
+  );
+}
+
+it("a filter whose rows equal the previous query's stops being busy once it answers", async () => {
+  // The filtered response deep-equals the shown one, so SWR has no data change to re-render on.
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url.includes("namespace=shop")) await gate;
+      return new Response(JSON.stringify(list("a.one", "cart")), { status: 200 });
+    }),
+  );
+  renderWithTheme(<LaggyProbe />);
+  const shown = await screen.findByText("rows cart");
+  act(() => shown.click());
+  expect(await screen.findByText("rows cart busy")).toBeInTheDocument();
+  release?.();
+  expect(await screen.findByText("rows cart")).toBeInTheDocument();
 });
 
 it("never renders a response for another install", async () => {

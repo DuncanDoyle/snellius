@@ -4,6 +4,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import { useFeatureCheck } from "../api/hooks";
 import { backendsCopy } from "../copy/backends";
 import { navCopy } from "../copy/explorer";
+import { policiesCopy } from "../copy/policies";
 import { trafficCopy } from "../copy/traffic";
 import { HEADER_HOVER_PCT, HEADER_PRESS_PCT, headerTint } from "./headerTint";
 import { installPath } from "./paths";
@@ -69,6 +70,7 @@ export const installNavEntries: InstallNavEntry[] = [
   { label: navCopy.routes, to: "routes" },
   { label: trafficCopy.title, to: "traffic" },
   { label: backendsCopy.title, to: "backends" },
+  { label: policiesCopy.title, to: "policies" },
   { label: navCopy.listenerSets, to: "listenersets" },
   { label: navCopy.findings, to: "findings" },
   { label: navCopy.processes, to: "processes", feature: "processes" },

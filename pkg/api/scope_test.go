@@ -107,7 +107,7 @@ func TestScopeParamValidation(t *testing.T) {
 		"too long":   "namespaces=" + strings.Repeat("a", 64),
 		"101 names":  "namespaces=" + strings.Join(many, ","),
 	}
-	paths := []string{"/routes", "/gateways", "/listenersets", "/paths", "/backends", "/findings", "/findings?view=groups", "/processes"}
+	paths := []string{"/routes", "/gateways", "/listenersets", "/paths", "/backends", "/findings", "/findings?view=groups", "/processes", "/policies"}
 	for _, p := range paths {
 		sep := "?"
 		if strings.Contains(p, "?") {
@@ -123,7 +123,7 @@ func TestScopeParamValidation(t *testing.T) {
 		}
 	}
 	m := decode[api.MetaResponse](t, srv, fullUser, "/api/v1/meta")
-	for _, l := range []string{"routes", "gateways", "listenersets", "paths", "backends", "findings", "processes"} {
+	for _, l := range []string{"routes", "gateways", "listenersets", "paths", "backends", "findings", "processes", "policies"} {
 		if !slices.Contains(m.Filters[l], "namespaces") {
 			t.Errorf("/meta filters do not list namespaces for %s: %v", l, m.Filters[l])
 		}

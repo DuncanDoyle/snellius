@@ -1,11 +1,11 @@
 # Snellius — Roadmap
 
-**Last updated:** 2026-11-14
+**Last updated:** 2026-11-22
 
 **Program:** [kgateway-tooling program.md](https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md)
 
 ## Goal
-A read-only web UI for kgateway (Envoy data plane) that lets platform operators see at a glance whether their gateways are healthy, understand where traffic goes and which policies apply, and debug misrouted traffic in large deployments (100s of hostnames, 1000s of routes). It layers the higher-level semantics of Gateway API and kgateway policies on top of the cluster state, rather than being yet another Kubernetes resource viewer. The project is built so that downstream distributions can extend it without forking or copying code.
+A read-only web UI for kgateway (Envoy data plane) that lets platform operators see at a glance whether their gateways are healthy, understand where traffic goes and which policies are declared for an object and what the controller reports about them, and debug misrouted traffic in large deployments (100s of hostnames, 1000s of routes). It layers the higher-level semantics of Gateway API and kgateway policies on top of the cluster state, rather than being yet another Kubernetes resource viewer. The project is built so that downstream distributions can extend it without forking or copying code.
 
 ## Product principles
 These apply to every phase. A phase design that breaks one needs a `decisions.md` entry.
@@ -15,9 +15,10 @@ These apply to every phase. A phase design that breaks one needs a `decisions.md
 3. **Health is the home page.** It starts thin in Phase 1, and every later phase feeds new signals into it.
 4. **Speak Gateway API; never re-implement translation.**
    - Gateway API resources and their status are the primary source, presented in the user's language.
-   - A route that is Accepted and Programmed is treated as active as specified; the UI does not verify the data plane against the spec. It does show every signal that contradicts that status — xDS rejects, dropped or replaced rules, proxy readiness, and (Phase 12) differences between the config the controller sent and the config Envoy accepted — and never reports green while one of them is active (D-006).
+   - A route that is Accepted and Programmed is treated as active as specified; the UI does not verify the data plane against the spec. It does show every signal that contradicts that status — xDS rejects, dropped or replaced rules, proxy readiness — and never reports green while one of them is active (D-006; the Phase 12 snapshot comparison is withdrawn, D-124).
    - Envoy/xDS config is evidence, not vocabulary. It is used only where Gateway API objects cannot answer the question, such as filter order or rejected config, and is always mapped back to the Gateway API objects that produced it.
    - The UI must never re-implement kgateway translation logic.
+   - Policy resolution (attachment, inheritance, precedence, merge, override) comes only from the controller. Every policy value names its source: declared, controller-reported, inferred or unknown (D-121, D-122; program P-008).
 5. **Built for 1000s of routes.** From Phase 2 on, indexing, filtering and pagination happen on the server. A whole-cluster graph is never a landing page.
 6. **Works without an external metrics backend**, and gets richer when one is present. The first integration targets PromQL-compatible backends (Prometheus, Thanos, Mimir, VictoriaMetrics, …), behind an interface that downstreams can implement for others (D-007).
 7. **Extensible.** Resource kinds, health checks, analyzers and pages register through a registry. A downstream distribution adds to it without touching core code (D-003).
@@ -128,18 +129,15 @@ Inserted 2026-11-14 (D-084): authentication and authorisation come before any ne
 - Not in scope: remote MCP, multi-cluster, a trusted-proxy identity mode (added when a user needs it), views beyond RBAC.
 
 ### Phase 8 — Policies & Filters
-**Status:** Not started
+**Status:** Complete 2026-11-25 (`phases/phase-8/phase-8-complete.md`); release `v0.9.0` pending
 **Docs:** `docs/phases/phase-8/`
 
-For each feature (CORS, JWT, ext-auth, rate limiting, transformations, …):
-- where it is attached;
-- the direct, inherited and effective policy for a route, with provenance;
-- merge and override conflicts;
-- drill-down into the actual feature configuration.
-
-**Design question:** kgateway's merge semantics are translation logic (principle 4). The effective view must be built from policy ancestor status (`Merged`, `Overridden`, …), not from our own merge implementation. If that status is insufficient, the gap is raised upstream.
-
-Policy problems inherited from a parent join the route's traffic-path signal, which Phase 7 introduces (D-087). Phase 11 adds observed traffic (errors, 5xx) to the same signal.
+Rescoped 2026-11-22 (D-121): declared policy visibility. Snellius never resolves policy; "effective policy" is not used.
+- A Policies list and detail: targets as written, controller status per ancestor in its own words, missing targets, configuration per feature (CORS, JWT, ext-auth, rate limiting, transformations, …).
+- On Gateway, listener, route and backend pages: policies that target the object, and policies that target its parents, each labelled with its source (D-122).
+- Precedence annotations shown, never evaluated (D-126). Label selectors shown, never resolved (D-125).
+- `pkg/policy`, the declared-policy model kgwctl imports (E7, D-123).
+- Not in scope: which policies apply to a route, which won, merge results. The controller does not report them per route; the asks are upstream (design §10). The runtime view moves to Phase 12 (D-124). Route signals are unchanged (D-127).
 
 ### Phase 9 — Search & Route Tester
 **Status:** Not started
@@ -187,8 +185,10 @@ This is an upgrade decision for the operator (D-088), covering kgateway, its Env
 **Docs:** `docs/phases/phase-12/`
 
 - The actual Envoy HTTP filter chain and filter order per route, mapped back to the Gateway API and policy resources that produced it.
-- Intended configuration (the controller's xDS snapshot) compared with the configuration Envoy accepted.
-- Builds on the `pkg/envoy` library of [xdsview](https://github.com/DuncanDoyle/xdsview) (xdsview Phase 4, v0.1.0). xdsview owns the mapping from Envoy names to Gateway API refs, and `computed.EnvoyNamer` delegates to it (program P-001, edges E4/E5).
+- Controller-reported policy contributions (scoped `merge.*` records for listener, RouteConfiguration, virtual host and route), per level and never as the governing policy; the access and redaction decisions (D-124). Whole-block visibility (Phase 8 design §9) uses each block's enumerable evidence scope.
+- An optional xDS cross-check of M-1's matcher that returns ambiguous on multi-context joins.
+- Builds on the xdsview Phase 9 tag (program P-010, edge E15), which carries E4, E5 and E13. xdsview owns the mapping from Envoy names to Gateway API refs: `computed.EnvoyNamer` calls its `NameMapper`, which returns claims with certainty, kind and ambiguity (P-001).
+- Before xdsview approves its Phase 9 design, Snellius reviews it against these needs (program open question 7).
 - Easier standalone, because the admin server (9095) and Envoy admin are local (D-016).
 
 ### Phase 13 — App-Team Views

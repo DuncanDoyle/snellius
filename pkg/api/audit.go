@@ -81,6 +81,7 @@ var auditRoutes = map[string]AuditKind{
 	"GET /api/v1/installs/{id}/namespaces":                                   AuditList,
 	"GET /api/v1/installs/{id}/paths":                                        AuditList,
 	"GET /api/v1/installs/{id}/backends":                                     AuditList,
+	"GET /api/v1/installs/{id}/policies":                                     AuditList,
 	"GET /api/v1/installs/{id}/findings/{findingId}":                         AuditRead,
 	"GET /api/v1/installs/{id}/gateways/{ns}/{name}":                         AuditRead,
 	"GET /api/v1/installs/{id}/listenersets/{group}/{kind}/{ns}/{name}":      AuditRead,
@@ -88,6 +89,7 @@ var auditRoutes = map[string]AuditKind{
 	"GET /api/v1/installs/{id}/routes/{group}/{kind}/{ns}/{name}/delegation": AuditRead,
 	"GET /api/v1/installs/{id}/resources/{group}/{kind}/{rns}/{rname}":       AuditRead,
 	"GET /api/v1/installs/{id}/backends/{group}/{kind}/{ns}/{name}":          AuditRead,
+	"GET /api/v1/installs/{id}/policies/{group}/{kind}/{ns}/{name}":          AuditRead,
 }
 
 // auditKind classifies r's route. An extension GET is a list: its shape is unknown.
@@ -142,7 +144,8 @@ var (
 	checkListener filterCheck = func(v string) (string, bool) {
 		return v, v == explore.ListenerUnknown || len(validation.IsDNS1123Subdomain(v)) == 0
 	}
-	checkSort filterCheck = func(v string) (string, bool) { return v, sortFormat.MatchString(v) }
+	checkSort    filterCheck = func(v string) (string, bool) { return v, sortFormat.MatchString(v) }
+	checkFeature filterCheck = func(v string) (string, bool) { return v, featureFormat.MatchString(v) }
 )
 
 // commonFilters are the filters every explore list takes.
@@ -167,6 +170,7 @@ var auditFilters = map[string]map[string]filterCheck{
 	"GET /api/v1/installs/{id}/paths": {"namespace": checkNamespace, scopeParam: checkScope, "listener": checkListener, "backend": checkRef,
 		"state": checkHealth, "kind": checkKind, "sort": checkSort},
 	"GET /api/v1/installs/{id}/backends": {"namespace": checkNamespace, scopeParam: checkScope, "state": checkHealth, "kind": checkKind, "sort": checkSort},
+	"GET /api/v1/installs/{id}/policies": {"namespace": checkNamespace, scopeParam: checkScope, "kind": checkGroupKind, "feature": checkFeature, "hasProblems": oneOf("true", "false")},
 }
 
 // maxFilterValue bounds one filter's joined values in a record.

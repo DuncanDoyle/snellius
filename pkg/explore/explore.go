@@ -511,12 +511,13 @@ func requiredNotOK(rep health.Report) bool {
 }
 
 // DetailKinds returns the served group/kinds with a detail view: Gateway,
-// every ListenerSet kind, HTTPRoute, GRPCRoute, TCPRoute and TLSRoute.
+// every ListenerSet kind, HTTPRoute, GRPCRoute, TCPRoute, TLSRoute and every
+// policy kind, list-only ones included (Phase 8 design §6.3).
 func DetailKinds(served []kinds.Served) []objects.GroupKind {
 	var out []objects.GroupKind
 	for _, k := range served {
 		gw := k.Category == kinds.CategoryGateway && k.Group == objects.GatewayAPIGroup && k.Kind == "Gateway"
-		if gw || k.Category == kinds.CategoryListenerSet || IsDetailRoute(k.Group, k.Kind) {
+		if gw || k.Category == kinds.CategoryListenerSet || k.Category == kinds.CategoryPolicy || IsDetailRoute(k.Group, k.Kind) {
 			out = append(out, objects.GroupKind{Group: k.Group, Kind: k.Kind})
 		}
 	}

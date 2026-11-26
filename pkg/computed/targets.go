@@ -64,6 +64,10 @@ type TargetResult struct {
 
 // PolicyTargeter is an optional interface of a Rules: it resolves a policy's
 // targets for the computed KGWUI-016. A rule set without it raises no computed 016.
+// PolicyTargets keeps no state between calls: each answer rests on its own input
+// alone, since a caller may pass objects one viewer must not see into one call (E7). An
+// unknown outcome must not depend on whether a target exists or what it holds: callers
+// skip the access checks for it, so such a dependence would show a hidden object.
 type PolicyTargeter interface {
 	PolicyTargets(in TargetInput) []TargetResult
 }

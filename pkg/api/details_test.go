@@ -17,6 +17,7 @@ import (
 
 	"github.com/DuncanDoyle/snellius/internal/testutil"
 	"github.com/DuncanDoyle/snellius/pkg/health"
+	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 )
 
@@ -629,7 +630,9 @@ func TestOtherKindDetailIs404(t *testing.T) {
 func TestMetaViews(t *testing.T) {
 	_, srv, _ := startWith(t, setup{}, world()...)
 	m := get[MetaResponse](t, srv, "/api/v1/meta", 200)
-	want := []objects.GroupKind{{Group: objects.GatewayAPIGroup, Kind: "GRPCRoute"}, {Group: objects.GatewayAPIGroup, Kind: "Gateway"},
+	want := []objects.GroupKind{{Group: kinds.KgatewayGroup, Kind: "BackendConfigPolicy"}, {Group: kinds.KgatewayGroup, Kind: "DirectResponse"},
+		{Group: kinds.KgatewayGroup, Kind: "HTTPListenerPolicy"}, {Group: kinds.KgatewayGroup, Kind: "ListenerPolicy"}, {Group: kinds.KgatewayGroup, Kind: "TrafficPolicy"},
+		{Group: objects.GatewayAPIGroup, Kind: "BackendTLSPolicy"}, {Group: objects.GatewayAPIGroup, Kind: "GRPCRoute"}, {Group: objects.GatewayAPIGroup, Kind: "Gateway"},
 		{Group: objects.GatewayAPIGroup, Kind: "HTTPRoute"}, {Group: objects.GatewayAPIGroup, Kind: "ListenerSet"},
 		{Group: objects.GatewayAPIGroup, Kind: "TCPRoute"}, {Group: objects.GatewayAPIGroup, Kind: "TLSRoute"}, {Group: "gateway.networking.x-k8s.io", Kind: "XListenerSet"}}
 	got := slices.Clone(m.Views)
@@ -880,8 +883,8 @@ func TestRouteKindsLinkToDetail(t *testing.T) {
 }
 
 // HTTPRoute detail keeps every field as it was: the route gains only its two
-// signals, rules and backendRefs only the trace keys, and no body sets
-// effectiveFilters or grpcMethod.
+// signals and its policy relations, rules and backendRefs only the trace keys,
+// and no body sets effectiveFilters or grpcMethod.
 func TestRouteDetailTraceKeysOnly(t *testing.T) {
 	_, srv, _ := startWith(t, setup{}, delegationWorld()...)
 	var body map[string]any
@@ -890,7 +893,7 @@ func TestRouteDetailTraceKeysOnly(t *testing.T) {
 	}
 	top := []string{"install", "ref", "generation", "health", "reason", "ruleSet", "ruleSetLabel", "hostnames", "annotations", "parentRefs", "parents",
 		"attachments", "serves", "rules", "effective", "effectiveTruncated", "ancestors", "ancestorsTruncated", "childCount", "declaredCount", "collectedAt",
-		"config", "path"}
+		"config", "path", "policyRelations"}
 	ref := []string{"ref", "port", "weight", "weightDefaulted", "filters", "delegation", "backend", "share", "shareState", "problem", "endpoints"}
 	only := func(what string, m map[string]any, keys []string) {
 		for k := range m {

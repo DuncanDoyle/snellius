@@ -25,6 +25,7 @@ import findingsRestrictedGolden from "../../../../../pkg/api/testdata/golden/fin
 import gatewayDetailGolden from "../../../../../pkg/api/testdata/golden/gateway-detail.json";
 import gatewayDetailDataPlaneGolden from "../../../../../pkg/api/testdata/golden/gateway-detail-data-plane.json";
 import gatewayDetailDataPlaneRestrictedGolden from "../../../../../pkg/api/testdata/golden/gateway-detail-data-plane-restricted.json";
+import gatewayDetailPoliciesGolden from "../../../../../pkg/api/testdata/golden/gateway-detail-policies.json";
 import gatewayDetailProxiesGolden from "../../../../../pkg/api/testdata/golden/gateway-detail-proxies.json";
 import gatewayDetailProxiesRestrictedGolden from "../../../../../pkg/api/testdata/golden/gateway-detail-proxies-restricted.json";
 import gatewayDetailRestrictedGolden from "../../../../../pkg/api/testdata/golden/gateway-detail-restricted.json";
@@ -41,6 +42,9 @@ import notFound from "../../../../../pkg/api/testdata/golden/not-found.json";
 import overview from "../../../../../pkg/api/testdata/golden/overview.json";
 import pathsGolden from "../../../../../pkg/api/testdata/golden/paths.json";
 import pathsRestrictedGolden from "../../../../../pkg/api/testdata/golden/paths-restricted.json";
+import policiesGolden from "../../../../../pkg/api/testdata/golden/policies.json";
+import policiesFilteredGolden from "../../../../../pkg/api/testdata/golden/policies-filtered.json";
+import policyDetailGolden from "../../../../../pkg/api/testdata/golden/policy-detail.json";
 import processesGolden from "../../../../../pkg/api/testdata/golden/processes.json";
 import processesRestrictedGolden from "../../../../../pkg/api/testdata/golden/processes-restricted.json";
 import refsGolden from "../../../../../pkg/api/testdata/golden/refs.json";
@@ -53,6 +57,7 @@ import routeDetailCandidateGolden from "../../../../../pkg/api/testdata/golden/r
 import routeDetailDelegationRestrictedGolden from "../../../../../pkg/api/testdata/golden/route-detail-delegation-restricted.json";
 import routeDetailEffectiveGolden from "../../../../../pkg/api/testdata/golden/route-detail-effective.json";
 import routeDetailGrpcGolden from "../../../../../pkg/api/testdata/golden/route-detail-grpc.json";
+import routeDetailPoliciesGolden from "../../../../../pkg/api/testdata/golden/route-detail-policies.json";
 import routeDetailRestrictedGolden from "../../../../../pkg/api/testdata/golden/route-detail-restricted.json";
 import routeDetailSelectedGolden from "../../../../../pkg/api/testdata/golden/route-detail-selected.json";
 import routeDetailTcpGolden from "../../../../../pkg/api/testdata/golden/route-detail-tcp.json";
@@ -158,6 +163,22 @@ import type {
   PathStep,
   PathSummary,
   PathsResponse,
+  PoliciesResponse,
+  PolicyAccepted,
+  PolicyAncestor,
+  PolicyAnnotation,
+  PolicyAttached,
+  PolicyDetail,
+  PolicyFacets,
+  PolicyFeature,
+  PolicyProblems,
+  PolicyReading,
+  PolicyRelation,
+  PolicyRelationHop,
+  PolicyRelations,
+  PolicyRow,
+  PolicySelectorsHint,
+  PolicyTarget,
   PortChain,
   ProbeFacts,
   ProcessEvidence,
@@ -222,6 +243,8 @@ interface Shape {
   enums: Record<string, Record<string, 1>>;
   /** A tagged union: the member shape named by the value of key. */
   tagged?: { key: string; by: Record<string, Shape> };
+  /** Values a key also admits besides its enum, e.g. a template-literal type. */
+  patterns?: Record<string, RegExp>;
 }
 const shape = <T>(
   keys: Spec<T>,
@@ -255,7 +278,11 @@ const delegationRefEnums = {
 } as const;
 
 const ref = shape<Ref>({ group: "!", kind: "!", namespace: "?", name: "!" });
-const linkedRef = shape<LinkedRef>({ group: "!", kind: "!", namespace: "?", name: "!", link: "!" }, {}, link);
+// A policy link is the policy endpoint's path (D-136); the pattern admits it beside the named links.
+const linkedRef: Shape = {
+  ...shape<LinkedRef>({ group: "!", kind: "!", namespace: "?", name: "!", link: "?" }, {}, link),
+  patterns: { link: /^\/api\/v1\/installs\/[^/]+\/policies\/[^/]+\/[^/]+\/[^/]+\/[^/]+$/ },
+};
 const trailRefs = shape<TrailRefs>({ install: "!", refs: "!" }, { refs: linkedRef });
 // Typed evidence (sub-phase 3.2): one shape per kind, chosen by the kind tag.
 const termination = shape<TerminationFacts>({
@@ -758,6 +785,50 @@ const condition = shape<Condition>({
   stale: "!",
 });
 const gk = shape<GroupKind>({ group: "!", kind: "!" });
+const policySource = {
+  declared: 1,
+  "controller-reported": 1,
+  "controller-reported-contribution": 1,
+  inferred: 1,
+  unknown: 1,
+} as const;
+// Policy relations on subject details (sub-phase 8.2).
+const policyRelation = shape<PolicyRelation>(
+  {
+    policy: "!",
+    relation: "!",
+    source: "!",
+    sectionName: "?",
+    port: "?",
+    via: "?",
+    condition: "?",
+    note: "?",
+    noteSource: "?",
+  },
+  {
+    policy: linkedRef,
+    via: shape<PolicyRelationHop>({ ref: "!", sectionName: "?", port: "?" }, { ref: linkedRef }),
+    condition,
+  },
+  {
+    relation: { targets: 1, "targets-parent": 1, "attached-on-ancestor": 1 },
+    source: policySource,
+    noteSource: policySource,
+  },
+);
+const policyRelations = shape<PolicyRelations>(
+  { targeting: "!", targetingParent: "?", attachedHere: "?", selectors: "!" },
+  {
+    targeting: policyRelation,
+    targetingParent: policyRelation,
+    attachedHere: policyRelation,
+    selectors: shape<PolicySelectorsHint>(
+      { namespace: "!", kinds: "!", source: "!" },
+      { kinds: shape<PolicySelectorsHint["kinds"][number]>({ group: "!", kind: "!" }) },
+      { source: policySource },
+    ),
+  },
+);
 const parentRef = shape<ParentRef>({
   group: "!",
   kind: "!",
@@ -827,9 +898,11 @@ const listenerSetDetail = shape<ListenerSetDetail>(
     experimentalHint: "?",
     routeCounts: "!",
     parentAllowedListeners: "?",
+    policyRelations: "!",
     collectedAt: "!",
   },
   {
+    policyRelations,
     ref: linkedRef,
     reason: detailReason,
     candidate,
@@ -1038,11 +1111,13 @@ const routeDetail = shape<RouteDetail>(
     childCount: "!",
     declaredCount: "!",
     delegationNotChecked: "?",
+    policyRelations: "!",
     collectedAt: "!",
     config: "!",
     path: "!",
   },
   {
+    policyRelations,
     ref: linkedRef,
     reason: detailReason,
     config: routeConfigSignal,
@@ -1288,9 +1363,11 @@ const gatewayDetail = shape<GatewayDetail>(
     routeCounts: "!",
     dataPlane: "?",
     proxies: "?",
+    policyRelations: "!",
     collectedAt: "!",
   },
   {
+    policyRelations,
     ref: linkedRef,
     reason: detailReason,
     candidate,
@@ -1445,9 +1522,11 @@ const backendDetail = shape<BackendDetail>(
     service: "?",
     conditions: "?",
     delegationNotChecked: "?",
+    policyRelations: "!",
     collectedAt: "!",
   },
   {
+    policyRelations,
     ref: linkedRef,
     problem: pathProblem,
     status: pathSignal,
@@ -1474,6 +1553,142 @@ const backendDetail = shape<BackendDetail>(
   },
 );
 /** problems lists keys the types do not declare, required keys the wire omits and values outside a union, recursing. */
+// Policies (sub-phase 8.1 API, 8.2 pages).
+const policyCheck = shape<NonNullable<PolicyTarget["check"]>>(
+  { outcome: "!", source: "!" },
+  {},
+  { outcome: { found: 1, "not-found": 1, "section-not-found": 1, unknown: 1 }, source: policySource },
+);
+const policyTarget = shape<PolicyTarget>(
+  {
+    index: "!",
+    group: "!",
+    kind: "!",
+    name: "?",
+    sectionName: "?",
+    selector: "?",
+    matchLabels: "?",
+    source: "!",
+    check: "?",
+    ref: "?",
+    health: "?",
+    healthSource: "?",
+  },
+  { check: policyCheck, ref: linkedRef },
+  { source: policySource, health: healthState, healthSource: policySource },
+);
+const policyAccepted = shape<PolicyAccepted>({ status: "!", reason: "!", source: "!" }, {}, { source: policySource });
+const policyAttached = shape<PolicyAttached>(
+  { group: "!", kind: "!", namespace: "?", name: "!", sectionName: "?", port: "?", source: "!" },
+  {},
+  { source: policySource },
+);
+const policyFeature = shape<PolicyFeature>(
+  { key: "!", label: "?", value: "?", source: "!" },
+  {},
+  { source: policySource },
+);
+const policyProblems = shape<PolicyProblems>({ has: "!", source: "!" }, {}, { source: policySource });
+const policyRow = shape<PolicyRow>(
+  {
+    ref: "!",
+    targets: "!",
+    accepted: "?",
+    acceptedSource: "!",
+    attachedOn: "!",
+    attachedOnSource: "!",
+    features: "!",
+    problems: "!",
+  },
+  {
+    ref: linkedRef,
+    targets: policyTarget,
+    accepted: policyAccepted,
+    attachedOn: policyAttached,
+    features: policyFeature,
+    problems: policyProblems,
+  },
+  { acceptedSource: policySource, attachedOnSource: policySource },
+);
+const policiesResponse = shape<PoliciesResponse>(
+  { ...pageKeys, facets: "!" },
+  {
+    items: policyRow,
+    facets: shape<PolicyFacets>(
+      { kinds: "!", features: "!", namespaces: "!", hasProblems: "!" },
+      {
+        kinds: shape<PolicyFacets["kinds"][number]>({ group: "!", kind: "!", policies: "!" }),
+        features: shape<PolicyFacets["features"][number]>({ key: "!", policies: "!" }),
+        namespaces: shape<PolicyFacets["namespaces"][number]>({ namespace: "!", policies: "!" }),
+      },
+    ),
+  },
+);
+const policyReading = shape<PolicyReading>(
+  { type: "!", warning: "?", note: "?", source: "!" },
+  {},
+  { source: policySource },
+);
+const policyAncestor = shape<PolicyAncestor>(
+  {
+    ref: "!",
+    sectionName: "?",
+    port: "?",
+    health: "?",
+    healthSource: "?",
+    controller: "!",
+    conditions: "!",
+    staleSource: "!",
+    current: "!",
+    notCurrent: "?",
+    why: "?",
+    currentSource: "!",
+    summary: "?",
+    summarySource: "!",
+    readings: "!",
+    source: "!",
+  },
+  { ref: linkedRef, conditions: condition, readings: policyReading },
+  {
+    health: healthState,
+    healthSource: policySource,
+    staleSource: policySource,
+    currentSource: policySource,
+    summarySource: policySource,
+    source: policySource,
+  },
+);
+const policyDetail = shape<PolicyDetail>(
+  {
+    install: "!",
+    ref: "!",
+    yaml: "?",
+    generation: "!",
+    interpreted: "!",
+    targets: "!",
+    ancestors: "!",
+    accepted: "?",
+    acceptedSource: "!",
+    attachedOn: "!",
+    attachedOnSource: "!",
+    features: "!",
+    annotations: "!",
+    problems: "!",
+    collectedAt: "!",
+  },
+  {
+    ref: linkedRef,
+    targets: policyTarget,
+    ancestors: policyAncestor,
+    accepted: policyAccepted,
+    attachedOn: policyAttached,
+    features: policyFeature,
+    annotations: shape<PolicyAnnotation>({ key: "!", value: "!", source: "!" }, {}, { source: policySource }),
+    problems: policyProblems,
+  },
+  { acceptedSource: policySource, attachedOnSource: policySource },
+);
+
 function problems(s: Shape, v: unknown, path: string): string[] {
   if (Array.isArray(v)) return v.flatMap((e, i) => problems(s, e, `${path}[${i}]`));
   if (v === null || typeof v !== "object") return [`${path}: want an object, got ${JSON.stringify(v)}`];
@@ -1496,7 +1711,7 @@ function problems(s: Shape, v: unknown, path: string): string[] {
     const e = s.enums[k];
     if (e)
       for (const [i, x] of (Array.isArray(o[k]) ? o[k] : [o[k]]).entries())
-        if (typeof x !== "string" || !Object.hasOwn(e, x))
+        if (typeof x !== "string" || (!Object.hasOwn(e, x) && !s.patterns?.[k]?.test(x)))
           out.push(`${path}.${k}${Array.isArray(o[k]) ? `[${i}]` : ""}: ${JSON.stringify(x)} not in types.ts`);
   }
   return out;
@@ -1616,6 +1831,11 @@ describe("types.ts matches the golden v1 wire format", () => {
     ["backend-detail-service", backendDetailServiceGolden.body satisfies Wide<BackendDetail>, backendDetail],
     ["backend-detail-backend", backendDetailBackendGolden.body satisfies Wide<BackendDetail>, backendDetail],
     ["backend-detail-explained", backendDetailExplainedGolden.body satisfies Wide<BackendDetail>, backendDetail],
+    ["policies", policiesGolden.body satisfies Wide<PoliciesResponse>, policiesResponse],
+    ["policies-filtered", policiesFilteredGolden.body satisfies Wide<PoliciesResponse>, policiesResponse],
+    ["policy-detail", policyDetailGolden.body satisfies Wide<PolicyDetail>, policyDetail],
+    ["gateway-detail-policies", gatewayDetailPoliciesGolden.body satisfies Wide<GatewayDetail>, gatewayDetail],
+    ["route-detail-policies", routeDetailPoliciesGolden.body satisfies Wide<RouteDetail>, routeDetail],
   ] as const)("%s", (_, body, s) => {
     expect(problems(s, body, "body")).toEqual([]);
   });
@@ -1627,6 +1847,20 @@ describe("types.ts matches the golden v1 wire format", () => {
     expect(problems(page(delegationRow), body, "body")).toEqual([
       'body.items[0].computed.state: "bogus" not in types.ts',
     ]);
+  });
+
+  it("admits a policy link as the policy endpoint path and nothing else (8.2 review #8)", () => {
+    const body = structuredClone(policiesGolden.body);
+    const row = body.items[0] as { ref: { link?: string } };
+    row.ref.link = "/api/v1/installs/kgw.kgateway/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp";
+    expect(problems(policiesResponse, body, "body")).toEqual([]);
+    row.ref.link = "/api/v1/installs/kgw.kgateway/routes/x";
+    expect(problems(policiesResponse, body, "body")).toEqual([
+      'body.items[0].ref.link: "/api/v1/installs/kgw.kgateway/routes/x" not in types.ts',
+    ]);
+    // A policy the viewer may not get by name carries no link.
+    delete row.ref.link;
+    expect(problems(policiesResponse, body, "body")).toEqual([]);
   });
 
   it("checks evidence against the member its kind names", () => {

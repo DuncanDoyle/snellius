@@ -1,14 +1,20 @@
 import type { HealthState } from "../theme/tokens";
 import type { DataPlane, ProcessSet, SuggestedFix } from "./diagTypes";
+import type { PolicyRelations } from "./policyTypes";
 import type { LabelSelector, Ref, RowReason } from "./types";
 
 /** Mirrors the explorer DTOs of pkg/api/explore_types.go as built (sub-phases 2.2 and 2.3, design §7.3). */
 
 /** How a reference may be opened; rendered as given, never derived from a kind (design §7.1, D-079). An unknown value opens nothing. */
-export type Link = "detail" | "yaml" | "backend" | "none";
-/** A reference with its server-computed link; the link sits flat beside the ref fields. */
+export type Link = "detail" | "yaml" | "backend" | "none" | PolicyLinkPath;
+/** A policy's link (D-136): the policy endpoint's path, /api/v1/installs/{id}/policies/{group}/{kind}/{ns}/{name}. */
+export type PolicyLinkPath = `/api/v1/installs/${string}`;
+/**
+ * A reference with its server-computed link; the link sits flat beside the ref fields. A policy the viewer may not
+ * get by name has no link (8.2 review #3).
+ */
 export interface LinkedRef extends Ref {
-  link: Link;
+  link?: Link;
 }
 /** GET …/refs: the trail's objects with their links, in request order (design §17.6). */
 export interface TrailRefs {
@@ -234,6 +240,8 @@ export interface GatewayDetail {
   dataPlane?: DataPlane;
   proxies?: ProcessSet;
   collectedAt: string;
+  /** The policies related to this object (Phase 8 design §6.5). */
+  policyRelations: PolicyRelations;
 }
 /**
  * The parent Gateway's spec.allowedListeners as written; crdHint is set whenever the field is absent.
@@ -265,6 +273,8 @@ export interface ListenerSetDetail {
   routeCounts: RouteCounts;
   parentAllowedListeners?: AllowedListeners;
   collectedAt: string;
+  /** The policies related to this object (Phase 8 design §6.5). */
+  policyRelations: PolicyRelations;
 }
 export interface PathMatch {
   type: string;
@@ -394,6 +404,8 @@ export interface RouteDetail {
   collectedAt: string;
   config: RouteConfigSignal;
   path: RoutePathSignal;
+  /** The policies related to this object (Phase 8 design §6.5). */
+  policyRelations: PolicyRelations;
 }
 
 // Views B and C (2.4). Task 66 renders them.
@@ -709,4 +721,6 @@ export interface BackendDetail {
   /** The caller gets no paths through parent routes (D-114). */
   delegationNotChecked?: boolean;
   collectedAt: string;
+  /** The policies related to this object (Phase 8 design §6.5). */
+  policyRelations: PolicyRelations;
 }

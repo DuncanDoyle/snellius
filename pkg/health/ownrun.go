@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/install"
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
+	"github.com/DuncanDoyle/snellius/pkg/policy"
 )
 
 // namedRecorder records the refs one resource's analyzer named, in order,
@@ -153,8 +155,23 @@ func newOwnInput(in Input, rec *namedRecorder) (own.InstallContext, own.Named) {
 		Experimental:     b.experimental,
 		Collected:        func(gk objects.GroupKind, ns string) bool { return b.in.collected(gk, ns) },
 		TargetFromStatus: ts != nil && ts.ReportsTargetNotFound(),
+		PolicyReading:    policyReading(in.PolicyInterpreter),
 	}
 	return b.ic, rec
+}
+
+// policyReading is p's reading of a policy condition as own reads it; nil without a pack.
+func policyReading(p policy.Interpreter) func(objects.GroupKind, objects.ParentRef, metav1.Condition) own.ConditionReading {
+	if p == nil {
+		return nil
+	}
+	return func(gk objects.GroupKind, a objects.ParentRef, c metav1.Condition) own.ConditionReading {
+		if !p.Handles(gk) {
+			return own.ConditionReading{}
+		}
+		r := p.Condition(gk, a, c)
+		return own.ConditionReading{Warning: r.Warning, Info: r.Info, Message: r.Message}
+	}
 }
 
 // experimental is the install's Experimental for k, decided once per kind.
@@ -191,21 +208,28 @@ func (b *ownBase) inScope(in Input, ns string) bool {
 // collected reports whether the cache read kind gk and, for a namespace other
 // than "" in a scoped snapshot, read gk there. A kind the UI does not watch counts as read.
 func (in Input) collected(gk objects.GroupKind, ns string) bool {
-	if in.Snapshot == nil {
+	return Collected(in.Snapshot, in.Served, gk, ns)
+}
+
+// Collected reports whether snap read kind gk, one of served: everywhere for
+// namespace "", else in ns. A scoped snapshot answers ns from that namespace's
+// access alone, so a failure elsewhere does not count. A kind served does not list counts as read.
+func Collected(snap *cache.Snapshot, served []kinds.Served, gk objects.GroupKind, ns string) bool {
+	if snap == nil {
 		return false
 	}
 	gvr := cache.ServicesGVR
 	if gk != cache.ServicesKind {
-		i := slices.IndexFunc(in.Served, func(s kinds.Served) bool { return s.Group == gk.Group && s.Kind == gk.Kind })
+		i := slices.IndexFunc(served, func(s kinds.Served) bool { return s.Group == gk.Group && s.Kind == gk.Kind })
 		if i < 0 {
 			return true
 		}
-		gvr = in.Served[i].GVR()
+		gvr = served[i].GVR()
 	}
-	if !in.Snapshot.Access[gvr].OK {
-		return false
+	if ns == "" || len(snap.RequestedNamespaces) == 0 {
+		return snap.Access[gvr].OK
 	}
-	return ns == "" || len(in.Snapshot.RequestedNamespaces) == 0 || in.Snapshot.NamespaceAccess[gvr][ns].OK
+	return snap.NamespaceAccess[gvr][ns].OK
 }
 
 // runOwn evaluates the analyzers ks on each resource through package own, in
@@ -220,7 +244,8 @@ func runOwn(ctx RunContext, ks []own.Kind, resources []*unstructured.Unstructure
 		}
 		base = ctx.sink.own
 	}
-	// Each analyzer names through its own recorder, so a basis is per resource and analyzer (D-108).
+	// Each analyzer names through its own recorder, so a basis is per resource and analyzer (D-108),
+	// unless a finding narrows it to the objects it alone rests on (policy ancestors).
 	recs := make([]*namedRecorder, len(ks))
 	named := make([]own.Named, len(ks))
 	var ic own.InstallContext
@@ -244,7 +269,15 @@ func runOwn(ctx RunContext, ks []own.Kind, resources []*unstructured.Unstructure
 				basis = slices.Clone(recs[i].refs) // findings keep it; the recorder is reused
 			}
 			for _, of := range r.Findings() {
-				f, ok := fromOwn(of, basis)
+				b := basis
+				if fb := of.Basis(); fb != nil {
+					// A finding that names its own basis rests on that alone; it must be named.
+					if testing.Testing() && slices.ContainsFunc(fb, func(r objects.Ref) bool { return !slices.Contains(basis, r) }) {
+						panic(fmt.Sprintf("own: %s basis %v was not named", of.Code(), fb))
+					}
+					b = fb
+				}
+				f, ok := fromOwn(of, b)
 				if !ok {
 					continue
 				}
@@ -279,7 +312,7 @@ func fromOwn(f own.Finding, basis []objects.Ref) (Finding, bool) {
 		}
 	}
 	out := Finding{Code: f.Code(), Slug: f.Slug(), Severity: Severity(f.Severity()), Message: f.Message(), Detail: f.Detail(),
-		Since: f.Since(), Key: f.Key(), Evidence: f.Evidence(), parent: f.Parent(), class: ClassOwn, Basis: &Basis{Refs: basis}}
+		Since: f.Since(), Key: f.Key(), Evidence: f.Evidence(), parent: f.Parent(), class: ClassOwn, Basis: &Basis{Refs: basis, Strict: f.StrictBasis()}}
 	if ev, ok := f.Facts().(Evidence); ok {
 		out.Facts = ev
 	}
@@ -291,6 +324,18 @@ func objectsOf(os []install.OwnedObject) []*unstructured.Unstructured {
 	out := make([]*unstructured.Unstructured, len(os))
 	for i := range os {
 		out[i] = os[i].Obj
+	}
+	return out
+}
+
+// listedPolicies returns the install's list-only policies (DirectResponse) whose
+// watch is collected in their namespace. Only their ancestor 002s are judged (design §6.6).
+func (in Input) listedPolicies() []*unstructured.Unstructured {
+	var out []*unstructured.Unstructured
+	for _, o := range in.Owned.Listed {
+		if o.Kind.Category == kinds.CategoryPolicy && in.collected(objects.GroupKind{Group: o.Kind.Group, Kind: o.Kind.Kind}, o.Obj.GetNamespace()) {
+			out = append(out, o.Obj)
+		}
 	}
 	return out
 }

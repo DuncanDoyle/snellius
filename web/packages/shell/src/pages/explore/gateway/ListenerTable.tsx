@@ -2,8 +2,9 @@ import { css, type SerializedStyles } from "@emotion/react";
 import styled from "@emotion/styled";
 import { ChevronDown, ChevronRight, Info } from "lucide-react";
 import { Fragment, type ReactNode, useContext, useState } from "react";
-import type { AllowedRoutes, LabelSelector, Listener } from "../../../api/types";
+import type { AllowedRoutes, LabelSelector, Listener, PolicyRelation } from "../../../api/types";
 import { columnCopy, detailCopy, diagnosticsCopy, listCopy, listenerCopy, viewACopy } from "../../../copy/explorer";
+import { relationsCopy } from "../../../copy/policies";
 import { ComputedBadge, ComputedChip, computedTooltip } from "../../../explore/ComputedBadge";
 import { ConditionList, conditionState } from "../../../explore/ConditionList";
 import { TableFrame, TableStyles } from "../../../explore/ObjectTable";
@@ -16,6 +17,7 @@ import { Tooltip } from "../../../shell/Tooltip";
 import { useMedia } from "../../../shell/useMedia";
 import { VisuallyHidden } from "../../../states/VisuallyHidden";
 import type { HealthState } from "../../../theme/tokens";
+import { PolicyRelationGroup } from "../../policies/PolicyRelationsSection";
 import { Muted, OneLine, refText, wrapName } from "../listParts";
 
 // region Styles
@@ -192,14 +194,17 @@ interface ListenerTableProps {
   listeners: Listener[];
   /** The object's generation, for stale listener conditions. */
   generation: number;
+  installId: string;
+  /** The page's targeting relations; a row shows those naming its section. Absent from an older server. */
+  policies?: PolicyRelation[];
   stylesOverride?: SerializedStyles;
 }
 
 /**
  * Spec listeners with their status: the controller's attached count, and from 2.3 view A's computed count with its check.
- * Conditions open per row; expanded rows are kept by listener name, so polling never collapses them.
+ * Conditions and the policies naming the listener open per row; open rows are kept by name, so polling never collapses them.
  */
-export function ListenerTable({ listeners, generation, stylesOverride }: ListenerTableProps) {
+export function ListenerTable({ listeners, generation, installId, policies, stylesOverride }: ListenerTableProps) {
   const narrow = useMedia(NARROW);
   const stale = useContext(StaleView);
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
@@ -327,6 +332,16 @@ export function ListenerTable({ listeners, generation, stylesOverride }: Listene
                         generation={generation}
                         empty={l.status ? detailCopy.noConditions : listenerCopy.noStatusWritten}
                       />
+                      {policies ? (
+                        <PolicyRelationGroup
+                          installId={installId}
+                          id={`listener-${l.name}`}
+                          title={relationsCopy.listener}
+                          items={policies.filter((r) => r.sectionName === l.name)}
+                          hideSection
+                          data-testid="listener-policies"
+                        />
+                      ) : null}
                     </td>
                   </tr>
                 ) : null}

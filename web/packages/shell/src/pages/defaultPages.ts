@@ -11,6 +11,8 @@ import { RoutesPage } from "./explore/RoutesPage";
 import { FindingPage } from "./findings/FindingPage";
 import { FindingsPage } from "./findings/FindingsPage";
 import { DiagnosticsSection, InstallPage } from "./install/InstallPage";
+import { PoliciesPage } from "./policies/PoliciesPage";
+import { PolicyPage } from "./policies/PolicyPage";
 import { ProcessesPage } from "./processes/ProcessesPage";
 import { ResourcePage } from "./ResourcePage";
 import { TrafficPage } from "./traffic/TrafficPage";
@@ -33,4 +35,6 @@ export const defaultPages: Required<CorePages> = {
   TrafficPage,
   BackendsPage,
   BackendPage,
+  PoliciesPage,
+  PolicyPage,
 };

@@ -197,9 +197,10 @@ func TestDiscriminatorSeparates(t *testing.T) {
 }
 
 // A restricted row shows install, code and resource, so its id is computable from
-// them and a spec owner: worlds differing only in which condition, policy ancestor or
-// status-only parent failed, which check kind disagrees or which undeclared parent
-// drops a route give one id (design §14 rule 11).
+// them and a spec owner: worlds differing only in which condition or status-only
+// parent failed, which check kind disagrees or which undeclared parent drops a
+// route give one id (design §14 rule 11). A policy ancestor's 002 is the exception,
+// tested by TestPolicyAncestorIDFromOwner.
 func TestRestrictedIDFromVisibleData(t *testing.T) {
 	cases := []struct {
 		name, code, res string
@@ -213,10 +214,6 @@ func TestRestrictedIDFromVisibleData(t *testing.T) {
 		{"check kind", CodeComputedDisagrees, "infra/edge", []string{"#1"}, []func() *world{
 			func() *world { return disagreeingWorld(computed.KindListenerCount, "edge http") },
 			func() *world { return disagreeingWorld(computed.KindRouteAccepted, "edge cart") },
-		}},
-		{"policy ancestor", CodeConditionFalse, "shop/tp", []string{"ancestor#1", "#1"}, []func() *world{
-			func() *world { return failingAncestor("edge", "edge2") },
-			func() *world { return failingAncestor("edge2", "edge") },
 		}},
 		{"status-only parent", CodeConditionFalse, "shop/c", []string{"parent#1", "#1"}, []func() *world{
 			func() *world { return reportedUnder("api", "api2") },
@@ -255,6 +252,20 @@ func disagreeingWorld(kind computed.CheckKind, subject string) *world {
 	w := healthyWorld()
 	w.computed = &computed.Views{RuleSet: "kgateway-2.4", Checks: []computed.CheckResult{disagreeing(kind, subject)}}
 	return w
+}
+
+// A policy ancestor's 002 hashes the ancestor ref and the condition type, not a rank:
+// a viewer shown it reads the policy and that ancestor (D-131), so which ancestor
+// failed is no hidden value, and each world gives its own id (8.1 re-review: durable IDs).
+func TestPolicyAncestorIDFromOwner(t *testing.T) {
+	for _, bad := range []string{"edge", "edge2"} {
+		in := failingAncestor(bad, map[string]string{"edge": "edge2", "edge2": "edge"}[bad]).input(t)
+		fs := findingsFor(Evaluate(in, Upstream(), Runtime{States: NewStates()}), CodeConditionFalse, "shop/tp")
+		key := []string{ownerAncestor, objects.GatewayAPIGroup, "Gateway", "infra", bad, "", "0", "Accepted"}
+		if len(fs) != 1 || fs[0].ID != FindingID(in.Install.ID(), CodeConditionFalse, fs[0].Resource, key) {
+			t.Errorf("%s: findings %+v, want one with the id of %v", bad, fs, key)
+		}
+	}
 }
 
 // failingAncestor has policy shop/tp rejected by Gateway infra/<bad> and accepted by infra/<good>.

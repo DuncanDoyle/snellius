@@ -226,10 +226,8 @@ func KindNotServedMessage(bad []RefLocation) string {
 // A ref the UI cannot check may be the cause, so it leaves the finding as is:
 // absence from a cache that did not read a namespace says nothing.
 func serviceExplanation(ic InstallContext, f *Finding, ev *RefsEvidence, field []writtenRef, named Named) {
+	// Collection is checked per ref's namespace below, so a failure elsewhere changes nothing.
 	svcs := objects.GroupKind{Kind: serviceKind}
-	if !ic.Collected(svcs, "") {
-		return
-	}
 	var hit *writtenRef
 	var hitPorts []servicePort
 	hitFound := false

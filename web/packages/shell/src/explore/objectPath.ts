@@ -15,22 +15,49 @@ export function backendPath(installId: string, r: Ref): string {
   );
 }
 
+/** Path of the policy detail page of r (Phase 8 design §6.3), "-" for the empty group. */
+export function policyPath(installId: string, r: Ref): string {
+  const seg = encodeURIComponent;
+  return installPath(
+    installId,
+    `policies/${seg(r.group || "-")}/${seg(r.kind)}/${seg(r.namespace ?? "")}/${seg(r.name)}`,
+  );
+}
+
+/** The policy page of a policy link (D-136), which is the policy endpoint's path; undefined for any other link. */
+function policyLinkPath(installId: string, link: string): string | undefined {
+  const m = /^\/api\/v1\/installs\/[^/]+\/policies\/([^/]+\/[^/]+\/[^/]+\/[^/]+)$/.exec(link);
+  // The segments are already escaped as the endpoint takes them; the page uses the same four.
+  return m ? installPath(installId, `policies/${m[1]}`) : undefined;
+}
+
 // region Helpers
 const GATEWAY_API = "gateway.networking.k8s.io";
 const ROUTE_KINDS = new Set(["HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"]);
+/** Policy kinds as "group/Kind", from /meta's category "policy"; BackendTLSPolicy is Gateway API's own. */
+const policyKinds = new Set<string>([`${GATEWAY_API}/BackendTLSPolicy`]);
+const kindKey = (r: { group: string; kind: string }) => `${r.group}/${r.kind}`;
+
+/** Records the served kinds whose /meta category is "policy", so their detail links open the policy page. */
+export function setPolicyKinds(kinds: readonly { group: string; kind: string; category?: string }[]) {
+  for (const k of kinds) if (k.category === "policy") policyKinds.add(kindKey(k));
+}
 
 /**
  * Where r opens, from its server-computed link only (design §7.1): detail → its detail page, yaml → the YAML view,
  * backend → its backend page (D-079), none or an unknown value → undefined.
  */
 export function objectPath(installId: string, r: LinkedRef): string | undefined {
+  const policy = r.link ? policyLinkPath(installId, r.link) : undefined;
+  if (policy) return policy;
   if (r.link === "yaml") return resourcePath(installId, r);
   if (r.link === "backend") return backendPath(installId, r);
   if (r.link !== "detail") return undefined;
   const ns = encodeURIComponent(r.namespace ?? "");
   const name = encodeURIComponent(r.name);
   if (r.group === GATEWAY_API && r.kind === "Gateway") return installPath(installId, `gateways/${ns}/${name}`);
-  // The server sends detail only for its DetailKinds, so any kind besides Gateway and a route kind is a ListenerSet kind.
+  if (policyKinds.has(kindKey(r))) return policyPath(installId, r);
+  // The server sends detail only for its DetailKinds, so any other kind besides Gateway and a route is a ListenerSet kind.
   const page = r.group === GATEWAY_API && ROUTE_KINDS.has(r.kind) ? "routes" : "listenersets";
   return installPath(installId, `${page}/${encodeURIComponent(r.group)}/${encodeURIComponent(r.kind)}/${ns}/${name}`);
 }

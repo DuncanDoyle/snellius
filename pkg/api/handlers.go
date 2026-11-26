@@ -25,6 +25,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/overview"
 	"github.com/DuncanDoyle/snellius/pkg/paths"
 	"github.com/DuncanDoyle/snellius/pkg/platform"
+	"github.com/DuncanDoyle/snellius/pkg/policy"
 	"github.com/DuncanDoyle/snellius/pkg/version"
 )
 
@@ -52,7 +53,7 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 		cfg.commands = diagnose.Kubectl{}
 	}
 	h := &handler{src: src, authz: authz, capSources: cfg.capSources, coreSource: cfg.coreSource, commands: cfg.commands, commandsFor: cfg.commandsFor,
-		featuresFor: cfg.featuresFor, packs: cfg.packs, kindFor: cfg.kindFor, pathMemo: cfg.pathMemo, scoped: cfg.scoped, consumersFor: cfg.consumersFor, secure: cfg.secure, bypass: cfg.bypass, off: cfg.off}
+		featuresFor: cfg.featuresFor, packs: cfg.packs, kindFor: cfg.kindFor, pathMemo: cfg.pathMemo, scoped: cfg.scoped, consumersFor: cfg.consumersFor, interpFor: cfg.interpFor, secure: cfg.secure, bypass: cfg.bypass, off: cfg.off}
 	if h.pathMemo == nil {
 		h.pathMemo = paths.NewMemo(nil)
 	}
@@ -83,6 +84,8 @@ func NewHandler(src ModelSource, ui fs.FS, authz Authorizer, opts ...HandlerOpti
 	mux.HandleFunc("GET /api/v1/installs/{id}/paths", h.pathList)
 	mux.HandleFunc("GET /api/v1/installs/{id}/backends", h.backendList)
 	mux.HandleFunc("GET /api/v1/installs/{id}/backends/{group}/{kind}/{ns}/{name}", h.backendDetail)
+	mux.HandleFunc("GET /api/v1/installs/{id}/policies", h.policies)
+	mux.HandleFunc("GET /api/v1/installs/{id}/policies/{group}/{kind}/{ns}/{name}", h.policyDetail)
 	mountExts(mux, cfg.ext)
 	// Unknown /api/ paths, extension ones included, get a JSON 404, never the SPA.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { writeErr(w, http.StatusNotFound, "not found") })
@@ -137,6 +140,8 @@ type handler struct {
 	scoped endpoints.ScopedReader
 	// consumersFor, if set, gives an install's non-route backend consumers.
 	consumersFor func(install.Install, *install.Owned) []objects.Consumer
+	// interpFor, if set, gives an install's pack policy interpreter.
+	interpFor func(install.Install) policy.Interpreter
 	// secure is true when the handler was built with WithSecureMode.
 	secure bool
 	// bypass turns the secure-mode projection off, and off some of its steps (rule tests only).

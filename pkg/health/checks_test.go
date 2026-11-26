@@ -4,7 +4,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +25,7 @@ import (
 	"github.com/DuncanDoyle/snellius/pkg/kinds"
 	"github.com/DuncanDoyle/snellius/pkg/objects"
 	"github.com/DuncanDoyle/snellius/pkg/platform"
+	"github.com/DuncanDoyle/snellius/pkg/policy"
 	"github.com/DuncanDoyle/snellius/pkg/scopeverify"
 )
 
@@ -41,6 +44,9 @@ type world struct {
 	access    map[schema.GroupVersionResource]cache.Access // overrides on top of "everything readable"
 	platform  platform.Info                                // zero = Kubernetes
 	computed  *computed.Views                              // nil = none
+	// byNS makes the snapshot scoped to w.nss, every input read in each; these
+	// override one namespace's access, and the kind's aggregate becomes the worst, as the cache's does.
+	byNS map[schema.GroupVersionResource]map[string]cache.Access
 }
 
 func healthyWorld() *world {
@@ -76,6 +82,27 @@ func (w *world) input(t *testing.T) Input {
 	for gvr, a := range w.access {
 		snap.Access[gvr] = a
 	}
+	if w.byNS != nil {
+		snap.NamespaceAccess = map[schema.GroupVersionResource]map[string]cache.Access{}
+		for _, n := range w.nss {
+			snap.RequestedNamespaces = append(snap.RequestedNamespaces, n.Name)
+		}
+		slices.Sort(snap.RequestedNamespaces)
+		for gvr := range snap.Access {
+			snap.NamespaceAccess[gvr] = map[string]cache.Access{}
+			for _, ns := range snap.RequestedNamespaces {
+				snap.NamespaceAccess[gvr][ns] = cache.Access{OK: true}
+			}
+		}
+		for gvr, byNS := range w.byNS {
+			for ns, a := range byNS {
+				snap.NamespaceAccess[gvr][ns] = a
+				if !a.OK {
+					snap.Access[gvr] = a
+				}
+			}
+		}
+	}
 	in, _ := install.UpstreamDetector{}.Detect(w.ctrl)
 	in.Pods = w.pods
 	res := install.Resolved{Install: in, Scope: install.ParseSelectors(w.scope), ExperimentalOnly: install.UpstreamExperimentalOnly}
@@ -87,6 +114,69 @@ func (w *world) input(t *testing.T) Input {
 		Verify: scopeverify.Result{Available: true}, Platform: w.platform}
 	hi.FirstSeen, hi.Computed = w.firstSeen, w.computed
 	return hi
+}
+
+// readsNothing is a downstream pack's interpreter that reads no kind.
+type readsNothing struct{}
+
+func (readsNothing) Handles(objects.GroupKind) bool                    { return false }
+func (readsNothing) FeatureLabel(objects.GroupKind, string) string     { return "" }
+func (readsNothing) PrecedenceAnnotations(objects.GroupKind) []string  { return nil }
+func (readsNothing) Summary(objects.GroupKind, objects.ParentRef) bool { return false }
+func (readsNothing) Condition(objects.GroupKind, objects.ParentRef, metav1.Condition) policy.Reading {
+	return policy.Reading{}
+}
+
+// sameName is a downstream check named like the kgateway backend check.
+type sameName struct{}
+
+func (sameName) Name() string     { return backendCheck{}.Name() }
+func (sameName) Inputs() InputSet { return InputSet{} }
+func (sameName) Run(RunContext) ([]Finding, CheckResult) {
+	return nil, CheckResult{Name: backendCheck{}.Name(), OK: true}
+}
+
+// Evaluate with the kgateway checks and no interpreter reads kgateway's policies as its
+// pack does; the core checks alone, a check that only shares a kgateway check's name,
+// or a pack's own interpreter read no kgateway reason (8.4 review and re-review, new 2 and 1).
+func TestKgatewayPolicyReadingsFollowTheChecks(t *testing.T) {
+	gw := testutil.GwRef("infra", "edge")
+	w := healthyWorld()
+	w.objs = append(w.objs,
+		testutil.TrafficPolicy("shop", "partial", testutil.PolicyAncestor{Ref: gw, Controller: testutil.Controller,
+			Conds: []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionTrue, "PartiallyValid")}}),
+		testutil.TrafficPolicy("shop", "overridden", testutil.PolicyAncestor{Ref: gw, Controller: testutil.Controller,
+			Conds: []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionTrue, "Valid"), testutil.Cond("Attached", metav1.ConditionFalse, "Overridden")}}))
+	type got struct {
+		sev Severity
+		msg string
+	}
+	read := func(r Report, name string) []got {
+		var out []got
+		for _, f := range policyFindings(r, name) {
+			out = append(out, got{f.Severity, f.Message})
+		}
+		return out
+	}
+	downstream := w.input(t)
+	downstream.PolicyInterpreter = readsNothing{}
+	for _, c := range []struct {
+		name                string
+		in                  Input
+		checks              []Check
+		partial, overridden []got
+	}{
+		{"kgateway checks", w.input(t), Upstream(), []got{{SeverityWarning, "Partially valid; some settings were ignored"}},
+			[]got{{SeverityInfo, "Overridden by another policy"}}},
+		{"core checks", w.input(t), Core(), nil, []got{{SeverityError, "Attached is False (Overridden)"}}},
+		{"same-name check", w.input(t), append(Core(), sameName{}), nil, []got{{SeverityError, "Attached is False (Overridden)"}}},
+		{"pack interpreter", downstream, Upstream(), nil, []got{{SeverityError, "Attached is False (Overridden)"}}},
+	} {
+		r := Evaluate(c.in, c.checks, w.runtime(Runtime{}))
+		if p, o := read(r, "partial"), read(r, "overridden"); !reflect.DeepEqual(p, c.partial) || !reflect.DeepEqual(o, c.overridden) {
+			t.Errorf("%s: partial %+v, overridden %+v; want %+v, %+v", c.name, p, o, c.partial, c.overridden)
+		}
+	}
 }
 
 func (w *world) report(t *testing.T) Report {
@@ -402,6 +492,61 @@ func TestUnprocessedEvidenceIsNeverHealthy(t *testing.T) {
 	}
 }
 
+// kgateway v2.3.11, v2.4.8 and v2.5.2 leave Attached=False/Pending beside a
+// definitive Accepted (translator goldens policy-extauth-extension-ref-invalid-out.yaml,
+// directresponse/invalid-backendref-filter.yaml). Accepted decides the ancestor;
+// only a Pending Accepted or a stale block is "not yet processed".
+func TestPolicyAncestorAttachedPending(t *testing.T) {
+	gw := testutil.GwRef("infra", "edge")
+	attachedPending := testutil.Cond("Attached", metav1.ConditionFalse, "Pending")
+	rejected := testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")
+	rejected.Message = "extauth: shop/no-such-authz: gateway extension not found"
+	valid := testutil.Cond("Accepted", metav1.ConditionTrue, "Valid")
+	stale := func(cs ...metav1.Condition) []metav1.Condition {
+		for i := range cs {
+			cs[i].ObservedGeneration = 0
+		}
+		return cs
+	}
+	cases := []struct {
+		name  string
+		conds []metav1.Condition
+		code  string // the policy's only finding; "" for none
+		sev   Severity
+		state State
+	}{
+		{"rejected", []metav1.Condition{rejected, attachedPending}, CodeConditionFalse, SeverityError, StateError},
+		{"accepted, attachment undecided", []metav1.Condition{valid, attachedPending}, "", "", StateHealthy},
+		{"pending", []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Pending"), attachedPending}, CodeRouteUnattached, SeverityWarning, StateWarning},
+		{"rejected, stale", stale(rejected, attachedPending), CodeRouteUnattached, SeverityWarning, StateWarning},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := healthyWorld()
+			w.objs = append(w.objs, testutil.TrafficPolicy("shop", "tp", testutil.PolicyAncestor{Ref: gw, Controller: testutil.Controller, Conds: tc.conds}))
+			r := w.report(t)
+			var got []Finding
+			for _, f := range r.Findings {
+				if f.Resource != nil && f.Resource.String() == "shop/tp" {
+					got = append(got, f)
+				}
+			}
+			if tc.code == "" {
+				if len(got) != 0 || r.State != tc.state {
+					t.Fatalf("want no finding, state %s: state=%s findings=%+v", tc.state, r.State, got)
+				}
+				return
+			}
+			if len(got) != 1 || got[0].Code != tc.code || got[0].Severity != tc.sev || r.State != tc.state {
+				t.Fatalf("want one %s/%s, state %s: state=%s findings=%+v", tc.code, tc.sev, tc.state, r.State, got)
+			}
+			if tc.code == CodeConditionFalse && !strings.HasPrefix(got[0].Detail, "Accepted=False, reason Invalid") {
+				t.Fatalf("detail %q, want the Accepted condition", got[0].Detail)
+			}
+		})
+	}
+}
+
 // Only status entries for current parentRefs of this install count.
 // An entry left behind for a removed parentRef is ignored.
 func TestStatusForRemovedParentIsIgnored(t *testing.T) {
@@ -483,6 +628,258 @@ func TestPolicyAncestorOfUnownedGatewayIsIgnored(t *testing.T) {
 	w.objs = append(w.objs, testutil.TrafficPolicy("shop", "tp", testutil.PolicyAncestor{Ref: other, Controller: testutil.Controller, Conds: invalid}))
 	if r := w.report(t); r.State != StateHealthy || len(r.Findings) != 0 {
 		t.Fatalf("a policy processed for another install's Gateway gets no finding here: state=%s findings=%+v", r.State, r.Findings)
+	}
+}
+
+// policyFindings are r's findings on shop/name with resource and ID cleared, to compare two kinds.
+func policyFindings(r Report, name string) []Finding {
+	var out []Finding
+	for _, f := range r.Findings {
+		if f.Resource != nil && f.Resource.Namespace == "shop" && f.Resource.Name == name {
+			f.Resource, f.ID = nil, ""
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// A DirectResponse's current ancestors raise the findings a TrafficPolicy's
+// would in the same state; other ancestors raise none (design §6.6).
+func TestDirectResponseAncestorFindings(t *testing.T) {
+	gw, other := testutil.GwRef("infra", "edge"), testutil.GwRef("infra", "elsewhere")
+	invalid := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}
+	partial := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionTrue, "PartiallyValid"),
+		testutil.Cond("Attached", metav1.ConditionTrue, "Overridden")}
+	for _, c := range []struct {
+		name      string
+		ancestors []testutil.PolicyAncestor
+		want      int
+	}{
+		{"rejected on owned Gateway", []testutil.PolicyAncestor{{Ref: gw, Controller: testutil.Controller, Conds: invalid}}, 1},
+		{"partially valid and overridden", []testutil.PolicyAncestor{{Ref: gw, Controller: testutil.Controller, Conds: partial}}, 2},
+		{"owned Gateway and another install's Gateway", []testutil.PolicyAncestor{
+			{Ref: gw, Controller: testutil.Controller, Conds: invalid}, {Ref: other, Controller: testutil.Controller, Conds: invalid}}, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := healthyWorld()
+			w.objs = append(w.objs, testutil.Policy("gateway.kgateway.dev/v1alpha1", "DirectResponse", "shop", "dr", c.ancestors...))
+			got := policyFindings(w.report(t), "dr")
+			w = healthyWorld()
+			w.objs = append(w.objs, testutil.TrafficPolicy("shop", "dr", c.ancestors...))
+			want := policyFindings(w.report(t), "dr")
+			if len(got) != c.want || !reflect.DeepEqual(got, want) {
+				t.Fatalf("DirectResponse findings %+v, want %d equal to the TrafficPolicy's %+v", got, c.want, want)
+			}
+		})
+	}
+}
+
+// A DirectResponse with no status, a stale ancestor, an uncollected watch or
+// only other installs' ancestors raises nothing: it has no freshness of its own (design §6.6).
+func TestDirectResponseWithoutCurrentStatusRaisesNothing(t *testing.T) {
+	gw := testutil.GwRef("infra", "edge")
+	invalid := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}
+	stale := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}
+	stale[0].ObservedGeneration = 0
+	dr := func(cs []metav1.Condition) *unstructured.Unstructured {
+		return testutil.Policy("gateway.kgateway.dev/v1alpha1", "DirectResponse", "shop", "dr",
+			testutil.PolicyAncestor{Ref: gw, Controller: testutil.Controller, Conds: cs})
+	}
+	var drGVR schema.GroupVersionResource
+	for _, k := range testutil.ServedUpstream() {
+		if k.Kind == "DirectResponse" {
+			drGVR = k.GVR()
+		}
+	}
+	for _, c := range []struct {
+		name   string
+		dr     *unstructured.Unstructured
+		access map[schema.GroupVersionResource]cache.Access
+	}{
+		{"no status", testutil.DirectResponse("shop", "dr"), nil},
+		{"stale ancestor", dr(stale), nil},
+		{"watch not collected", dr(invalid), map[schema.GroupVersionResource]cache.Access{drGVR: {Err: "watch failed"}}},
+		{"another controller", testutil.Policy("gateway.kgateway.dev/v1alpha1", "DirectResponse", "shop", "dr",
+			testutil.PolicyAncestor{Ref: gw, Controller: "example.com/other", Conds: invalid}), nil},
+		{"unowned Gateway", testutil.Policy("gateway.kgateway.dev/v1alpha1", "DirectResponse", "shop", "dr",
+			testutil.PolicyAncestor{Ref: testutil.GwRef("infra", "elsewhere"), Controller: testutil.Controller, Conds: invalid}), nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := healthyWorld()
+			w.objs = append(w.objs, c.dr)
+			w.access = c.access
+			r := w.report(t)
+			if fs := policyFindings(r, "dr"); len(fs) != 0 {
+				t.Fatalf("findings on the DirectResponse: %+v", fs)
+			}
+			if r.State != StateHealthy {
+				t.Fatalf("state %s: %+v", r.State, r.Findings)
+			}
+		})
+	}
+}
+
+// In a scoped snapshot, a Gateway watch denied in namespace other still lets a
+// route in shop report that its parent infra/gone does not exist; denied in
+// infra, it does not (8.1 review #6).
+func TestParentMissingPerNamespaceWatch(t *testing.T) {
+	var gwGVR schema.GroupVersionResource
+	for _, k := range testutil.ServedUpstream() {
+		if k.Kind == "Gateway" && k.Group == objects.GatewayAPIGroup {
+			gwGVR = k.GVR()
+		}
+	}
+	for _, tc := range []struct {
+		ns   string
+		want bool
+	}{{"other", true}, {"infra", false}} {
+		t.Run("denied in "+tc.ns, func(t *testing.T) {
+			w := healthyWorld()
+			w.nss = append(w.nss, testutil.Namespace("other", nil))
+			w.byNS = map[schema.GroupVersionResource]map[string]cache.Access{gwGVR: {tc.ns: {Err: "forbidden", Denied: true}}}
+			w.objs = append(w.objs, testutil.HTTPRoute("shop", "orphan", []objects.ParentRef{testutil.GwRef("infra", "gone")}))
+			got := false
+			for _, f := range w.report(t).Findings {
+				got = got || f.Code == CodeRouteUnattached && f.Resource != nil && f.Resource.Name == "orphan" && strings.Contains(f.Detail, "does not exist")
+			}
+			if got != tc.want {
+				t.Fatalf("parent does not exist: %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// In a scoped snapshot, a DirectResponse watch denied in namespace other leaves
+// shop's DirectResponse findings in place; other's stay out (8.1 review #6).
+func TestDirectResponseFindingsPerNamespaceWatch(t *testing.T) {
+	gw := testutil.GwRef("infra", "edge")
+	invalid := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}
+	var drGVR schema.GroupVersionResource
+	for _, k := range testutil.ServedUpstream() {
+		if k.Kind == "DirectResponse" {
+			drGVR = k.GVR()
+		}
+	}
+	w := healthyWorld()
+	w.nss = append(w.nss, testutil.Namespace("other", nil))
+	w.byNS = map[schema.GroupVersionResource]map[string]cache.Access{drGVR: {"other": {Err: "forbidden", Denied: true}}}
+	for _, ns := range []string{"shop", "other"} {
+		w.objs = append(w.objs, testutil.Policy("gateway.kgateway.dev/v1alpha1", "DirectResponse", ns, "dr",
+			testutil.PolicyAncestor{Ref: gw, Controller: testutil.Controller, Conds: invalid}))
+	}
+	r := w.report(t)
+	if fs := policyFindings(r, "dr"); len(fs) != 1 {
+		t.Fatalf("shop's DirectResponse findings %+v, want one", fs)
+	}
+	if has(r, CodeConditionFalse, "", "other/dr") {
+		t.Fatal("a finding on the DirectResponse in the denied namespace")
+	}
+}
+
+// ancestorIDs are the IDs of the KGWUI-002s on policy shop/p in r, by the ancestor their detail names.
+func ancestorIDs(r Report) map[string]string {
+	out := map[string]string{}
+	for _, f := range r.Findings {
+		if f.Code == CodeConditionFalse && f.Resource != nil && f.Resource.Name == "p" {
+			out[f.Detail] = f.ID
+		}
+	}
+	return out
+}
+
+// The 002 about a readable ancestor keeps its ID when a hidden ancestor that
+// sorts before it gains a finding of its own, for a TrafficPolicy and a
+// DirectResponse (8.1 re-review: renumbered 002).
+func TestPolicyAncestorFindingIDStable(t *testing.T) {
+	edge, hidden := testutil.GwRef("infra", "edge"), testutil.GwRef("aaa", "hidden")
+	invalid := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}
+	ancestors := []testutil.PolicyAncestor{{Ref: edge, Controller: testutil.Controller, Conds: invalid},
+		{Ref: hidden, Controller: testutil.Controller, Conds: invalid}}
+	for _, kind := range []string{"TrafficPolicy", "DirectResponse"} {
+		t.Run(kind, func(t *testing.T) {
+			pol := func() *unstructured.Unstructured {
+				return testutil.Policy("gateway.kgateway.dev/v1alpha1", kind, "shop", "p", ancestors...)
+			}
+			rd := readSet{objects.RefOf(pol()): true, edge.Ref(): true}
+			run := func(withHidden bool) (full int, shown map[string]string) {
+				w := healthyWorld()
+				w.nss = append(w.nss, testutil.Namespace("aaa", nil))
+				w.objs = append(w.objs, pol())
+				if withHidden {
+					w.objs = append(w.objs, testutil.Gateway("aaa", "hidden", "kgateway", nil))
+				}
+				r := w.report(t)
+				return len(ancestorIDs(r)), ancestorIDs(Project(r, rd))
+			}
+			fullAbsent, absent := run(false)
+			fullPresent, present := run(true)
+			if fullAbsent != 1 || fullPresent != 2 || len(absent) != 1 || !maps.Equal(absent, present) {
+				t.Fatalf("full %d/%d; shown IDs without hidden %v, with hidden %v", fullAbsent, fullPresent, absent, present)
+			}
+		})
+	}
+}
+
+// A new ancestor written first in status, with its own finding, moves no
+// existing ancestor finding's ID (8.1 re-review: durable IDs).
+func TestPolicyAncestorFindingIDDurable(t *testing.T) {
+	edge, first := testutil.GwRef("infra", "edge"), testutil.GwRef("infra", "aaa")
+	invalid := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid"),
+		testutil.Cond("Attached", metav1.ConditionFalse, "Invalid")}
+	run := func(ancestors ...testutil.PolicyAncestor) map[string]string {
+		w := healthyWorld()
+		w.objs = append(w.objs, testutil.Gateway("infra", "aaa", "kgateway", nil), testutil.TrafficPolicy("shop", "p", ancestors...))
+		return ancestorIDs(w.report(t))
+	}
+	before := run(testutil.PolicyAncestor{Ref: edge, Controller: testutil.Controller, Conds: invalid})
+	after := run(testutil.PolicyAncestor{Ref: first, Controller: testutil.Controller, Conds: invalid},
+		testutil.PolicyAncestor{Ref: edge, Controller: testutil.Controller, Conds: invalid})
+	if len(before) != 2 || len(after) != 4 {
+		t.Fatalf("findings before %v, after %v", before, after)
+	}
+	for detail, id := range before {
+		if after[detail] != id {
+			t.Errorf("%s: ID %s became %s", detail, id, after[detail])
+		}
+	}
+}
+
+// A viewer who reads a policy and its ancestor edge, but not the owned
+// Gateway secret/hidden, sees edge's 002 whether or not hidden exists; hidden's
+// own 002 stays withheld (D-108). Both a TrafficPolicy and a DirectResponse (8.1 review #3).
+func TestPolicyAncestorFindingBasisPerFinding(t *testing.T) {
+	edge, hidden := testutil.GwRef("infra", "edge"), testutil.GwRef("secret", "hidden")
+	invalid := []metav1.Condition{testutil.Cond("Accepted", metav1.ConditionFalse, "Invalid")}
+	ancestors := []testutil.PolicyAncestor{{Ref: edge, Controller: testutil.Controller, Conds: invalid},
+		{Ref: hidden, Controller: testutil.Controller, Conds: invalid}}
+	for _, kind := range []string{"TrafficPolicy", "DirectResponse"} {
+		t.Run(kind, func(t *testing.T) {
+			pol := func() *unstructured.Unstructured {
+				return testutil.Policy("gateway.kgateway.dev/v1alpha1", kind, "shop", "p", ancestors...)
+			}
+			rd := readSet{objects.RefOf(pol()): true, edge.Ref(): true}
+			conditionFindings := func(r Report) []Finding {
+				return slices.DeleteFunc(policyFindings(r, "p"), func(f Finding) bool { return f.Code != CodeConditionFalse })
+			}
+			run := func(withHidden bool) (full, shown []Finding) {
+				w := healthyWorld()
+				w.nss = append(w.nss, testutil.Namespace("secret", nil))
+				w.objs = append(w.objs, pol())
+				if withHidden {
+					w.objs = append(w.objs, testutil.Gateway("secret", "hidden", "kgateway", nil))
+				}
+				r := w.report(t)
+				return conditionFindings(r), conditionFindings(Project(r, rd))
+			}
+			fullAbsent, absent := run(false)
+			fullPresent, present := run(true)
+			if len(fullAbsent) != 1 || len(fullPresent) != 2 {
+				t.Fatalf("full reader: %d findings without hidden, %d with; want 1 and 2", len(fullAbsent), len(fullPresent))
+			}
+			if len(absent) != 1 || !reflect.DeepEqual(absent, present) {
+				t.Fatalf("shown without hidden %+v, with hidden %+v", absent, present)
+			}
+		})
 	}
 }
 
