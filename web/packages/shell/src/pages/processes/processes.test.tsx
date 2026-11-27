@@ -373,9 +373,8 @@ describe("Gateway page sections", () => {
     await screen.findByRole("region", { name: dataPlaneCopy.title });
     expect(within(dataPlane()).queryByText(diagnosticsCopy.noRejects)).toBeNull();
     expect(within(dataPlane()).getByText(dataPlaneCopy.unavailable)).toBeInTheDocument();
-    // A KGWUI-025 or 026 (warming or disconnected proxy) reads as a warning, never Config accepted.
+    // A KGWUI-025 or 026 (warming or disconnected proxy) reads as a warning, also when rejects cannot be read.
     second.unmount();
-    unavailable = false;
     proxyNotCurrent = true;
     mount(GW("edge"));
     await screen.findByRole("region", { name: dataPlaneCopy.title });
