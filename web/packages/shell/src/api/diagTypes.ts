@@ -404,6 +404,8 @@ export interface DataPlane {
   rejecting: boolean;
   /** A KGWUI-024 error: the proxies get no config updates. */
   configWithheld?: boolean;
+  /** A KGWUI-025 or 026: a proxy may not run the current config. */
+  proxyNotCurrent?: boolean;
   rejects: { typeUrl: string; streams: number; firstSeen: string }[];
   statusSaysHealthy: boolean;
   /** The controller's xDS snapshot: what it built, not what proxies accepted; never a finding. */

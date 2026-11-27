@@ -1315,6 +1315,7 @@ const dataPlane = shape<DataPlane>(
   {
     rejecting: "!",
     configWithheld: "?",
+    proxyNotCurrent: "?",
     rejects: "!",
     statusSaysHealthy: "!",
     snapshot: "?",
