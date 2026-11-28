@@ -427,16 +427,18 @@ func (h *handler) overview(w http.ResponseWriter, r *http.Request) {
 		// Over the findings and checks the caller is shown: a Not checked result proves nothing.
 		rejecting := gatewaysWith(i, health.CodeXDSRejected, "", v.shown)
 		withheld := gatewaysWith(i, health.CodeConfigWithheld, health.SeverityError, v.shown)
+		notCurrent := proxiesNotCurrent(i, v.shown)
 		checked := slices.ContainsFunc(v.report(i).Checks, func(c health.CheckResult) bool { return c.Name == xdsCheckName && c.OK && !c.NotAssessed })
 		for _, g := range ov.Gateways {
-			// A reject, then withheld config, shows even while the check is not OK; otherwise only an OK check proves "ok".
+			// A reject, then withheld config, shows even while the check is not OK; otherwise only an OK check
+			// with no warming or disconnected proxy proves "ok".
 			dp := DataPlaneUnknown
 			switch {
 			case rejecting[g.Ref]:
 				dp = DataPlaneRejects
 			case withheld[g.Ref]:
 				dp = DataPlaneWithheld
-			case checked:
+			case checked && !notCurrent[g.Ref]:
 				dp = DataPlaneOK
 			}
 			rows = append(rows, OverviewGatewayRow{GatewayRow: g, Link: l.link(g.Ref), DataPlane: dp})

@@ -184,6 +184,9 @@ func TestProxyConditionsAtTheAPI(t *testing.T) {
 			if f := findingCode(r, c.code); f != nil || !checkOf(r, c.check).OK {
 				t.Fatalf("at 0 s: %+v %+v", f, checkOf(r, c.check))
 			}
+			if got, dp := overviewDataPlane(t, sh.harness)["edge"], get[GatewayDetail](t, sh.srv, gwDetail, 200).DataPlane; got != DataPlaneOK || dp == nil || dp.ProxyNotCurrent {
+				t.Fatalf("at 0 s: data plane %q %+v", got, dp)
+			}
 			if f := findingCode(sh.at(t, testutil.Now.Add(59*time.Second)), c.code); f != nil {
 				t.Fatalf("at 59 s: %+v", f)
 			}
@@ -196,6 +199,10 @@ func TestProxyConditionsAtTheAPI(t *testing.T) {
 			ev, ok := f.Facts.(*health.ProxyStatsEvidence)
 			if !ok || len(ev.Pods) != 1 || ev.Pods[0].Pod != "edge-0" || strings.Contains(f.Detail, "edge-1") {
 				t.Fatalf("evidence %+v detail %q", f.Facts, f.Detail)
+			}
+			// A warming or disconnected proxy never reads as Config accepted.
+			if got, dp := overviewDataPlane(t, sh.harness)["edge"], get[GatewayDetail](t, sh.srv, gwDetail, 200).DataPlane; got != DataPlaneUnknown || dp == nil || !dp.ProxyNotCurrent {
+				t.Fatalf("at 61 s: data plane %q %+v", got, dp)
 			}
 			if body := string(wire(t, sh.srv, healthPath)); !strings.Contains(body, `"kind": "proxy-stats"`) {
 				t.Fatalf("body %s", body)

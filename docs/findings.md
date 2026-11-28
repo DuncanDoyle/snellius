@@ -18,6 +18,8 @@ Severities: an error turns the install red, a warning turns it yellow, and info 
 
 **Next steps.** Some findings have next steps: commands filled in for your install. The UI never runs them. Each one names the permission it needs in your own RBAC, such as `pods/log`.
 
+**Config accepted.** A Gateway's data plane reads "Config accepted" only when it has no KGWUI-001, no KGWUI-024 error, and no KGWUI-025 or 026. Snellius does not compare config versions, so a connected proxy that runs old config still reads as "Config accepted".
+
 ## KGWUI-001
 
 `xds-rejected` · error · controller metrics

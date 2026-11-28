@@ -437,6 +437,16 @@ func withheldGateways(i *engine.InstallModel) map[objects.Ref]bool {
 	return gatewaysWith(i, health.CodeConfigWithheld, health.SeverityError, nil)
 }
 
+// proxiesNotCurrent is the set of i's Gateways with a KGWUI-025 or 026 that shown keeps:
+// a warming or disconnected proxy may not run the current config.
+func proxiesNotCurrent(i *engine.InstallModel, shown func(*health.Finding) bool) map[objects.Ref]bool {
+	out := gatewaysWith(i, health.CodeProxyConfigWarming, "", shown)
+	for ref := range gatewaysWith(i, health.CodeProxyDisconnected, "", shown) {
+		out[ref] = true
+	}
+	return out
+}
+
 // gatewaysWith is the set of resources of i's findings with code, of severity
 // sev unless it is "", that shown keeps; a nil shown keeps every finding.
 func gatewaysWith(i *engine.InstallModel, code string, sev health.Severity, shown func(*health.Finding) bool) map[objects.Ref]bool {
