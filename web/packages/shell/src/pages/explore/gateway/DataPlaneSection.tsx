@@ -60,7 +60,10 @@ const Counts = styled.dl`
 `;
 
 // region Helpers
-/** The headline from the server's flags only: rejecting, config withheld, not readable, or no rejects (R62, D-006). */
+/**
+ * The headline from the server's flags only: rejecting, config withheld, a warming or disconnected proxy, not
+ * readable, or no rejects (R62, D-006).
+ */
 function Headline({ dp }: { dp: DataPlane }) {
   if (dp.rejecting)
     return (
@@ -70,6 +73,7 @@ function Headline({ dp }: { dp: DataPlane }) {
       />
     );
   if (dp.configWithheld) return <HealthBadge state="error" label={diagnosticsCopy.configWithheld} />;
+  if (dp.proxyNotCurrent) return <HealthBadge state="warning" />;
   if (dp.unavailable) return <HealthBadge state="unknown" label={dataPlaneCopy.unavailable} />;
   return <HealthBadge state="healthy" label={diagnosticsCopy.noRejects} />;
 }

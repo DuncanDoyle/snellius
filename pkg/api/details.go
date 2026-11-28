@@ -308,6 +308,7 @@ func (d *detail) dataPlane(gw objects.Ref) (*DataPlaneDTO, *ProcessSetDTO) {
 		ControllerLogs: health.LogsNotRead}
 	dp.Withheld, dp.ControllerLogs = withheldOn(d.i.Health.Checks, gw)
 	dp.ConfigWithheld = withheldGateways(d.i)[gw]
+	dp.ProxyNotCurrent = proxiesNotCurrent(d.i, nil)[gw]
 	k := on(health.CodeXDSRejected)
 	if k < 0 {
 		return dp, &proxies

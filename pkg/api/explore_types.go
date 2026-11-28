@@ -86,13 +86,13 @@ type OverviewGatewayRow struct {
 
 // The values of OverviewGatewayRow.DataPlane.
 const (
-	// DataPlaneOK: the xDS rejects check ran and found no reject for the Gateway.
+	// DataPlaneOK: the xDS rejects check ran and found no reject, and no proxy of the Gateway is warming or disconnected.
 	DataPlaneOK = "ok"
 	// DataPlaneRejects: the Gateway has a KGWUI-001.
 	DataPlaneRejects = "rejects"
 	// DataPlaneWithheld: no KGWUI-001, but a KGWUI-024 error: the proxies get no config updates.
 	DataPlaneWithheld = "withheld"
-	// DataPlaneUnknown: no reject, but the xDS rejects check is not OK or did not run.
+	// DataPlaneUnknown: no reject, but the xDS rejects check is not OK or did not run, or a KGWUI-025 or 026 is active.
 	DataPlaneUnknown = "unknown"
 )
 

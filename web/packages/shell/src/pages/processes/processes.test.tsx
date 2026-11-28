@@ -353,12 +353,13 @@ describe("Gateway page sections", () => {
     expect(within(dataPlane()).getByText(diagnosticsCopy.logState.read as string)).toBeInTheDocument();
   });
 
-  it("no rejects reads healthy only while the check runs; unavailable reads unknown", async () => {
+  it("no rejects reads healthy only while the check runs and proxies are current; unavailable reads unknown", async () => {
     const base = gatewayGolden.body.dataPlane as GatewayDetail["dataPlane"] & object;
     let unavailable = false;
+    let proxyNotCurrent = false;
     serve((u) =>
       u.pathname === `${API}/gateways/infra/edge`
-        ? gateway(gatewayGolden, { dataPlane: { ...base, unavailable } })
+        ? gateway(gatewayGolden, { dataPlane: { ...base, unavailable, proxyNotCurrent } })
         : undefined,
     );
     const first = mount(GW("edge"));
@@ -368,10 +369,18 @@ describe("Gateway page sections", () => {
     expect(within(dataPlane()).getByText("Proxy stats are not collected yet")).toBeInTheDocument();
     first.unmount();
     unavailable = true;
-    mount(GW("edge"));
+    const second = mount(GW("edge"));
     await screen.findByRole("region", { name: dataPlaneCopy.title });
     expect(within(dataPlane()).queryByText(diagnosticsCopy.noRejects)).toBeNull();
     expect(within(dataPlane()).getByText(dataPlaneCopy.unavailable)).toBeInTheDocument();
+    // A KGWUI-025 or 026 (warming or disconnected proxy) reads as a warning, also when rejects cannot be read.
+    second.unmount();
+    proxyNotCurrent = true;
+    mount(GW("edge"));
+    await screen.findByRole("region", { name: dataPlaneCopy.title });
+    expect(within(dataPlane()).queryByText(diagnosticsCopy.noRejects)).toBeNull();
+    expect(within(dataPlane()).getByText("Warning")).toBeInTheDocument();
+    expect(within(dataPlane()).getByTestId("health-icon-warning")).toBeInTheDocument();
   });
 
   it("not observed for a self-managed Gateway on its page", async () => {
