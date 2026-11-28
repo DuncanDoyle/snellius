@@ -31,7 +31,8 @@ import { HealthIcon } from "../../health/HealthIcon";
 import { YamlBlock } from "../../resource/ResourceYaml";
 import { useInstallId } from "../../shell/extension";
 import type { HealthState } from "../../theme/tokens";
-import { DetailFrame, Facts, Section } from "../explore/detailParts";
+import type { DetailSection } from "../explore/DetailSections";
+import { DetailFrame, Facts } from "../explore/detailParts";
 import { acceptedState, acceptedText, checkState, featureName, targetText } from "./policyText";
 
 // region Styles
@@ -258,81 +259,89 @@ export function PolicyPage({ stylesOverride }: PolicyPageProps = {}) {
   const { data, error } = usePolicyDetail(id, ref);
   const frameData = useMemo(() => (data ? { collectedAt: data.collectedAt } : undefined), [data]);
   const trailRefs = useMemo(() => (data ? linkedRefs(data) : undefined), [data]);
-  return (
-    <DetailFrame
-      installId={id}
-      refValue={ref}
-      noun={policiesCopy.noun[0]}
-      data={frameData}
-      error={error}
-      ownProblem
-      trailRefs={trailRefs}
-      stylesOverride={stylesOverride}
-    >
-      {data ? (
-        <>
-          <Section aria-labelledby="policy-summary">
-            <h2 id="policy-summary">{policyDetailCopy.summary}</h2>
-            <Facts>
-              <dt>{policyDetailCopy.accepted}</dt>
-              <dd>
-                <Line data-testid="policy-accepted">
-                  <HealthIcon state={acceptedState(data.accepted)} />
-                  {acceptedText(data.accepted)}
-                  {data.acceptedSource ? <SourceTag source={data.acceptedSource} /> : null}
-                </Line>
-              </dd>
-              <dt>{policyDetailCopy.attachedOn}</dt>
-              <dd>
-                <Line data-testid="policy-attached-on">
-                  {data.attachedOn.length ? data.attachedOn.map(ancestorText).join(" · ") : attachedCopy.none}
-                  {data.attachedOnSource ? <SourceTag source={data.attachedOnSource} /> : null}
-                </Line>
-              </dd>
-              <dt>{policyDetailCopy.problems}</dt>
-              <dd>
-                <Line data-testid="policy-problems">
-                  {data.problems.has ? policyDetailCopy.yes : policyDetailCopy.no}
-                  <SourceTag source={data.problems.source} />
-                </Line>
-              </dd>
-            </Facts>
-          </Section>
-          <Section aria-labelledby="policy-targets">
-            <h2 id="policy-targets">{policyDetailCopy.targets}</h2>
-            {data.targets.length ? (
-              <List>
-                {data.targets.map((t) => (
-                  <TargetItem key={t.index} installId={id} t={t} />
-                ))}
-              </List>
-            ) : (
-              <None>{policyDetailCopy.noTargets}</None>
-            )}
-          </Section>
-          <Section aria-labelledby="policy-status">
-            <h2 id="policy-status">{policyDetailCopy.status}</h2>
-            {data.ancestors.length ? (
-              <List>
-                {data.ancestors.map((a) => (
-                  <AncestorItem
-                    // Two entries may name one ancestor, under different controllers.
-                    key={`${a.controller}|${a.ref.kind}|${a.ref.namespace ?? ""}|${a.ref.name}|${a.sectionName ?? ""}|${a.port ?? ""}`}
-                    installId={id}
-                    a={a}
-                    generation={data.generation}
-                  />
-                ))}
-              </List>
-            ) : (
-              <None>{policyDetailCopy.noStatus}</None>
-            )}
-          </Section>
-          <Section aria-labelledby="policy-config">
-            <h2 id="policy-config">
-              {policyDetailCopy.configuration}
-              {data.interpreted ? null : <span className="note">{policyDetailCopy.rawKeys}</span>}
-            </h2>
+  const sections = useMemo<DetailSection[] | undefined>(() => {
+    if (!data) return undefined;
+    const out: DetailSection[] = [
+      {
+        id: "policy-summary",
+        group: "status",
+        title: policyDetailCopy.summary,
+        render: () => (
+          <Facts>
+            <dt>{policyDetailCopy.accepted}</dt>
+            <dd>
+              <Line data-testid="policy-accepted">
+                <HealthIcon state={acceptedState(data.accepted)} />
+                {acceptedText(data.accepted)}
+                {data.acceptedSource ? <SourceTag source={data.acceptedSource} /> : null}
+              </Line>
+            </dd>
+            <dt>{policyDetailCopy.attachedOn}</dt>
+            <dd>
+              <Line data-testid="policy-attached-on">
+                {data.attachedOn.length ? data.attachedOn.map(ancestorText).join(" · ") : attachedCopy.none}
+                {data.attachedOnSource ? <SourceTag source={data.attachedOnSource} /> : null}
+              </Line>
+            </dd>
+            <dt>{policyDetailCopy.problems}</dt>
+            <dd>
+              <Line data-testid="policy-problems">
+                {data.problems.has ? policyDetailCopy.yes : policyDetailCopy.no}
+                <SourceTag source={data.problems.source} />
+              </Line>
+            </dd>
+          </Facts>
+        ),
+      },
+      {
+        id: "policy-status",
+        group: "status",
+        title: policyDetailCopy.status,
+        count: data.ancestors.length,
+        muted: !data.ancestors.length,
+        render: () =>
+          data.ancestors.length ? (
+            <List>
+              {data.ancestors.map((a) => (
+                <AncestorItem
+                  // Two entries may name one ancestor, under different controllers.
+                  key={`${a.controller}|${a.ref.kind}|${a.ref.namespace ?? ""}|${a.ref.name}|${a.sectionName ?? ""}|${a.port ?? ""}`}
+                  installId={id}
+                  a={a}
+                  generation={data.generation}
+                />
+              ))}
+            </List>
+          ) : (
+            <None>{policyDetailCopy.noStatus}</None>
+          ),
+      },
+      {
+        id: "policy-targets",
+        group: "does",
+        title: policyDetailCopy.targets,
+        count: data.targets.length,
+        muted: !data.targets.length,
+        render: () =>
+          data.targets.length ? (
+            <List>
+              {data.targets.map((t) => (
+                <TargetItem key={t.index} installId={id} t={t} />
+              ))}
+            </List>
+          ) : (
+            <None>{policyDetailCopy.noTargets}</None>
+          ),
+      },
+      {
+        id: "policy-config",
+        group: "does",
+        title: policyDetailCopy.configuration,
+        count: data.features.length,
+        muted: !data.features.length,
+        render: () => (
+          <>
+            {data.interpreted ? null : <Note>{policyDetailCopy.rawKeys}</Note>}
             {data.features.length ? (
               <List>
                 {data.features.map((f) => (
@@ -342,25 +351,43 @@ export function PolicyPage({ stylesOverride }: PolicyPageProps = {}) {
             ) : (
               <None>{policyDetailCopy.noFeatures}</None>
             )}
-          </Section>
-          {data.annotations.length ? (
-            <Section aria-labelledby="policy-annotations">
-              <h2 id="policy-annotations">{policyDetailCopy.annotations}</h2>
-              <List>
-                {data.annotations.map((a) => (
-                  <Card key={a.key} data-testid="policy-annotation">
-                    <Line>
-                      <code>{`${a.key}: ${a.value}`}</code>
-                      <SourceTag source={a.source} />
-                    </Line>
-                    <Note>{policyDetailCopy.annotationNote}</Note>
-                  </Card>
-                ))}
-              </List>
-            </Section>
-          ) : null}
-        </>
-      ) : null}
-    </DetailFrame>
+          </>
+        ),
+      },
+    ];
+    if (data.annotations.length)
+      out.push({
+        id: "policy-annotations",
+        group: "related",
+        title: policyDetailCopy.annotations,
+        count: data.annotations.length,
+        render: () => (
+          <List>
+            {data.annotations.map((a) => (
+              <Card key={a.key} data-testid="policy-annotation">
+                <Line>
+                  <code>{`${a.key}: ${a.value}`}</code>
+                  <SourceTag source={a.source} />
+                </Line>
+                <Note>{policyDetailCopy.annotationNote}</Note>
+              </Card>
+            ))}
+          </List>
+        ),
+      });
+    return out;
+  }, [data, id]);
+  return (
+    <DetailFrame
+      installId={id}
+      refValue={ref}
+      noun={policiesCopy.noun[0]}
+      data={frameData}
+      error={error}
+      ownProblem
+      sections={sections ?? []}
+      trailRefs={trailRefs}
+      stylesOverride={stylesOverride}
+    />
   );
 }

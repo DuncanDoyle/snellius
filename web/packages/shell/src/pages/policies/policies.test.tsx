@@ -381,3 +381,33 @@ it("sends the header's namespace scope with the page's Namespace filter, as /met
   }
   setNamespaceScope([]);
 });
+
+// region Sections (D-148)
+const cardTitles = () =>
+  Array.from(screen.getByTestId("detail-sections").querySelectorAll(":scope > div > section > header h2")).map(
+    (h) => h.textContent,
+  );
+const navEntry = (title: string) =>
+  within(screen.getByRole("navigation", { name: "TrafficPolicy sections" })).getByRole("link", {
+    name: new RegExp(`^${title}`),
+  });
+
+it("policy sections follow the design order", async () => {
+  serve({ [`${API}/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp`]: detail });
+  mount(`/i/${ID}/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp`);
+  await screen.findByTestId("detail-sections");
+  expect(cardTitles()).toEqual(["Summary", "Status per ancestor", "Targets", "Configuration", "Annotations"]);
+  const d = detail();
+  expect(navEntry("Targets")).toHaveTextContent(String(d.targets.length));
+  expect(navEntry("Status per ancestor")).toHaveTextContent(String(d.ancestors.length));
+  expect(navEntry("Configuration")).toHaveTextContent(String(d.features.length));
+  // A policy has no health: no badge and no problem strip.
+  expect(screen.queryByTestId("problem-strip")).toBeNull();
+});
+
+it("a policy without annotations has no Annotations section", async () => {
+  serve({ [`${API}/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp`]: () => ({ ...detail(), annotations: [] }) });
+  mount(`/i/${ID}/policies/gateway.kgateway.dev/TrafficPolicy/shop/tp`);
+  await screen.findByTestId("detail-sections");
+  expect(cardTitles()).not.toContain("Annotations");
+});

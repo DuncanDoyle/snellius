@@ -139,6 +139,8 @@ interface DetailFrameProps {
   problem?: Pick<ProblemStripProps, "condition" | "conditionsId" | "parent" | "gateway">;
   /** The page draws its own strip with id PROBLEM_ID, e.g. the backend status line; the badge still links to it. */
   ownProblem?: boolean;
+  /** Shown above the sections where the problem strip goes, e.g. the backend status line; sections path only. */
+  banner?: ReactNode;
   /** The Overview tab's sections, nav and cards from one list; contributed sections follow in "Related" (D-148). */
   sections?: DetailSection[];
   /** A section that a deeper link scrolls into itself, such as a route's ?rule=: it is current, the hash is not used. */
@@ -167,6 +169,7 @@ export function DetailFrame({
   error,
   problem,
   ownProblem,
+  banner,
   sections,
   sectionFocus,
   children,
@@ -252,6 +255,7 @@ export function DetailFrame({
     ) : sections ? (
       <Overview>
         {strip}
+        {banner}
         <DetailSections
           label={sectionsCopy.nav(refValue.kind)}
           focus={sectionFocus}

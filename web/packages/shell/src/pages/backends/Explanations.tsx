@@ -6,7 +6,6 @@ import { routeCopy } from "../../copy/explorer";
 import { SuggestedFixView } from "../../diagnostics/SuggestedFix";
 import { LinkedName } from "../../explore/LinkedName";
 import { linkTarget } from "../../explore/objectPath";
-import { Section } from "../explore/detailParts";
 
 // region Styles
 const List = styled.ul<{ stylesOverride?: SerializedStyles }>`
@@ -58,47 +57,44 @@ interface ExplanationsProps {
  */
 export function Explanations({ installId, explanations, stylesOverride }: ExplanationsProps) {
   return (
-    <Section aria-labelledby="backend-explanations">
-      <h2 id="backend-explanations">{explanationCopy.title}</h2>
-      <List stylesOverride={stylesOverride}>
-        {explanations.map((e, i) => (
-          <Item
-            key={`${e.route.kind}/${e.route.namespace}/${e.route.name}/${e.path}`}
-            data-testid="explanation"
-            data-kind={e.kind}
-          >
-            <div className="head">
-              <span>
-                <span className="muted">{e.route.kind}</span>{" "}
-                <LinkedName
-                  refValue={e.route}
-                  installId={installId}
-                  to={linkTarget(installId, e.route, undefined, { rule: String(e.rule + 1) })}
-                />
-              </span>
-              <span>{routeCopy.rule(e.rule + 1)}</span>
-              <span className="muted">
-                {explanationCopy.at} <span className="mono">{e.path}</span>
-              </span>
-            </div>
-            {e.kind === "waiting" ? (
-              <p>{explanationCopy.waiting}</p>
-            ) : e.kind === "candidate" ? (
-              <p>{explanationCopy.candidate(e.reason ?? "")}</p>
-            ) : (
-              <>
-                {e.explanation ? <p>{e.explanation}</p> : null}
-                {e.reason ? (
-                  <p>
-                    <span className="muted">{explanationCopy.reason}</span> <span className="mono">{e.reason}</span>
-                  </p>
-                ) : null}
-                {e.fix ? <SuggestedFixView fix={e.fix} installId={installId} headingId={`backend-fix-${i}`} /> : null}
-              </>
-            )}
-          </Item>
-        ))}
-      </List>
-    </Section>
+    <List stylesOverride={stylesOverride}>
+      {explanations.map((e, i) => (
+        <Item
+          key={`${e.route.kind}/${e.route.namespace}/${e.route.name}/${e.path}`}
+          data-testid="explanation"
+          data-kind={e.kind}
+        >
+          <div className="head">
+            <span>
+              <span className="muted">{e.route.kind}</span>{" "}
+              <LinkedName
+                refValue={e.route}
+                installId={installId}
+                to={linkTarget(installId, e.route, undefined, { rule: String(e.rule + 1) })}
+              />
+            </span>
+            <span>{routeCopy.rule(e.rule + 1)}</span>
+            <span className="muted">
+              {explanationCopy.at} <span className="mono">{e.path}</span>
+            </span>
+          </div>
+          {e.kind === "waiting" ? (
+            <p>{explanationCopy.waiting}</p>
+          ) : e.kind === "candidate" ? (
+            <p>{explanationCopy.candidate(e.reason ?? "")}</p>
+          ) : (
+            <>
+              {e.explanation ? <p>{e.explanation}</p> : null}
+              {e.reason ? (
+                <p>
+                  <span className="muted">{explanationCopy.reason}</span> <span className="mono">{e.reason}</span>
+                </p>
+              ) : null}
+              {e.fix ? <SuggestedFixView fix={e.fix} installId={installId} headingId={`backend-fix-${i}`} /> : null}
+            </>
+          )}
+        </Item>
+      ))}
+    </List>
   );
 }

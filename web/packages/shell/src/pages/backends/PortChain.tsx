@@ -3,7 +3,6 @@ import styled from "@emotion/styled";
 import { ArrowRight } from "lucide-react";
 import type { PortChain as Chain } from "../../api/types";
 import { portChainCopy } from "../../copy/backends";
-import { Section } from "../explore/detailParts";
 
 // region Styles
 const Chains = styled.ol<{ stylesOverride?: SerializedStyles }>`
@@ -70,44 +69,41 @@ const Arrow = () => <ArrowRight className="arrow" size={14} aria-hidden="true" /
  */
 export function PortChain({ chains, stylesOverride }: { chains: Chain[]; stylesOverride?: SerializedStyles }) {
   return (
-    <Section aria-labelledby="backend-ports">
-      <h2 id="backend-ports">{portChainCopy.title}</h2>
-      <Chains stylesOverride={stylesOverride}>
-        {chains.map((c) => {
-          const target = targetText(c);
-          return (
-            <Steps key={c.refPort} data-testid="port-chain">
-              <Step label={portChainCopy.refPort} value={String(c.refPort)} />
-              {c.servicePort !== undefined ? (
-                <>
-                  <Arrow />
-                  <Step
-                    label={portChainCopy.servicePort}
-                    value={c.servicePortName ? `${c.servicePort} (${c.servicePortName})` : String(c.servicePort)}
-                  />
-                  {target ? (
-                    <>
-                      <Arrow />
-                      <Step label={portChainCopy.targetPort} value={target} />
-                    </>
-                  ) : null}
-                  <Arrow />
-                  <Step
-                    label={portChainCopy.slicePorts}
-                    value={c.slicePorts.length ? c.slicePorts.join(", ") : portChainCopy.noneObserved}
-                  />
-                </>
-              ) : null}
-              {c.noSuchPort ? <span className="fact">{portChainCopy.noSuchPort(c.refPort)}</span> : null}
-              {c.noSlicePort ? (
-                <span className="fact">
-                  {c.servicePortName ? portChainCopy.noSlicePort(c.servicePortName) : portChainCopy.noSlicePortUnnamed}
-                </span>
-              ) : null}
-            </Steps>
-          );
-        })}
-      </Chains>
-    </Section>
+    <Chains stylesOverride={stylesOverride}>
+      {chains.map((c) => {
+        const target = targetText(c);
+        return (
+          <Steps key={c.refPort} data-testid="port-chain">
+            <Step label={portChainCopy.refPort} value={String(c.refPort)} />
+            {c.servicePort !== undefined ? (
+              <>
+                <Arrow />
+                <Step
+                  label={portChainCopy.servicePort}
+                  value={c.servicePortName ? `${c.servicePort} (${c.servicePortName})` : String(c.servicePort)}
+                />
+                {target ? (
+                  <>
+                    <Arrow />
+                    <Step label={portChainCopy.targetPort} value={target} />
+                  </>
+                ) : null}
+                <Arrow />
+                <Step
+                  label={portChainCopy.slicePorts}
+                  value={c.slicePorts.length ? c.slicePorts.join(", ") : portChainCopy.noneObserved}
+                />
+              </>
+            ) : null}
+            {c.noSuchPort ? <span className="fact">{portChainCopy.noSuchPort(c.refPort)}</span> : null}
+            {c.noSlicePort ? (
+              <span className="fact">
+                {c.servicePortName ? portChainCopy.noSlicePort(c.servicePortName) : portChainCopy.noSlicePortUnnamed}
+              </span>
+            ) : null}
+          </Steps>
+        );
+      })}
+    </Chains>
   );
 }
