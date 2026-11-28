@@ -1396,3 +1396,49 @@ it("the state badge links to the strip only while the strip is shown", async () 
   expect(screen.queryByTestId("problem-strip")).toBeNull();
   expect(screen.queryByTestId("state-link")).toBeNull();
 });
+
+/** The width of each unsized column of a table-layout: fixed table that is width px wide, from its <col> widths. */
+function autoColumnWidth(t: HTMLElement, width: number) {
+  const ws = [...t.querySelectorAll("col")].map((c) => c.style.width);
+  const taken = ws.reduce(
+    (s, w) =>
+      s + (w.endsWith("px") ? Number.parseFloat(w) : w.endsWith("%") ? (Number.parseFloat(w) / 100) * width : 0),
+    0,
+  );
+  return (width - taken) / ws.filter((w) => !w).length;
+}
+
+it("route tables keep the Route column readable in a section card of a 1280 px window", async () => {
+  // jsdom has no layout, so the fixed layout is worked out from the <col> widths; e2e checks the real one.
+  // 1016 px is the card's table width at 1280 px, beside the section nav (D-148).
+  const card = 1016;
+  serve(viewA());
+  const { unmount } = mount(GW_PATH);
+  const failed = await screen.findByRole("table", { name: "Routes not attached" });
+  await within(failed).findByText("rejected");
+  expect(autoColumnWidth(failed, card)).toBeGreaterThanOrEqual(120);
+  unmount();
+  for (const [listener, name] of [
+    ["http", "Computed routes on listener http"],
+    ["_unknown", "Routes with an unknown listener"],
+  ]) {
+    const { unmount: done } = mount(`${GW_PATH}?listener=${listener}`);
+    const t = await screen.findByRole("table", { name });
+    expect(autoColumnWidth(t, card), name).toBeGreaterThanOrEqual(120);
+    done();
+  }
+});
+
+it("the Listeners table fits a section card of a 720 px window, so the page never scrolls sideways", async () => {
+  // A 720 px window: (max-width: N px) queries match from 720 px down. The card's table is 652 px wide there.
+  vi.stubGlobal("matchMedia", (q: string) => ({
+    matches: 720 <= Number(/max-width:\s*(\d+)px/.exec(q)?.[1] ?? -1),
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+  serve(api());
+  mount(GW_PATH);
+  const t = await screen.findByRole("table", { name: "Listeners" });
+  expect(within(t).getAllByRole("columnheader").at(-1)).toHaveTextContent("Routes");
+  expect(autoColumnWidth(t, 652)).toBeGreaterThanOrEqual(96);
+});

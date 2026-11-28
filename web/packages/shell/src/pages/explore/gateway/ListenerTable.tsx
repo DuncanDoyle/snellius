@@ -231,7 +231,8 @@ export function ListenerTable({ listeners, generation, installId, policies, styl
           {narrow ? null : <col style={{ width: computed ? "12%" : "15%" }} />}
           {narrow ? null : <col style={{ width: computed ? "13%" : "18%" }} />}
           <col style={{ width: computed ? "116px" : "130px" }} />
-          {computed ? <col style={{ width: "172px" }} /> : null}
+          {/* Narrow, it takes what is left, so the table fits a section card instead of scrolling the page. */}
+          {computed ? <col style={{ width: narrow ? undefined : "172px" }} /> : null}
         </colgroup>
         <thead>
           <tr>
