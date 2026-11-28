@@ -1,13 +1,13 @@
 import type { SerializedStyles } from "@emotion/react";
 import styled from "@emotion/styled";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useNow } from "../../api/clock";
 import { useFindingDetail } from "../../api/diagHooks";
 import { ApiErrorState, apiErrorState } from "../../api/errorState";
 import { isStale } from "../../api/hooks";
-import type { LinkedRef, NextStep } from "../../api/types";
-import { columnCopy, findingsCopy, listCopy } from "../../copy/explorer";
+import type { LinkedRef } from "../../api/types";
+import { columnCopy, findingsCopy, listCopy, sectionsCopy } from "../../copy/explorer";
 import { EvidenceView, LearnMore } from "../../diagnostics/EvidenceView";
 import { NextSteps } from "../../diagnostics/NextSteps";
 import { SuggestedFixView, withCode } from "../../diagnostics/SuggestedFix";
@@ -22,7 +22,8 @@ import { PageNotice } from "../../states/PageNotice";
 import { PageState } from "../../states/PageState";
 import { Shimmer } from "../../states/Shimmer";
 import { DataAge } from "../DataAge";
-import { expectedRows, Facts, Section } from "../explore/detailParts";
+import { type DetailSection, DetailSections, DetailSectionsSkeleton } from "../explore/DetailSections";
+import { expectedRows, Facts } from "../explore/detailParts";
 import { NameCell } from "../explore/listParts";
 import { FindingContributions } from "../install/FindingRow";
 import { ago } from "../install/HealthStrip";
@@ -79,10 +80,6 @@ const Frame = styled.div<{ stylesOverride?: SerializedStyles }>`
   }
   ${(p) => p.stylesOverride}
 `;
-const Skeleton = styled.div`
-  display: grid;
-  gap: ${(p) => p.theme.space(3)};
-`;
 
 // region Helpers
 const AFFECTED_NOUN = ["object", "objects"] as const;
@@ -94,15 +91,6 @@ const affectedColumns = (installId: string): ObjectColumn<LinkedRef>[] => [
 const self = (r: LinkedRef) => r;
 
 // region Component
-function StepsSection({ steps }: { steps: NextStep[] }) {
-  return (
-    <Section aria-labelledby="finding-steps">
-      <h2 id="finding-steps">{findingsCopy.nextSteps}</h2>
-      <NextSteps steps={steps} />
-    </Section>
-  );
-}
-
 interface FindingPageProps {
   stylesOverride?: SerializedStyles;
 }
@@ -119,23 +107,120 @@ export function FindingPage({ stylesOverride }: FindingPageProps = {}) {
     if (cursorRejected) setCursor(undefined);
   }, [cursorRejected]);
   const now = useNow();
+  const f = data?.finding;
+  // The wire finding as a Finding, for the renderers and actions a downstream registers.
+  const finding = f && data ? { ...f, install: id, message: f.message ?? "", evidence: data.evidence } : undefined;
+  const sections = useMemo<DetailSection[]>(() => {
+    if (!data || !f) return [];
+    const list: DetailSection[] = [
+      {
+        id: "finding-summary",
+        group: "status",
+        title: findingsCopy.summary,
+        render: () => (
+          <Facts>
+            <dt>{findingsCopy.severity}</dt>
+            <dd>
+              <SeverityBadge severity={f.severity} />
+            </dd>
+            <dt>{findingsCopy.code}</dt>
+            <dd className="code">{f.code}</dd>
+            {f.since ? (
+              <>
+                <dt>{findingsCopy.firstSeen}</dt>
+                <dd>{ago(f.since, now)}</dd>
+              </>
+            ) : null}
+          </Facts>
+        ),
+      },
+      {
+        id: "finding-details",
+        group: "does",
+        title: listCopy.details,
+        render: () => (
+          <div className="details">
+            <Facts>
+              {f.resource ? (
+                <>
+                  <dt>{findingsCopy.object}</dt>
+                  <dd>
+                    {f.resource.kind} <LinkedName refValue={f.resource} installId={id} />
+                  </dd>
+                </>
+              ) : null}
+              {f.detail ? (
+                <>
+                  <dt>{findingsCopy.detail}</dt>
+                  <dd className="prose">{withCode(f.detail)}</dd>
+                </>
+              ) : null}
+            </Facts>
+            {/* EvidenceView owns the finding renderers (unknown or no evidence); actions follow (design §4.1 gap 6). */}
+            {finding ? <EvidenceView evidence={data.evidence} finding={finding} /> : null}
+            {finding ? <FindingContributions finding={finding} /> : null}
+          </div>
+        ),
+      },
+    ];
+    const fix = data.suggestedFix;
+    if (fix)
+      list.push({
+        id: "finding-fix",
+        group: "does",
+        title: findingsCopy.suggestedFix,
+        render: () => <SuggestedFixView bare fix={fix} installId={id} />,
+      });
+    const steps = data.nextSteps;
+    if (steps?.length)
+      list.push({
+        id: "finding-steps",
+        group: "does",
+        title: findingsCopy.nextSteps,
+        render: () => <NextSteps steps={steps} />,
+      });
+    // A restricted finding has no affected objects to show (design §14 rule 13).
+    if (!f.restricted)
+      list.push({
+        id: "finding-affected",
+        group: "related",
+        title: findingsCopy.affected,
+        count: data.affected.total,
+        muted: data.affected.total === 0,
+        render: () => (
+          <ObjectTable
+            label={findingsCopy.affected}
+            installId={id}
+            noun={AFFECTED_NOUN}
+            columns={affectedColumns(id)}
+            rowRef={self}
+            page={data.affected}
+            loading={false}
+            busy={isLaggy}
+            emptyTitle={findingsCopy.noAffected}
+            skeletonRows={expectedRows(data.affected.total)}
+            showDenied={false}
+            sort={NO_SORT}
+            onSort={() => {}}
+            onPage={(next) => setCursor({ finding: findingId, c: next })}
+          />
+        ),
+      });
+    return list;
+  }, [data, f, finding, id, now, isLaggy, findingId]);
   const back = <BackLink to={installPath(id, "findings")}>{findingsCopy.allFindings}</BackLink>;
   const errorTitle = listCopy.cannotLoad("finding");
   // A finding resolved while open 404s: it reads as gone, not as a load failure, even with data cached.
   if (error?.status === 404) return <PageState kind="empty" title={findingsCopy.notFound} message={back} />;
-  const f = data?.finding;
-  // The wire finding as a Finding, for the renderers and actions a downstream registers.
-  const finding = f && data ? { ...f, install: id, message: f.message ?? "", evidence: data.evidence } : undefined;
   // Stale data or a failed poll turns every state on the page unknown (design §6.3).
   const stale = !!data && (!!error || isStale(data.collectedAt, now));
   // A rejected cursor is fixed in place, so only a 503 state replaces the skeleton then.
   const body = data ? null : error && (!cursorRejected || apiErrorState(error) !== "failed") ? (
     <ApiErrorState error={error} title={errorTitle} />
   ) : (
-    <Skeleton aria-busy="true" data-testid="detail-skeleton">
-      <Shimmer h={60} />
-      <Shimmer h={200} />
-    </Skeleton>
+    <div aria-busy="true" data-testid="detail-skeleton">
+      <DetailSectionsSkeleton />
+    </div>
   );
   return (
     <StaleView.Provider value={stale}>
@@ -145,71 +230,13 @@ export function FindingPage({ stylesOverride }: FindingPageProps = {}) {
           <span className="back">{back}</span>
           <h1>{f ? f.restricted ? findingsCopy.restricted : f.message : <Shimmer h={24} />}</h1>
           <div className="meta">
-            {f ? <SeverityBadge severity={f.severity} /> : null}
-            {f ? <span className="code">{f.code}</span> : null}
             {f ? <LearnMore code={f.code} /> : null}
             <span className="spacer" />
             {data ? <DataAge collectedAt={data.collectedAt} /> : null}
           </div>
         </header>
         {body}
-        {data && f ? (
-          <>
-            <Section aria-label={listCopy.details} className="details">
-              <Facts>
-                {f.resource ? (
-                  <>
-                    <dt>{findingsCopy.object}</dt>
-                    <dd>
-                      {f.resource.kind} <LinkedName refValue={f.resource} installId={id} />
-                    </dd>
-                  </>
-                ) : null}
-                {f.since ? (
-                  <>
-                    <dt>{findingsCopy.firstSeen}</dt>
-                    <dd>{ago(f.since, now)}</dd>
-                  </>
-                ) : null}
-                {f.detail ? (
-                  <>
-                    <dt>{findingsCopy.detail}</dt>
-                    <dd className="prose">{withCode(f.detail)}</dd>
-                  </>
-                ) : null}
-              </Facts>
-              {/* EvidenceView owns the finding renderers (unknown or no evidence); actions follow (design §4.1 gap 6). */}
-              {finding ? <EvidenceView evidence={data.evidence} finding={finding} /> : null}
-              {finding ? <FindingContributions finding={finding} /> : null}
-            </Section>
-            {data.suggestedFix ? <SuggestedFixView fix={data.suggestedFix} installId={id} /> : null}
-            {data.nextSteps?.length ? <StepsSection steps={data.nextSteps} /> : null}
-            {/* A restricted finding has no affected objects to show (design §14 rule 13). */}
-            {f.restricted ? null : (
-              <Section aria-labelledby="finding-affected">
-                <h2 id="finding-affected">
-                  {findingsCopy.affected} <span className="note">{data.affected.total}</span>
-                </h2>
-                <ObjectTable
-                  label={findingsCopy.affected}
-                  installId={id}
-                  noun={AFFECTED_NOUN}
-                  columns={affectedColumns(id)}
-                  rowRef={self}
-                  page={data.affected}
-                  loading={false}
-                  busy={isLaggy}
-                  emptyTitle={findingsCopy.noAffected}
-                  skeletonRows={expectedRows(data.affected.total)}
-                  showDenied={false}
-                  sort={NO_SORT}
-                  onSort={() => {}}
-                  onPage={(next) => setCursor({ finding: findingId, c: next })}
-                />
-              </Section>
-            )}
-          </>
-        ) : null}
+        {data && f ? <DetailSections sections={sections} label={sectionsCopy.nav(findingsCopy.kind)} /> : null}
       </Frame>
     </StaleView.Provider>
   );

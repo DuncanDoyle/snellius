@@ -449,6 +449,8 @@ export const findingsCopy = {
   affected: "Affected objects", // S288
   noAffected: "No affected objects you can view.", // S289
   suggestedFix: "Suggested fix", // S290
+  summary: "Summary", // S864
+  kind: "Finding", // S865: names the page's section nav
   nextSteps: "Next steps", // S291
   needs: (perms: string[]) => `Needs ${perms.join(", ")}`, // S292
   copy: "Copy", // S293

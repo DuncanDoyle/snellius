@@ -233,9 +233,9 @@ it("stale data turns every state unknown", async () => {
   expect(screen.getByTestId("data-age")).toHaveTextContent("stale");
   unmount();
   mount(`/i/${ID}/findings/${FINDING}`);
-  const header = await screen.findByTestId("detail-header");
-  await waitFor(() => expect(within(header).getByText("Unknown")).toBeInTheDocument());
-  expect(within(header).queryByText("Error")).toBeNull();
+  const summary = (await screen.findByRole("heading", { name: "Summary" })).closest("section") as HTMLElement;
+  await waitFor(() => expect(within(summary).getByText("Unknown")).toBeInTheDocument());
+  expect(within(summary).queryByText("Error")).toBeNull();
   expect(screen.getByTestId("data-age")).toHaveTextContent("stale");
 });
 
@@ -541,4 +541,65 @@ it("a computed 016 says Not verified and names its rule and rule set", async () 
   expect(screen.getByText(/Computed by the UI's policy targets rule/)).toBeInTheDocument();
   expect(screen.getByText(/Rule set kgateway-2\.4\./)).toBeInTheDocument();
   expect(screen.getByText("nope", { selector: "code" })).toBeInTheDocument();
+});
+
+const FIX = {
+  title: "Create a ReferenceGrant in `store`",
+  target: { group: GW, kind: "ReferenceGrant", namespace: "store", name: "allow-shop", link: "none" as const },
+  create: true,
+  yaml: "kind: ReferenceGrant\n",
+  basis: "Gateway API: a ref to another namespace needs a ReferenceGrant in that namespace.",
+};
+const STEPS = [{ title: "See the routes", command: "kubectl get httproute -A" }];
+const navHrefs = () =>
+  within(screen.getByRole("navigation", { name: "Finding sections" }))
+    .getAllByRole("link")
+    .map((a) => a.getAttribute("href"));
+
+it("finding sections follow the design order", async () => {
+  serve((u) =>
+    u.pathname.endsWith(`/findings/${FINDING}`) ? { ...detail(), suggestedFix: FIX, nextSteps: STEPS } : undefined,
+  );
+  mount(`/i/${ID}/findings/${FINDING}`);
+  await screen.findByRole("table", { name: "Affected objects" });
+  expect(navHrefs()).toEqual([
+    "#finding-summary",
+    "#finding-details",
+    "#finding-fix",
+    "#finding-steps",
+    "#finding-affected",
+  ]);
+  // One heading per card, and each card keeps the id its URL hash points at.
+  for (const id of ["finding-summary", "finding-details", "finding-fix", "finding-steps", "finding-affected"])
+    expect(document.querySelectorAll(`#${id}`)).toHaveLength(1);
+  expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual([
+    "Summary",
+    "Details",
+    "Suggested fix",
+    "Next steps",
+    "Affected objects",
+  ]);
+});
+
+it("finding nav lists Next steps only when there are steps", async () => {
+  serve((u) => (u.pathname.endsWith(`/findings/${FINDING}`) ? { ...detail(), nextSteps: undefined } : undefined));
+  mount(`/i/${ID}/findings/${FINDING}`);
+  await screen.findByRole("table", { name: "Affected objects" });
+  expect(navHrefs()).not.toContain("#finding-steps");
+  expect(document.getElementById("finding-steps")).toBeNull();
+});
+
+it("a hash opens the fix and the steps sections", async () => {
+  serve((u) =>
+    u.pathname.endsWith(`/findings/${FINDING}`) ? { ...detail(), suggestedFix: FIX, nextSteps: STEPS } : undefined,
+  );
+  for (const id of ["finding-fix", "finding-steps"]) {
+    const { unmount } = mount(`/i/${ID}/findings/${FINDING}#${id}`);
+    await screen.findByRole("table", { name: "Affected objects" });
+    const entry = within(screen.getByRole("navigation", { name: "Finding sections" })).getByRole("link", {
+      current: "location",
+    });
+    expect(entry).toHaveAttribute("href", `#${id}`);
+    unmount();
+  }
 });

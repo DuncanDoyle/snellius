@@ -119,6 +119,8 @@ interface SuggestedFixProps {
   installId: string;
   /** The heading's id, unique per page when several fixes show. */
   headingId?: string;
+  /** Only the body, for a host that supplies the section card and its heading. */
+  bare?: boolean;
   stylesOverride?: SerializedStyles;
 }
 
@@ -126,7 +128,13 @@ interface SuggestedFixProps {
  * The one change the evidence leaves (design §7.7, §17.2): the object, the fragment's location, the YAML to copy or
  * download, and the basis. A new object is created with kubectl create, which fails on a taken name (R89).
  */
-export function SuggestedFixView({ fix, installId, headingId = "finding-fix", stylesOverride }: SuggestedFixProps) {
+export function SuggestedFixView({
+  fix,
+  installId,
+  headingId = "finding-fix",
+  bare,
+  stylesOverride,
+}: SuggestedFixProps) {
   const [copied, setCopied] = useState<string>();
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -146,9 +154,8 @@ export function SuggestedFixView({ fix, installId, headingId = "finding-fix", st
     );
   };
   const CopyIcon = copied === diagnosticsCopy.copied ? Check : Copy;
-  return (
-    <Section aria-labelledby={headingId}>
-      <h2 id={headingId}>{findingsCopy.suggestedFix}</h2>
+  const content = (
+    <>
       <Body stylesOverride={stylesOverride}>
         <p>{withCode(fix.title)}</p>
         <Facts>
@@ -196,6 +203,13 @@ export function SuggestedFixView({ fix, installId, headingId = "finding-fix", st
       <VisuallyHidden role="status" aria-live="polite">
         {copied ?? ""}
       </VisuallyHidden>
+    </>
+  );
+  if (bare) return content;
+  return (
+    <Section aria-labelledby={headingId}>
+      <h2 id={headingId}>{findingsCopy.suggestedFix}</h2>
+      {content}
     </Section>
   );
 }
