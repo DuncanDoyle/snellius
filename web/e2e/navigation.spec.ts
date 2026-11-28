@@ -1,6 +1,13 @@
 import { type Browser, expect, type Locator, type Page, test } from "@playwright/test";
 import type { FindingList } from "../packages/shell/src/api/diagTypes";
-import { gatewayCopy, listCopy, navCopy, routeCopy, routeStateCopy } from "../packages/shell/src/copy/explorer";
+import {
+  gatewayCopy,
+  listCopy,
+  navCopy,
+  routeCopy,
+  routeStateCopy,
+  sectionsCopy,
+} from "../packages/shell/src/copy/explorer";
 import { breadcrumbsCopy } from "../packages/shell/src/copy/navigation";
 
 // The shell's navigation over test/e2e/fixtures/explorer.yaml: the `via` trail (D-035), the object header and the
@@ -236,41 +243,63 @@ for (const width of WIDTHS) {
       expectFluid(await frame(page));
     });
 
-    // The resource page has no Overview columns, so only the three explorer detail pages.
+    // The resource page has no section nav, so only the three explorer detail pages.
     for (const p of CORE_PAGES.slice(0, 3)) {
-      const two = width >= 1600;
-      test(`${p.name} page is ${two ? "two columns" : "one column"} and fills the width up to 2400 px`, async ({
+      // Below 960 px the section nav folds into the "Sections" control (D-148).
+      const narrow = width < 960;
+      test(`${p.name} page has one column of sections ${narrow ? "under the Sections control" : "beside the section nav"} and fills the width up to 2400 px`, async ({
         page,
       }) => {
         await page.goto(p.url);
         await expect(page.getByTestId("detail-skeleton")).toHaveCount(0);
-        await expect(page.getByTestId("detail-columns")).toBeVisible();
-        await expect(page.getByTestId("detail-side")).toHaveCount(two ? 1 : 0);
-        const [cols, main, side] = await Promise.all([
-          page.getByTestId("detail-columns").boundingBox(),
-          page.getByTestId("detail-main").boundingBox(),
-          two ? page.getByTestId("detail-side").boundingBox() : Promise.resolve(null),
-        ]);
-        if (two) {
-          // The side sits to the right of the main column, 320-400 px wide, so short identifiers never truncate.
-          expect(side && main && side.x >= main.x + main.width, "the side is beside the main").toBe(true);
-          expect(side?.width ?? 0).toBeGreaterThanOrEqual(320);
-          expect(side?.width ?? 0).toBeLessThanOrEqual(400);
-          if (p.name === "Gateway") {
-            // Beside a side column the Listeners table keeps its short identifiers whole: name, port, protocol.
-            const cut = await page
-              .getByRole("table", { name: gatewayCopy.listeners })
-              .locator(
-                "tr[data-row] > td:is(:nth-child(3), :nth-child(4), :nth-child(5)), tr[data-row] > td:is(:nth-child(3), :nth-child(5)) *",
-              )
-              .evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent));
-            expect(cut).toEqual([]);
-          }
-        } else
+        const sections = page.getByTestId("detail-sections");
+        await expect(sections).toBeVisible();
+        // No right-hand column at any width.
+        await expect(page.getByTestId("detail-side")).toHaveCount(0);
+        const nav = sections.getByRole("navigation", { name: sectionsCopy.nav(p.name) });
+        const toggle = sections.getByRole("button", { name: sectionsCopy.sections });
+        const box = await sections.boundingBox();
+        const cards = await sections
+          .locator(":scope > div > section")
+          .evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => ({ x: r.x, width: r.width })));
+        expect(cards.length, "section cards").toBeGreaterThan(1);
+        if (!box) throw new Error("no layout box for the sections");
+        // One column: every card starts at the same x and runs to the right edge of the sections.
+        for (const c of cards) {
+          expect(Math.abs(c.x - (cards[0]?.x ?? -2)), "cards share one column").toBeLessThanOrEqual(1);
+          expect(Math.abs(c.x + c.width - (box.x + box.width)), "cards fill the row").toBeLessThanOrEqual(1);
+        }
+        if (narrow) {
+          await expect(toggle).toBeVisible();
+          await expect(nav).toHaveCount(0);
+        } else {
+          await expect(nav).toBeVisible();
+          await expect(toggle).toHaveCount(0);
+          const n = await nav.boundingBox();
+          expect(n && n.x + n.width <= (cards[0]?.x ?? 0), "the nav is left of the cards").toBe(true);
+        }
+        if (p.name === "Gateway") {
+          // The Listeners table keeps its short identifiers whole: name, port, protocol.
+          const cut = await page
+            .getByRole("table", { name: gatewayCopy.listeners })
+            .locator(
+              "tr[data-row] > td:is(:nth-child(3), :nth-child(4), :nth-child(5)), tr[data-row] > td:is(:nth-child(3), :nth-child(5)) *",
+            )
+            .evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent));
+          expect(cut).toEqual([]);
+        }
+        // Each route table keeps room for its route names, however many columns it has.
+        for (const name of [gatewayCopy.attachedRoutes, gatewayCopy.notAttached]) {
+          const t = page.getByRole("table", { name, exact: true });
+          if ((await t.count()) === 0) continue;
+          const widths = await (await dataRows(t))
+            .locator("td a")
+            .evaluateAll((els) => els.map((e) => [e.textContent, e.getBoundingClientRect().width] as const));
           expect(
-            Math.abs((main?.width ?? 0) - (cols?.width ?? -2)),
-            "the main column takes the whole row",
-          ).toBeLessThanOrEqual(1);
+            widths.filter(([, w]) => w < 40),
+            `${name}: route names with no room`,
+          ).toEqual([]);
+        }
         expectFluid(await frame(page));
       });
     }
