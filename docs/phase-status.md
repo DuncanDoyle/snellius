@@ -4,7 +4,7 @@
 Phase: 9 — Search & Route Tester
 Base: 31c50949c97ab3c0144e856e9d4aeab25b00d92e (main after `v0.9.1` merged into `duncandoyle/phase9Design`)
 Docs: docs/phases/phase-9/
-Status: design and plan drafted 2026-11-28 (`design.md`, `implementation-plan.md`, D-139 … D-147 proposed); Codex design review next, then the user's approval. No code before approval.
+Status: design and plan revised after the Codex design review (`reviews/design-codex.md`: 14 findings, 4 P1, 8 P2, 1 P3, 1 P4, all accepted); D-139 … D-147 proposed. Waiting for the user's approval and answers to design §16 (5 open questions). No code before approval.
 Author: claude
 
 ## Sub-phase

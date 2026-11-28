@@ -1891,14 +1891,14 @@ Measured on the reference machine, 5 runs per world:
 ## D-140 — The kgateway strategy is M-1 view D (2026-11-28, Phase 9)
 **Status:** proposed (Phase 9 design §4.4)
 
-**Decision:** The kgateway strategy's order and request matching become M-1 view D in the program's mirror register: kgateway `translator/routeutils/sortable_route.go` and the listener translator's per-host grouping, per tag, kgateway 2.3–2.5. It meets the mirror rules as design §4.4 states: conformance through `kgateway-route-conformance` (D-141), runtime checks through status and the test request (the Envoy table in Phase 12), the "Predicted" label, and retirement with U2 and U10.
+**Decision:** The kgateway strategy's order and request matching become M-1 view D in the program's mirror register: kgateway `translator/routeutils/sortable_route.go` and the listener translator's per-host grouping, per tag, kgateway 2.3–2.5. Rules 1, 2 and 4 are met as design §4.4 states: registration, conformance through `kgateway-route-conformance` (D-141) plus view C's matcher against kgateway's translator goldens, and the "Predicted" label. **Rule 3 is not met in Phase 9**: a test response carries no route identity, and the only controller output for route order is the proxy's route table (Phase 12). View D ships only with an explicit program exception that defers rule 3 to Phase 12 (design review #5). Rule 5: retirement by coverage of the observed table for supported installs and viewers, helped by U2 and U10, or a later decision to drop config-only prediction (design review #14).
 
-**Consequences:** A program commit after design approval (the user approves it). The user's view, recorded: implementing the documented composition rules is not copying controller logic, but the program's mirror rules still apply.
+**Consequences:** A program commit after design approval, including the rule 3 exception (the user approves it). The user's view, recorded: implementing the documented composition rules is not copying controller logic, but the program's mirror rules still apply.
 
 ## D-141 — `kgateway-route-conformance` proves the kgateway strategy (2026-11-28, Phase 9)
 **Status:** proposed (user, 2026-11-28: separate public repo and its name; Phase 9 design §9)
 
-**Decision:** Request-level cases (resources, requests, expected listener, route, rule, optional delegation chain and backend, or an outcome) live in https://github.com/DuncanDoyle/kgateway-route-conformance with a versioned schema, a Go loader and a reference runner that proves each case on kind per kgateway minor, using `EnableRouteSourceMetadata` where the minor has it and a distinct echo backend per rule. The repo holds no predictor. Expectation changes need a reason and runner evidence. Snellius runs the same cases against its strategies in unit tests.
+**Decision:** Request-level cases (resources, requests, expected listener, route, rule, optional delegation chain and backend, or an outcome) live in https://github.com/DuncanDoyle/kgateway-route-conformance with a versioned schema, a Go loader and a reference runner that proves each case on kind per kgateway minor. Declared rule identity comes from the fixture: an echo backend unique to each declared forwarding rule, or a distinct response for a non-forwarding rule; `route_source` metadata (where the minor has it) is supporting evidence read through xdsview (P-001); a request two rules could explain is "unprovable" (design review #6). The repo holds no predictor. Expectation changes need a reason and runner evidence. Snellius runs the same cases against its strategies in unit tests.
 
 **Consequences:** M-1 rule 2 is met for view C (D-128 item 2) and view D. The corpus is a new program provider (edge E16, proposed). Other consumers (xdsview, kgwctl) and kgateway upstream can reuse it.
 
@@ -1907,12 +1907,12 @@ Measured on the reference machine, 5 runs per world:
 ## D-142 — No nearest-version fallback for predictions (2026-11-28, Phase 9)
 **Status:** proposed (Codex, 2026-11-28; Phase 9 design §3.2)
 
-**Decision:** An unknown or unverified kgateway minor never gets the kgateway strategy. The Gateway API strategy answers only when no candidate in the virtual host uses delegation, route weights or regex paths; otherwise "Can't predict: rules not verified for <minor>". D-058's nearest-set fallback stays for the computed views.
+**Decision:** On a kgateway install, an unknown or unverified minor gets no prediction: "Can't predict: rules not verified for <minor>". The Gateway API strategy does not stand in, because minors order even plain HTTPRoutes differently (2.5 adds route hostname specificity; design review #3). D-058's nearest-set fallback stays for the computed views.
 
 ## D-143 — Predictions are derived: full read only in secure mode (2026-11-28, Phase 9)
 **Status:** proposed (our call; Phase 9 design §8; follows D-114 and D-085)
 
-**Decision:** A prediction depends on every route that could compete, including hidden ones. In secure mode a viewer without the full read gets one uniform "Prediction unavailable for your access", decided by permissions alone. Route search shows visible rows only (D-077) and no ordering. Hidden-change tests cover `predict` and `route-search`.
+**Decision:** A prediction depends on every route that could compete, including hidden ones. In secure mode a viewer without the full read gets one uniform "Prediction unavailable for your access", decided by permissions alone. Route search for that viewer uses the declared matches of routes they can read, never view C's effective matches, which can inherit from a hidden parent (design review #4). Hidden-change tests cover `predict` and `route-search` for hidden routes, delegation parents, Gateways and ListenerSets.
 
 **Consequences:** Application teams in secure mode can search, copy as curl and send (with D-144's permission), but get no prediction until a per-viewer design proves read access to the whole candidate scope. Open question 1 in the design.
 
@@ -1920,6 +1920,8 @@ Measured on the reference machine, 5 runs per world:
 **Status:** proposed (user, 2026-11-28: methods and permission; guard values our call; Phase 9 design §7)
 
 **Decision:** GET, HEAD and OPTIONS only in Phase 9. In secure mode the viewer needs `create` on `pods/portforward` in the proxy's namespace, checked by SubjectAccessReview; this matches "Copy as curl", so Snellius grants nothing the viewer lacks. Off by default; connect timeout 2 s, total 10 s, body cap 64 KiB; no redirects; audit without header values.
+
+Snellius resolves the target Service itself; responses and the curl command name the Service only for a viewer who can read it. A live response is an observation of real traffic, outside D-085 point 2: the viewer gets the same bytes through port-forward with the same permission (design review #9; open question 5).
 
 **Consequences:** No new chart RBAC: the check uses the viewer's identity. Network egress from the UI pod to the proxy Services is the only new surface (D-064).
 
@@ -1940,4 +1942,4 @@ Measured on the reference machine, 5 runs per world:
 
 **Finding:** These IDs still carry ranks (`pkg/health/checks.go:516-533`, `identity.go:184-221`, `computed.go:64-65`, `backend.go:52-54`): status-only owners (route parents and policy ancestors outside policy-ancestor 002, `rankOwners`); KGWUI-002 condition types on other resources; the KGWUI-015 (rule replaced) match index; KGWUI-011's computed parent; KGWUI-012 check keys; every computed finding's check kind and key; Backend 002 (`ordinal(1)`, a constant, so stable).
 
-**Proposed handling:** D-132's pattern per case: hash the discriminator where every hashed value is visible to every viewer shown the finding; keep a rank only where D-040's privacy reason still applies, and record that as P-011's documented exception. This is not route-tester work: a separate stabilization sub-phase after Phase 9, or a carry-over, as the user decides. Phase 9 adds no ranked ID.
+**Proposed handling:** D-132's pattern per case: hash the discriminator where every hashed value is visible to every viewer shown the finding; keep a rank only where D-040's privacy reason still applies, and record each kept rank as its own P-011 exception, with its privacy reason and what rekeys it (design review #11). This is not route-tester work: a separate stabilization sub-phase after Phase 9, or a carry-over, as the user decides. Phase 9 adds no ranked ID.
