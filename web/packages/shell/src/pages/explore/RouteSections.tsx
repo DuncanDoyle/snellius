@@ -4,7 +4,7 @@ import { useRoutes } from "../../api/exploreHooks";
 import type { Attachment, LinkedRef, Listener, ParentSummary, RouteCounts, RouteRow } from "../../api/types";
 import { columnCopy, gatewayCopy, listenerCopy, viewACopy } from "../../copy/explorer";
 import { ComputedBadge, ComputedChip, computedTooltip } from "../../explore/ComputedBadge";
-import { FOOTER_H, type ObjectColumn, ROW_H } from "../../explore/ObjectTable";
+import { FOOTER_H, NAME_MIN_W, type ObjectColumn, ROW_H } from "../../explore/ObjectTable";
 import { signalColumns } from "../../explore/RouteSignals";
 import { HealthBadge } from "../../health/HealthBadge";
 import { installPath } from "../../shell/paths";
@@ -91,7 +91,12 @@ function baseColumns(installId: string): ObjectColumn<RouteRow>[] {
   return [
     { id: "health", header: columnCopy.status, width: "120px", cell: (r) => <HealthBadge state={r.health} /> },
     ...signalColumns<RouteRow>(),
-    { id: "name", header: columnCopy.route, cell: (r) => <NameCell r={r.ref} installId={installId} /> },
+    {
+      id: "name",
+      header: columnCopy.route,
+      minWidth: NAME_MIN_W,
+      cell: (r) => <NameCell r={r.ref} installId={installId} />,
+    },
     { id: "kind", header: columnCopy.kind, width: "120px", secondary: true, cell: (r) => r.ref.kind },
     {
       id: "hostnames",

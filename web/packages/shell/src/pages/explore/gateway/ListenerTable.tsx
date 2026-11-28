@@ -1,7 +1,7 @@
 import { css, type SerializedStyles } from "@emotion/react";
 import styled from "@emotion/styled";
 import { ChevronDown, ChevronRight, Info } from "lucide-react";
-import { Fragment, type ReactNode, useContext, useState } from "react";
+import { Fragment, type ReactNode, useContext, useRef, useState } from "react";
 import type { AllowedRoutes, LabelSelector, Listener, PolicyRelation } from "../../../api/types";
 import { columnCopy, detailCopy, diagnosticsCopy, listCopy, listenerCopy, viewACopy } from "../../../copy/explorer";
 import { relationsCopy } from "../../../copy/policies";
@@ -14,7 +14,7 @@ import { StaleView } from "../../../health/staleView";
 import { stateLabel } from "../../../health/state";
 import { ResourceName } from "../../../resource/ResourceName";
 import { Tooltip } from "../../../shell/Tooltip";
-import { useMedia } from "../../../shell/useMedia";
+import { useMedia, useWidth } from "../../../shell/useMedia";
 import { VisuallyHidden } from "../../../states/VisuallyHidden";
 import type { HealthState } from "../../../theme/tokens";
 import { PolicyRelationGroup } from "../../policies/PolicyRelationsSection";
@@ -71,6 +71,8 @@ const tableExtra = css`
 
 // region Helpers
 const NARROW = "(max-width: 899px)";
+/** What the wide layout needs beyond its fixed columns: 80 px each for hostname, TLS and allowed routes. */
+const WIDE_ROOM = 3 * 80;
 const RANK: Record<HealthState, number> = { healthy: 0, unknown: 1, warning: 2, error: 3 };
 
 function selectorText(s: LabelSelector): string {
@@ -205,7 +207,8 @@ interface ListenerTableProps {
  * Conditions and the policies naming the listener open per row; open rows are kept by name, so polling never collapses them.
  */
 export function ListenerTable({ listeners, generation, installId, policies, stylesOverride }: ListenerTableProps) {
-  const narrow = useMedia(NARROW);
+  const table = useRef<HTMLTableElement>(null);
+  const width = useWidth(table);
   const stale = useContext(StaleView);
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const toggle = (name: string) =>
@@ -217,10 +220,14 @@ export function ListenerTable({ listeners, generation, installId, policies, styl
   // Below 900 px hostname, TLS and allowed routes move into the expanded row, as list secondary columns do.
   // A server before 2.3 sends no computed facts, so the column is left out.
   const computed = listeners.find((l) => l.computed)?.computed;
+  // A section card is narrower than the window, so the table's own width decides as well.
+  // The wide colgroup below: expand, status, listener, port, protocol, attached routes, routes.
+  const fixed = 40 + 120 + 130 + 64 + 88 + (computed ? 116 + 172 : 130);
+  const narrow = useMedia(NARROW) || (width !== undefined && width < fixed + WIDE_ROOM);
   const cols = (narrow ? 6 : 9) + (computed ? 1 : 0);
   return (
     <TableFrame stylesOverride={css`${tableExtra}${stylesOverride}`}>
-      <TableStyles aria-label={listenerCopy.table}>
+      <TableStyles ref={table} aria-label={listenerCopy.table}>
         <colgroup>
           <col style={{ width: "40px" }} />
           <col style={{ width: "120px" }} />

@@ -1442,3 +1442,72 @@ it("the Listeners table fits a section card of a 720 px window, so the page neve
   expect(within(t).getAllByRole("columnheader").at(-1)).toHaveTextContent("Routes");
   expect(autoColumnWidth(t, 652)).toBeGreaterThanOrEqual(96);
 });
+
+/** Tables measure as width px wide, as a ResizeObserver would report them. */
+function tablesMeasure(width: number) {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(private cb: ResizeObserverCallback) {}
+      observe(target: Element) {
+        this.cb([{ target, contentRect: { width } } as unknown as ResizeObserverEntry], this as never);
+      }
+      disconnect() {}
+    },
+  );
+}
+
+/** The width of the column under header in a fixed-layout table width px wide, from its <col> widths. */
+function columnWidth(t: HTMLElement, header: string, width: number) {
+  const i = within(t)
+    .getAllByRole("columnheader")
+    .findIndex((h) => h.textContent === header);
+  const w = (t.querySelectorAll("col")[i] as HTMLElement).style.width;
+  return w ? Number.parseFloat(w) : autoColumnWidth(t, width);
+}
+
+// Card table widths beside the section nav: 736 px in a 1000 px window, 836 px in 1100 (D-148).
+it.each([736, 836])("route tables in a %i px card move Kind and Hostnames out and keep Route readable", async (w) => {
+  tablesMeasure(w);
+  serve(api());
+  mount(GW_PATH);
+  for (const name of ["Attached routes", "Routes not attached"]) {
+    const t = await screen.findByRole("table", { name });
+    await waitFor(() => expect(within(t).getAllByRole("row").length).toBeGreaterThan(1));
+    const heads = within(t)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent);
+    expect(columnWidth(t, "Route", w), name).toBeGreaterThanOrEqual(120);
+    // The attached table fits whole in 836 px; everything else moves its secondary columns into the row.
+    const whole = name === "Attached routes" && w === 836;
+    expect(heads.includes("Kind"), name).toBe(whole);
+  }
+});
+
+it("in a 720 px window the failed-route table keeps Route at its least width", async () => {
+  vi.stubGlobal("matchMedia", (q: string) => ({
+    matches: 720 <= Number(/max-width:\s*(\d+)px/.exec(q)?.[1] ?? -1),
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+  tablesMeasure(652);
+  serve(api());
+  mount(GW_PATH);
+  const t = await screen.findByRole("table", { name: "Routes not attached" });
+  await within(t).findByText("rejected");
+  expect(columnWidth(t, "Route", 652)).toBe(120);
+});
+
+it("the Listeners table moves hostname, TLS and allowed routes out in a 736 px card, not in 1016", async () => {
+  for (const [w, wide] of [
+    [736, false],
+    [1016, true],
+  ] as const) {
+    tablesMeasure(w);
+    serve(api());
+    const { unmount } = mount(GW_PATH);
+    const t = await screen.findByRole("table", { name: "Listeners" });
+    expect(within(t).queryByRole("columnheader", { name: "Hostname" }) !== null, `${w} px`).toBe(wide);
+    unmount();
+  }
+});

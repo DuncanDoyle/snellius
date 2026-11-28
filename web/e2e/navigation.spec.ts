@@ -1,6 +1,7 @@
 import { type Browser, expect, type Locator, type Page, test } from "@playwright/test";
 import type { FindingList } from "../packages/shell/src/api/diagTypes";
 import {
+  columnCopy,
   gatewayCopy,
   listCopy,
   navCopy,
@@ -200,7 +201,11 @@ for (const p of CORE_PAGES) {
 
 // Layout (design §8.7, §17.6, D-035): fluid up to 2400 px and no page scroll. Core detail pages are two columns
 // from 1600 px (conditions and related objects beside the structure) and one column below.
-const WIDTHS = [720, 1280, 1600, 3008];
+// 1000 and 1100 px: section cards beside the nav are narrower than the window suggests (D-148).
+const WIDTHS = [720, 1000, 1100, 1280, 1600, 3008];
+const LONG_ROUTE = "shop/a-route-with-a-deliberately-long-name-that-must-not-wrap-or-shift-the-table";
+/** ObjectTable's NAME_MIN_W: the least width of a Route column. */
+const NAME_MIN_W = 120;
 
 /** The page frame's width, the width its parent gives it, whether the page scrolls sideways, and where the
  * header's content box ends against the right edge of its controls outside the scrolling install nav. */
@@ -288,17 +293,22 @@ for (const width of WIDTHS) {
             .evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent));
           expect(cut).toEqual([]);
         }
-        // Each route table keeps room for its route names, however many columns it has.
+        // Each route table keeps its Route column at least NAME_MIN_W wide; a long name is cut and shown in full on hover.
         for (const name of [gatewayCopy.attachedRoutes, gatewayCopy.notAttached]) {
           const t = page.getByRole("table", { name, exact: true });
           if ((await t.count()) === 0) continue;
-          const widths = await (await dataRows(t))
-            .locator("td a")
-            .evaluateAll((els) => els.map((e) => [e.textContent, e.getBoundingClientRect().width] as const));
-          expect(
-            widths.filter(([, w]) => w < 40),
-            `${name}: route names with no room`,
-          ).toEqual([]);
+          await dataRows(t);
+          const route = await t.getByRole("columnheader", { name: columnCopy.route, exact: true }).boundingBox();
+          expect(route?.width ?? 0, `${name}: Route column`).toBeGreaterThanOrEqual(NAME_MIN_W - 1);
+          const long = t.getByRole("link", { name: LONG_ROUTE });
+          if (name !== gatewayCopy.attachedRoutes || (await long.count()) === 0) continue;
+          const cut = await long.evaluate((a) =>
+            [a, ...a.querySelectorAll("*")].some((e) => e.scrollWidth > e.clientWidth + 1),
+          );
+          if (!cut) continue;
+          await long.hover();
+          await expect(page.getByRole("tooltip")).toHaveText(LONG_ROUTE);
+          await page.mouse.move(0, 0);
         }
         expectFluid(await frame(page));
       });
