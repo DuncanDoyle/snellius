@@ -152,19 +152,22 @@ it("side sections render after the core content, on the Overview tab only", asyn
   });
   const section = await screen.findByRole("region", { name: "Notes" });
   expect(section).toHaveTextContent("notes for edge");
-  // Contributed sections sit in the side column.
-  expect(section.closest("[data-testid=detail-side]")).not.toBeNull();
+  // Contributed sections land in the ordered sections, not a side column.
+  expect(section.closest("[data-testid=detail-sections]")).not.toBeNull();
+  expect(screen.queryByTestId("detail-side")).toBeNull();
   const listeners = screen.getByRole("table", { name: "Listeners" });
   expect(listeners.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   await userEvent.setup().click(screen.getByRole("tab", { name: "YAML" }));
   expect(screen.queryByRole("region", { name: "Notes" })).not.toBeInTheDocument();
 });
 
-it("the skeleton holds the side column's place only where sections are contributed", async () => {
+it("the skeleton holds the sections layout, with no side column", async () => {
   mountGateway({ sideSections: { [`${GW}/Gateway`]: [{ id: "notes", title: "Notes", render: () => <p>n</p> }] } });
-  expect(within(screen.getByTestId("detail-skeleton")).getByTestId("detail-side")).toBeInTheDocument();
+  const skeleton = screen.getByTestId("detail-skeleton");
+  expect(within(skeleton).getByTestId("detail-sections-skeleton")).toBeInTheDocument();
+  expect(within(skeleton).queryByTestId("detail-side")).toBeNull();
   expect(await screen.findByRole("region", { name: "Notes" })).toBeInTheDocument();
-  expect(screen.getByTestId("detail-side")).toBeInTheDocument();
+  expect(screen.queryByTestId("detail-side")).toBeNull();
 });
 
 it("a slot with no contribution renders nothing and takes no space", async () => {

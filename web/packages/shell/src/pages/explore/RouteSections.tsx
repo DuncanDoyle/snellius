@@ -10,7 +10,7 @@ import { HealthBadge } from "../../health/HealthBadge";
 import { installPath } from "../../shell/paths";
 import { Chip, InlineLink } from "../../states/controls";
 import { Shimmer } from "../../states/Shimmer";
-import { expectedRows, refParam, Section, SubList } from "./detailParts";
+import { expectedRows, refParam, SubList } from "./detailParts";
 import { attachmentLabel, Muted, NameCell, OneLine } from "./listParts";
 
 // region Styles
@@ -214,16 +214,24 @@ export interface ListenerPick {
   ruleSetLabel?: string;
 }
 
-interface RouteSectionsProps {
+/** The attached-routes card's title: the listener selection renames it. */
+export function attachedRoutesTitle(sel?: string): string {
+  return !sel
+    ? gatewayCopy.attachedRoutes
+    : sel === UNPLACED
+      ? viewACopy.notPlacedTitle
+      : viewACopy.routesOnListener(sel);
+}
+
+interface AttachedRoutesProps {
   installId: string;
   parent: LinkedRef;
   counts: RouteCounts;
   pick?: ListenerPick;
 }
 
-/** Attached routes, optionally per listener, and routes that failed to attach with Not accepted, Waiting and Unwatched sub-filters. */
-export function RouteSections({ installId, parent, counts, pick }: RouteSectionsProps) {
-  const [failed, setFailed] = useState<Failed>("not-accepted");
+/** Body of the attached-routes card, optionally per listener; the card supplies the heading. */
+export function AttachedRoutesBody({ installId, parent, counts, pick }: AttachedRoutesProps) {
   const p = refParam(parent);
   const sel = pick?.selected;
   const listener = pick?.listeners.find((l) => l.name === sel);
@@ -234,9 +242,7 @@ export function RouteSections({ installId, parent, counts, pick }: RouteSections
     (): Record<string, string> => (sel ? { parent: p, listener: sel } : { parent: p, attachment: "accepted" }),
     [p, sel],
   );
-  const failedQuery = useMemo(() => ({ parent: p, attachment: failed }), [p, failed]);
   const base = useMemo(() => baseColumns(installId), [installId]);
-  const failedCols = useMemo(() => [...base, whyColumn(parent)], [base, parent]);
   const attachedCols = useMemo(
     () =>
       !sel
@@ -246,96 +252,110 @@ export function RouteSections({ installId, parent, counts, pick }: RouteSections
           : [...base, hostnamesColumn(parent, sel, pick?.ruleSet ?? "", pick?.ruleSetLabel)],
     [base, parent, sel, pick?.ruleSet, pick?.ruleSetLabel],
   );
-  const title = !sel
-    ? gatewayCopy.attachedRoutes
-    : sel === UNPLACED
-      ? viewACopy.notPlacedTitle
-      : viewACopy.routesOnListener(sel);
+  const title = attachedRoutesTitle(sel);
   const known = listener?.computed && !hidden(listener) ? listener.computedRoutes : undefined;
   return (
     <>
-      <Section aria-labelledby="attached-routes">
-        <h2 id="attached-routes">
-          {title} {sel ? null : <span className="note">{counts.accepted}</span>}
-        </h2>
-        {pick?.ready ? (
-          <Bar role="group" aria-label={viewACopy.listenerGroup} data-testid="listener-bar">
-            <Chip type="button" aria-pressed={!sel} onClick={() => pick.onSelect(undefined)}>
-              {viewACopy.allListeners}
-            </Chip>
-            {pick.listeners.map((l) => (
-              <Chip key={l.name} type="button" aria-pressed={sel === l.name} onClick={() => pick.onSelect(l.name)}>
-                {l.name}
-              </Chip>
-            ))}
-            <Chip type="button" aria-pressed={sel === UNPLACED} onClick={() => pick.onSelect(UNPLACED)}>
-              {viewACopy.notPlaced}
-            </Chip>
-          </Bar>
-        ) : pick ? (
-          // /meta is loading: keep the bar's place.
-          <Bar aria-hidden="true" data-testid="listener-bar" />
-        ) : null}
-        {pick && !pick.ready && sel ? (
-          // A selected listener waits for /meta, at the height its table will have.
-          <Shimmer h={expectedRows(sel === UNPLACED ? 1 : (known ?? 1)) * ROW_H + HEAD_H + FOOTER_H + 2} />
-        ) : absent || (listener?.computed && hidden(listener)) ? (
-          <NotKnown data-testid="listener-routes-unknown">
-            {absent ? (
-              <span>{viewACopy.noSuchListener(parent.kind, sel)}</span>
-            ) : listener?.computed ? (
-              <>
-                <ComputedBadge computed={listener.computed} />
-                <span>{viewACopy.cannotList}</span>
-              </>
-            ) : null}
-            <InlineLink to={`${installPath(installId, "routes")}?${new URLSearchParams({ parent: p })}`}>
-              {viewACopy.allRoutesOf(parent.kind)}
-            </InlineLink>
-          </NotKnown>
-        ) : (
-          <SubList
-            installId={installId}
-            label={title}
-            noun={NOUN}
-            useList={useRoutes}
-            query={attachedQuery}
-            columns={attachedCols}
-            rowRef={rowRef}
-            emptyTitle={
-              !sel
-                ? gatewayCopy.noRoutesAttached
-                : sel === UNPLACED
-                  ? viewACopy.noRoutesNotPlaced
-                  : viewACopy.noRoutesOnListener
-            }
-            skeletonRows={expectedRows(sel ? (known ?? 1) : counts.accepted)}
-            // The install-wide hidden-routes line shows once, under the failed table.
-            showDenied={false}
-          />
-        )}
-      </Section>
-      <Section aria-labelledby="failed-routes">
-        <h2 id="failed-routes">{gatewayCopy.notAttached}</h2>
-        <Bar role="group" aria-label={gatewayCopy.notAttachedGroup}>
-          {FAILED.map((f) => (
-            <Chip key={f.value} type="button" aria-pressed={failed === f.value} onClick={() => setFailed(f.value)}>
-              {f.label} ({counts[f.count]})
+      {pick?.ready ? (
+        <Bar role="group" aria-label={viewACopy.listenerGroup} data-testid="listener-bar">
+          <Chip type="button" aria-pressed={!sel} onClick={() => pick.onSelect(undefined)}>
+            {viewACopy.allListeners}
+          </Chip>
+          {pick.listeners.map((l) => (
+            <Chip key={l.name} type="button" aria-pressed={sel === l.name} onClick={() => pick.onSelect(l.name)}>
+              {l.name}
             </Chip>
           ))}
+          <Chip type="button" aria-pressed={sel === UNPLACED} onClick={() => pick.onSelect(UNPLACED)}>
+            {viewACopy.notPlaced}
+          </Chip>
         </Bar>
+      ) : pick ? (
+        // /meta is loading: keep the bar's place.
+        <Bar aria-hidden="true" data-testid="listener-bar" />
+      ) : null}
+      {pick && !pick.ready && sel ? (
+        // A selected listener waits for /meta, at the height its table will have.
+        <Shimmer h={expectedRows(sel === UNPLACED ? 1 : (known ?? 1)) * ROW_H + HEAD_H + FOOTER_H + 2} />
+      ) : absent || (listener?.computed && hidden(listener)) ? (
+        <NotKnown data-testid="listener-routes-unknown">
+          {absent ? (
+            <span>{viewACopy.noSuchListener(parent.kind, sel)}</span>
+          ) : listener?.computed ? (
+            <>
+              <ComputedBadge computed={listener.computed} />
+              <span>{viewACopy.cannotList}</span>
+            </>
+          ) : null}
+          <InlineLink to={`${installPath(installId, "routes")}?${new URLSearchParams({ parent: p })}`}>
+            {viewACopy.allRoutesOf(parent.kind)}
+          </InlineLink>
+        </NotKnown>
+      ) : (
         <SubList
           installId={installId}
-          label={gatewayCopy.notAttached}
+          label={title}
           noun={NOUN}
           useList={useRoutes}
-          query={failedQuery}
-          columns={failedCols}
+          query={attachedQuery}
+          columns={attachedCols}
           rowRef={rowRef}
-          emptyTitle={gatewayCopy.noRoutesInState}
-          skeletonRows={expectedRows(counts[FAILED.find((f) => f.value === failed)?.count ?? "notAccepted"])}
+          emptyTitle={
+            !sel
+              ? gatewayCopy.noRoutesAttached
+              : sel === UNPLACED
+                ? viewACopy.noRoutesNotPlaced
+                : viewACopy.noRoutesOnListener
+          }
+          skeletonRows={expectedRows(sel ? (known ?? 1) : counts.accepted)}
+          // The install-wide hidden-routes line shows once, under the failed table.
+          showDenied={false}
         />
-      </Section>
+      )}
+    </>
+  );
+}
+
+/** The routes that failed to attach, with Not accepted, Waiting and Unwatched sub-filters. */
+export function failedRoutesCount(c: RouteCounts): number {
+  return c.notAccepted + c.pending + c.unwatched;
+}
+
+/** Body of the not-attached card. */
+export function FailedRoutesBody({
+  installId,
+  parent,
+  counts,
+}: {
+  installId: string;
+  parent: LinkedRef;
+  counts: RouteCounts;
+}) {
+  const [failed, setFailed] = useState<Failed>("not-accepted");
+  const p = refParam(parent);
+  const failedQuery = useMemo(() => ({ parent: p, attachment: failed }), [p, failed]);
+  const base = useMemo(() => baseColumns(installId), [installId]);
+  const failedCols = useMemo(() => [...base, whyColumn(parent)], [base, parent]);
+  return (
+    <>
+      <Bar role="group" aria-label={gatewayCopy.notAttachedGroup}>
+        {FAILED.map((f) => (
+          <Chip key={f.value} type="button" aria-pressed={failed === f.value} onClick={() => setFailed(f.value)}>
+            {f.label} ({counts[f.count]})
+          </Chip>
+        ))}
+      </Bar>
+      <SubList
+        installId={installId}
+        label={gatewayCopy.notAttached}
+        noun={NOUN}
+        useList={useRoutes}
+        query={failedQuery}
+        columns={failedCols}
+        rowRef={rowRef}
+        emptyTitle={gatewayCopy.noRoutesInState}
+        skeletonRows={expectedRows(counts[FAILED.find((f) => f.value === failed)?.count ?? "notAccepted"])}
+      />
     </>
   );
 }

@@ -412,7 +412,7 @@ it("ListenerSet page says when the parent Gateway is missing", async () => {
     serve(api({ ls: body }));
     const view = mount(LS_PATH("na"));
     // Hidden and absent read alike, so the page says "not available", never "not found" (design §7.3).
-    const parent = await screen.findByRole("region", { name: "Parent" });
+    const parent = await screen.findByRole("region", { name: "Reached through" });
     expect(within(parent).getByText("Not available").closest("dd")).toHaveTextContent("infra/edge");
     expect(within(screen.getByTestId("problem-parent")).getByText("Not available")).toBeInTheDocument();
     expect(screen.queryByText(/not found/i)).toBeNull();
@@ -426,7 +426,7 @@ it("ListenerSet page says when the parent Gateway is missing", async () => {
 it("a found parent Gateway links to its page", async () => {
   serve(api({ ls: ls(lsInvalidGolden) }));
   mount(LS_PATH("partial"));
-  const parent = await screen.findByRole("region", { name: "Parent" });
+  const parent = await screen.findByRole("region", { name: "Reached through" });
   expect(hrefPath(within(parent).getByRole("link", { name: "infra/edge" }))).toBe(`/i/${ID}/gateways/infra/edge`);
   expect(screen.queryByText("Not available")).toBeNull();
 });
@@ -604,13 +604,12 @@ it("the header and tabs keep their size from loading to loaded", async () => {
   const tabs = () => getComputedStyle(screen.getByTestId("detail-tabs")).height;
   expect(header()).toBe(`${HEADER_H}px`);
   expect(tabs()).toBe(`${TABS_H}px`);
-  // No contributed sections: the skeleton and the loaded page are both one column.
-  const columns = () => screen.getByTestId("detail-columns");
-  const split = columns().className;
+  // The skeleton holds the sections layout, and there is no side column before or after.
+  expect(screen.getByTestId("detail-sections-skeleton")).toBeInTheDocument();
   expect(screen.queryByTestId("detail-side")).not.toBeInTheDocument();
   await act(async () => release?.());
   await screen.findByRole("table", { name: "Listeners" });
-  expect(columns().className).toBe(split);
+  expect(screen.getByTestId("detail-sections")).toBeInTheDocument();
   expect(screen.queryByTestId("detail-side")).not.toBeInTheDocument();
   expect(header()).toBe(`${HEADER_H}px`);
   expect(tabs()).toBe(`${TABS_H}px`);
@@ -1254,90 +1253,82 @@ it("the current crumb holds a placeholder until the page's own detail loads", as
   watch.disconnect();
 });
 
-/** Stubs matchMedia so only the two-column query (from 1600 px) matches when wide. */
-function viewport(wide: boolean) {
-  vi.stubGlobal("matchMedia", (q: string) => ({
-    matches: wide && q === "(min-width: 1600px)",
-    media: q,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-  }));
-}
-const before = (a: Node, b: Node) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+// region Sections (D-148)
+/** The section cards' titles, in page order. */
+const cardTitles = () =>
+  Array.from(screen.getByTestId("detail-sections").querySelectorAll(":scope > div > section > header h2")).map(
+    (h) => h.textContent,
+  );
 
-it("from 1600 px a Gateway's conditions render in the side column, after the structure in DOM order", async () => {
-  viewport(true);
+it("gateway sections follow the design order", async () => {
   serve(api());
   mount(GW_PATH);
   await screen.findByRole("table", { name: "Listeners" });
-  const side = screen.getByTestId("detail-side");
-  const main = screen.getByTestId("detail-main");
-  expect(within(side).getByRole("region", { name: "Conditions" })).toBeInTheDocument();
-  expect(within(main).queryByRole("region", { name: "Conditions" })).toBeNull();
-  expect(within(main).getByRole("table", { name: "Listeners" })).toBeInTheDocument();
-  // DOM order is visual order: tab order reaches the structure first, then the side.
-  expect(before(main, side)).toBe(true);
+  expect(screen.queryByTestId("detail-side")).toBeNull();
+  expect(cardTitles()).toEqual([
+    "Summary",
+    "Conditions",
+    "Listeners",
+    "ListenerSets",
+    "Attached routes",
+    "Routes not attached",
+    "Data plane",
+    "Proxies",
+    "Policies",
+  ]);
+  // Counts come from the detail response; a card whose total lives in its list query has none.
+  const nav = within(screen.getByRole("navigation", { name: "Gateway sections" }));
+  expect(nav.getByRole("link", { name: /^Listeners/ })).toHaveTextContent(String(gateway().listeners.length));
+  expect(nav.getByRole("link", { name: /^Summary/ })).toHaveTextContent(/^Summary$/);
 });
 
-it("below 1600 px a Gateway's conditions stay at the top of the one column", async () => {
-  viewport(false);
+it("gateway nav groups Data plane and Proxies under Runtime", async () => {
   serve(api());
   mount(GW_PATH);
-  const listeners = await screen.findByRole("table", { name: "Listeners" });
-  expect(screen.queryByTestId("detail-side")).toBeNull();
-  const conditions = within(screen.getByTestId("detail-main")).getByRole("region", { name: "Conditions" });
-  expect(before(conditions, listeners)).toBe(true);
+  await screen.findByRole("table", { name: "Listeners" });
+  const nav = screen.getByRole("navigation", { name: "Gateway sections" });
+  // Each group label, with the entries listed under it.
+  const groups = Array.from(nav.querySelectorAll(".group")).map((g) => [
+    g.textContent,
+    Array.from(g.nextElementSibling?.querySelectorAll("a .title") ?? []).map((t) => t.textContent),
+  ]);
+  expect(groups).toEqual([
+    ["Status", ["Summary", "Conditions"]],
+    ["What it does", ["Listeners", "ListenerSets", "Attached routes", "Routes not attached"]],
+    ["Runtime", ["Data plane", "Proxies"]],
+    ["What acts on it", ["Policies"]],
+  ]);
 });
 
-it("the skeleton holds a side column from 1600 px only, as the loaded page does", async () => {
-  for (const wide of [true, false]) {
-    viewport(wide);
-    let release = () => {};
-    const gate = new Promise<void>((r) => {
-      release = r;
-    });
-    const reply = api();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        const u = new URL(url, "http://ui");
-        if (u.pathname === `${API}/gateways/infra/edge`) await gate;
-        const r = reply(u);
-        return new Response(JSON.stringify(r ?? { error: "not found" }), { status: r === undefined ? 404 : 200 });
-      }),
-    );
-    const view = mount(GW_PATH);
-    const skeleton = await screen.findByTestId("detail-skeleton");
-    expect(within(skeleton).queryByTestId("detail-side") !== null).toBe(wide);
-    act(() => release());
-    await screen.findByRole("table", { name: "Listeners" });
-    expect(screen.queryByTestId("detail-side") !== null).toBe(wide);
-    view.unmount();
-  }
-});
-
-it("from 1600 px a ListenerSet's parent and conditions render in the side column", async () => {
-  viewport(true);
+it("listenerset sections follow the design order", async () => {
   serve(api());
   mount(LS_PATH("partial"));
   await screen.findByRole("table", { name: "Listeners" });
-  const side = screen.getByTestId("detail-side");
-  expect(within(side).getByRole("region", { name: "Conditions" })).toBeInTheDocument();
-  expect(within(side).getByText("Parent Gateway")).toBeInTheDocument();
-  expect(within(screen.getByTestId("detail-main")).getByRole("table", { name: "Listeners" })).toBeInTheDocument();
+  expect(screen.queryByTestId("detail-side")).toBeNull();
+  expect(cardTitles()).toEqual([
+    "Reached through",
+    "Conditions",
+    "Listeners",
+    "Attached routes",
+    "Routes not attached",
+    "Policies",
+  ]);
+  const reached = screen.getByRole("region", { name: "Reached through" });
+  expect(within(reached).getByText("Parent Gateway")).toBeInTheDocument();
 });
 
 // region Problem strip
 const NOT_ALLOWED = "Unable to attach to parent, gateway has not enabled allowedListeners";
 
-it("a ListenerSet's strip names the failing condition and the parent Gateway, at the top of the main column", async () => {
-  viewport(true);
+it("a ListenerSet's strip names the failing condition and the parent Gateway, above the sections", async () => {
   const base = ls(lsGolden);
   const conditions = base.conditions.map((c) => ({ ...c, message: NOT_ALLOWED }));
   serve(api({ ls: { ...base, conditions } }));
   mount(LS_PATH("na"));
   const strip = await screen.findByTestId("problem-strip");
-  expect(screen.getByTestId("detail-main").firstElementChild).toBe(strip);
+  expect(
+    strip.compareDocumentPosition(screen.getByTestId("detail-sections")) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
   const condition = within(strip).getByTestId("problem-condition");
   expect(within(condition).getByText("Accepted: False")).toBeInTheDocument();
   expect(within(condition).getByText("NotAllowed")).toBeInTheDocument();

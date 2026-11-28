@@ -5,25 +5,32 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useGatewayDetail, useListenerSets } from "../../api/exploreHooks";
 import { useFeatureCheck, useListFilter } from "../../api/hooks";
 import type { LinkedRef, ListenerSetRow } from "../../api/types";
-import { columnCopy, dataPlaneCopy, detailCopy, gatewayCopy } from "../../copy/explorer";
+import { columnCopy, dataPlaneCopy, detailCopy, gatewayCopy, processesCopy } from "../../copy/explorer";
 import { mapCopy } from "../../copy/map";
+import { relationsCopy } from "../../copy/policies";
 import { trafficCopy } from "../../copy/traffic";
 import { ConditionList } from "../../explore/ConditionList";
 import type { ObjectColumn } from "../../explore/ObjectTable";
 import { firstFailing } from "../../explore/ProblemStrip";
 import { HealthBadge } from "../../health/HealthBadge";
 import { useInstallId } from "../../shell/extension";
-import { useTwoColumns } from "../../shell/layout";
 import { installPath } from "../../shell/paths";
 import { InlineLink } from "../../states/controls";
 import { MapTab } from "../map/MapTab";
-import { PolicyRelationsSection } from "../policies/PolicyRelationsSection";
-import { DetailFrame, type ExtraTab, expectedRows, Facts, refParam, Section, SubList } from "./detailParts";
-import { DataPlaneSection } from "./gateway/DataPlaneSection";
+import { PolicyRelationsBody, policyRelationsCount } from "../policies/PolicyRelationsSection";
+import type { DetailSection } from "./DetailSections";
+import { DetailFrame, type ExtraTab, expectedRows, Facts, refParam, SubList } from "./detailParts";
+import { DataPlaneBody } from "./gateway/DataPlaneSection";
 import { ListenerTable } from "./gateway/ListenerTable";
-import { ProxiesSection } from "./gateway/ProxiesSection";
+import { ProxiesBody } from "./gateway/ProxiesSection";
 import { Muted, NameCell } from "./listParts";
-import { type ListenerPick, RouteSections } from "./RouteSections";
+import {
+  AttachedRoutesBody,
+  attachedRoutesTitle,
+  FailedRoutesBody,
+  failedRoutesCount,
+  type ListenerPick,
+} from "./RouteSections";
 
 // region Helpers
 const GW = "gateway.networking.k8s.io";
@@ -44,7 +51,7 @@ interface GatewayPageProps {
   stylesOverride?: SerializedStyles;
 }
 
-/** One Gateway: conditions, data plane, proxies, listeners, its ListenerSets, and its routes (design §8.5); a Map tab (Phase 6 §6). */
+/** One Gateway in the D-148 section order: summary, conditions, listeners, ListenerSets, routes, runtime, policies; a Map tab. */
 export function GatewayPage({ stylesOverride }: GatewayPageProps = {}) {
   const id = useInstallId();
   const { ns = "", name = "" } = useParams();
@@ -81,83 +88,79 @@ export function GatewayPage({ stylesOverride }: GatewayPageProps = {}) {
   );
   // An older server rejects listener= (strict params), so it gets no selector and the URL value is ignored.
   // While /meta loads the selector keeps its place (ready false), so the route sections never move.
-  const pick: ListenerPick | undefined =
-    supported !== false && data
-      ? {
-          listeners: data.listeners,
-          selected,
-          onSelect,
-          ready: !!supported,
-          ruleSet: data.ruleSet ?? "",
-          ruleSetLabel: data.ruleSetLabel,
-        }
-      : undefined;
-  // From 1600 px the conditions sit beside the structure; below, above it.
-  const wide = useTwoColumns();
-  const conditions = data ? (
-    <Section aria-labelledby="gw-conditions">
-      <h2 id="gw-conditions">{detailCopy.conditions}</h2>
-      <ConditionList conditions={data.conditions} generation={data.generation} />
-    </Section>
-  ) : null;
-  return (
-    <DetailFrame
-      installId={id}
-      refValue={ref}
-      noun="Gateway"
-      data={data}
-      error={error}
-      problem={data && { condition: firstFailing(data.conditions), conditionsId: "gw-conditions" }}
-      side={wide ? conditions : null}
-      sideWhenWide
-      extraTabs={extraTabs}
-      stylesOverride={stylesOverride}
-    >
-      {data ? (
-        <>
-          {wide ? null : conditions}
-          <Section aria-label={detailCopy.summary}>
-            <Facts>
-              <dt>{columnCopy.class}</dt>
-              <dd>{data.class}</dd>
-              <dt>{columnCopy.addresses}</dt>
-              <dd>{data.addresses.length ? data.addresses.join(", ") : <Muted>{columnCopy.none}</Muted>}</dd>
-              <dt>{trafficCopy.title}</dt>
-              <dd>
-                <InlineLink to={`${installPath(id, "traffic")}?${new URLSearchParams({ gateway: `${ns}/${name}` })}`}>
-                  {trafficCopy.gatewayEntry}
-                </InlineLink>
-              </dd>
-            </Facts>
-          </Section>
-          <PolicyRelationsSection installId={id} subject={ref} relations={data.policyRelations} />
-          {/* Sent for a Gateway the install owns; it arrives with the detail, so nothing below moves. */}
-          {dataPlane && data.dataPlane ? <DataPlaneSection installId={id} dataPlane={data.dataPlane} /> : null}
-          {processes && data.proxies ? <ProxiesSection gateway={ref} proxies={data.proxies} /> : null}
-          {dataPlane || processes ? null : (
-            <Section aria-labelledby="gw-dataplane">
-              <h2 id="gw-dataplane">{dataPlaneCopy.title}</h2>
-              <Muted>{dataPlaneCopy.notAvailable}</Muted>
-            </Section>
-          )}
-          <Section aria-labelledby="gw-listeners">
-            <h2 id="gw-listeners">
-              {gatewayCopy.listeners} <span className="note">{data.listeners.length}</span>
-            </h2>
-            <ListenerTable
-              listeners={data.listeners}
-              generation={data.generation}
-              installId={id}
-              policies={data.policyRelations?.targeting}
-            />
-          </Section>
-          <Section aria-labelledby="gw-listenersets">
-            <h2 id="gw-listenersets">
-              {gatewayCopy.listenerSets}
-              {data.attachedListenerSets !== undefined ? (
-                <span className="note">{gatewayCopy.attachedListenerSets(data.attachedListenerSets)}</span>
-              ) : null}
-            </h2>
+  const pick = useMemo<ListenerPick | undefined>(
+    () =>
+      supported !== false && data
+        ? {
+            listeners: data.listeners,
+            selected,
+            onSelect,
+            ready: !!supported,
+            ruleSet: data.ruleSet ?? "",
+            ruleSetLabel: data.ruleSetLabel,
+          }
+        : undefined,
+    [supported, data, selected, onSelect],
+  );
+  const sections = useMemo<DetailSection[] | undefined>(() => {
+    if (!data) return undefined;
+    const relations = data.policyRelations;
+    const lsTotal = data.listenerSets ?? data.attachedListenerSets;
+    const failedTotal = failedRoutesCount(data.routeCounts);
+    const out: DetailSection[] = [
+      {
+        id: "gw-summary",
+        group: "status",
+        title: detailCopy.summary,
+        render: () => (
+          <Facts>
+            <dt>{columnCopy.class}</dt>
+            <dd>{data.class}</dd>
+            <dt>{columnCopy.addresses}</dt>
+            <dd>{data.addresses.length ? data.addresses.join(", ") : <Muted>{columnCopy.none}</Muted>}</dd>
+            <dt>{trafficCopy.title}</dt>
+            <dd>
+              <InlineLink to={`${installPath(id, "traffic")}?${new URLSearchParams({ gateway: `${ns}/${name}` })}`}>
+                {trafficCopy.gatewayEntry}
+              </InlineLink>
+            </dd>
+          </Facts>
+        ),
+      },
+      {
+        id: "gw-conditions",
+        group: "status",
+        title: detailCopy.conditions,
+        count: data.conditions.length,
+        muted: !data.conditions.length,
+        render: () => <ConditionList conditions={data.conditions} generation={data.generation} />,
+      },
+      {
+        id: "gw-listeners",
+        group: "does",
+        title: gatewayCopy.listeners,
+        count: data.listeners.length,
+        muted: !data.listeners.length,
+        render: () => (
+          <ListenerTable
+            listeners={data.listeners}
+            generation={data.generation}
+            installId={id}
+            policies={relations?.targeting}
+          />
+        ),
+      },
+      {
+        id: "gw-listenersets",
+        group: "does",
+        title: gatewayCopy.listenerSets,
+        count: lsTotal,
+        muted: lsTotal === 0,
+        render: () => (
+          <>
+            {data.attachedListenerSets !== undefined ? (
+              <Muted>{gatewayCopy.attachedListenerSets(data.attachedListenerSets)}</Muted>
+            ) : null}
             <SubList
               installId={id}
               label={gatewayCopy.listenerSets}
@@ -168,12 +171,80 @@ export function GatewayPage({ stylesOverride }: GatewayPageProps = {}) {
               rowRef={lsRef}
               emptyTitle={gatewayCopy.noListenerSets}
               // The list's own total for this caller; an older body falls back to the status count.
-              skeletonRows={expectedRows(data.listenerSets ?? data.attachedListenerSets ?? 1)}
+              skeletonRows={expectedRows(lsTotal ?? 1)}
             />
-          </Section>
-          <RouteSections installId={id} parent={ref} counts={data.routeCounts} pick={pick} />
-        </>
-      ) : null}
-    </DetailFrame>
+          </>
+        ),
+      },
+      {
+        id: "attached-routes",
+        group: "does",
+        title: attachedRoutesTitle(selected),
+        // A listener selection lists other rows than the response's total counts.
+        count: selected ? undefined : data.routeCounts.accepted,
+        muted: !selected && data.routeCounts.accepted === 0,
+        render: () => <AttachedRoutesBody installId={id} parent={ref} counts={data.routeCounts} pick={pick} />,
+      },
+      {
+        id: "failed-routes",
+        group: "does",
+        title: gatewayCopy.notAttached,
+        count: failedTotal,
+        muted: failedTotal === 0,
+        render: () => <FailedRoutesBody installId={id} parent={ref} counts={data.routeCounts} />,
+      },
+    ];
+    // Sent for a Gateway the install owns; it arrives with the detail, so nothing below moves.
+    if (dataPlane && data.dataPlane) {
+      const dp = data.dataPlane;
+      out.push({
+        id: "gw-dataplane",
+        group: "runtime",
+        title: dataPlaneCopy.title,
+        render: () => <DataPlaneBody installId={id} dataPlane={dp} />,
+      });
+    }
+    if (processes && data.proxies) {
+      const proxies = data.proxies;
+      out.push({
+        id: "gw-proxies",
+        group: "runtime",
+        title: processesCopy.proxies,
+        render: () => <ProxiesBody gateway={ref} proxies={proxies} />,
+      });
+    }
+    if (!dataPlane && !processes)
+      out.push({
+        id: "gw-dataplane",
+        group: "runtime",
+        title: dataPlaneCopy.title,
+        render: () => <Muted>{dataPlaneCopy.notAvailable}</Muted>,
+      });
+    // An older server sends no relations: no Policies section.
+    if (relations) {
+      const n = policyRelationsCount(relations);
+      out.push({
+        id: "policy-relations",
+        group: "actsOn",
+        title: relationsCopy.title,
+        count: n,
+        muted: n === 0,
+        render: () => <PolicyRelationsBody installId={id} subject={ref} relations={relations} />,
+      });
+    }
+    return out;
+  }, [data, id, ns, name, ref, lsQuery, lsCols, selected, pick, dataPlane, processes]);
+  return (
+    <DetailFrame
+      installId={id}
+      refValue={ref}
+      noun="Gateway"
+      data={data}
+      error={error}
+      problem={data && { condition: firstFailing(data.conditions), conditionsId: "gw-conditions" }}
+      sections={sections ?? []}
+      extraTabs={extraTabs}
+      stylesOverride={stylesOverride}
+    />
   );
 }

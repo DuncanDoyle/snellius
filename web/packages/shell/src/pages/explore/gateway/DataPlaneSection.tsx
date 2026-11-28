@@ -10,7 +10,7 @@ import { LinkedName } from "../../../explore/LinkedName";
 import { HealthBadge } from "../../../health/HealthBadge";
 import { layout } from "../../../shell/layout";
 import { ago } from "../../install/HealthStrip";
-import { Facts, Section } from "../detailParts";
+import { Facts } from "../detailParts";
 
 // region Styles
 const Body = styled.div<{ stylesOverride?: SerializedStyles }>`
@@ -89,19 +89,18 @@ const refKey = (r: { group: string; kind: string; namespace?: string; name: stri
   `${r.group}/${r.kind}/${r.namespace ?? ""}/${r.name}`;
 
 // region Component
-interface DataPlaneSectionProps {
+interface DataPlaneBodyProps {
   installId: string;
   dataPlane: DataPlane;
   stylesOverride?: SerializedStyles;
 }
 
-/** A Gateway's data plane: what its proxies reject, what to run next, and what changed before (design §8.3–8.5). */
-export function DataPlaneSection({ installId, dataPlane: dp, stylesOverride }: DataPlaneSectionProps) {
+/** Body of the Gateway's data plane card: what its proxies reject, what to run next, and what changed before (design §8.3–8.5). */
+export function DataPlaneBody({ installId, dataPlane: dp, stylesOverride }: DataPlaneBodyProps) {
   const now = useNow();
   const snap = dp.snapshot;
   return (
-    <Section aria-labelledby="gw-dataplane">
-      <h2 id="gw-dataplane">{dataPlaneCopy.title}</h2>
+    <>
       <Body stylesOverride={stylesOverride}>
         <div>
           <Headline dp={dp} />
@@ -180,6 +179,6 @@ export function DataPlaneSection({ installId, dataPlane: dp, stylesOverride }: D
           </div>
         ) : null}
       </Body>
-    </Section>
+    </>
   );
 }
