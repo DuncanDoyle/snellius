@@ -708,3 +708,17 @@ export const traceCopy = {
   connectionsHint: "% of this rule's connections", // S764
   onAttachment: (gateway: string, listener: string) => `On ${gateway}, listener ${listener}:`, // S762
 };
+
+// region Detail sections (ui-0.9.2, D-148)
+/** Group labels of the section nav and the narrow-window control (design §5, §6). */
+export const sectionsCopy = {
+  groups: {
+    where: "Where it sits", // S854
+    status: "Status", // S855
+    does: "What it does", // S856
+    runtime: "Runtime", // S857
+    actsOn: "What acts on it", // S858
+    related: "Related", // S859
+  },
+  sections: "Sections", // S860
+};
