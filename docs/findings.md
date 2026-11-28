@@ -54,7 +54,7 @@ If the controller metrics cannot be read, the UI raises KGWUI-008 for the `xDS r
 
 **Cause.** A current condition on an object of this install is `False`, and no more specific code covers its reason. KGWUI-013, 014, 015 and 017 own their reasons, so one condition is always one finding. It covers GatewayClasses, Gateways, ListenerSets and their listeners, routes per parent, policies per ancestor, and Backends that routes use.
 
-DirectResponse, which the UI otherwise only lists, gets this finding per ancestor too, the same as a TrafficPolicy in the same state: a current ancestor written by this install's controller, for a Gateway or ListenerSet the install owns. A DirectResponse with no status, with only stale ancestors, or whose kind the UI could not read gets no finding, and no KGWUI-003. Routes that use it keep their signals.
+DirectResponse gets this finding per ancestor too (its install assignment stays list-only), the same as a TrafficPolicy in the same state: a current ancestor written by this install's controller, for a Gateway or ListenerSet the install owns. A DirectResponse with no status, with only stale ancestors, or whose kind the UI could not read gets no finding, and no KGWUI-003. Routes that use it keep their signals.
 
 Severity is error, with two exceptions:
 
