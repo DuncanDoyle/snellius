@@ -11,6 +11,7 @@ import type { ParamChanges } from "../../../shell/urlParams";
 import { SearchBox, TextButton } from "../../../states/controls";
 import type { HealthState } from "../../../theme/tokens";
 import { tcpKind } from "../../traffic/pathText";
+import { scrollClearance } from "../DetailSections";
 import { DetailParams } from "../detailParts";
 import { Muted, refText } from "../listParts";
 import { grpcParts } from "./MatchLine";
@@ -42,6 +43,7 @@ const Rows = styled.ul<{ $tcp: boolean; stylesOverride?: SerializedStyles }>`
   list-style: none;
   > li {
     min-width: 0;
+    scroll-margin-top: ${(p) => scrollClearance(p.theme.space)};
     border: 1px solid ${(p) => p.theme.color.border};
     border-radius: ${(p) => p.theme.radius.md};
     background: ${(p) => p.theme.color.surface};

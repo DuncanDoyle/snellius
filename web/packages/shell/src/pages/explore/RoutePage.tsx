@@ -230,7 +230,8 @@ export function RoutePage({ stylesOverride }: RoutePageProps = {}) {
         render: () => <PolicyRelationsBody installId={id} subject={ref} relations={relations} />,
       });
     }
-    if (delegation)
+    // Only a route that delegates, or has reported children, can have child routes (design §10.2).
+    if (delegation && (hasDelegation || data.childCount > 0))
       out.push({
         id: "child-routes",
         group: "related",

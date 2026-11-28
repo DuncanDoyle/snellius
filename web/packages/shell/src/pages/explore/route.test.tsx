@@ -966,3 +966,48 @@ describe("a route's rule table", () => {
     expect(new URLSearchParams(screen.getByTestId("search").textContent ?? "").get("open")).toBe("none");
   });
 });
+
+it("a plain HTTPRoute that delegates nothing has no Child routes section", async () => {
+  const plain = detail(routeGolden);
+  for (const r of plain.rules) r.backendRefs = r.backendRefs.filter((b) => !b.delegation);
+  plain.childCount = 0;
+  serve(api({ mid: plain }));
+  mount(MID);
+  await loaded();
+  const nav = screen.getByRole("navigation", { name: "HTTPRoute sections" });
+  expect(within(nav).queryByRole("link", { name: /^Child routes/ })).toBeNull();
+  expect(document.getElementById("child-routes")).toBeNull();
+  expect(routeCalls()).toHaveLength(0);
+});
+
+it("a linked rule clears the sticky Sections bar as a card does", async () => {
+  vi.stubGlobal("matchMedia", (q: string) => ({
+    matches: q.includes("max-width"),
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+  serve(api());
+  mount(`${MID}?rule=2`);
+  await loaded();
+  const margin = (el: Element | null) => getComputedStyle(el as Element).scrollMarginTop;
+  const card = margin(document.getElementById("route-rules"));
+  expect(card).toContain("--detail-sections-bar");
+  expect(margin(document.getElementById("rule-2"))).toBe(card);
+});
+
+it("every section card has the stable id its nav entry links; an open rule's body is not a card", async () => {
+  serve(api());
+  mount(MID_OPEN);
+  await loaded();
+  const nav = screen.getByRole("navigation", { name: "HTTPRoute sections" });
+  const hrefs = within(nav)
+    .getAllByRole("link")
+    .map((a) => a.getAttribute("href"));
+  const cards = Array.from(document.querySelectorAll("[data-testid=detail-sections] > div > section"));
+  expect(cards.map((c) => `#${c.id}`)).toEqual(hrefs);
+  for (const c of cards) expect(c.id).toMatch(/^[a-z]+(-[a-z]+)*$/);
+  // A probe of section[id] also finds the open rule bodies: generated ids, inside the Rules card, named by their row.
+  const bodies = Array.from(document.querySelectorAll("#route-rules section[id]"));
+  expect(bodies.length).toBeGreaterThan(0);
+  for (const b of bodies) expect(document.querySelector(`[aria-controls="${b.id}"]`)).not.toBeNull();
+});

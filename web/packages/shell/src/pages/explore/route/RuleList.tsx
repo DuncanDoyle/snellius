@@ -18,6 +18,7 @@ import { installPath } from "../../../shell/paths";
 import { InlineLink } from "../../../states/controls";
 import type { HealthState } from "../../../theme/tokens";
 import { tcpKind } from "../../traffic/pathText";
+import { scrollClearance } from "../DetailSections";
 import { DetailParams } from "../detailParts";
 import { MatchLine } from "./MatchLine";
 import { RefFacts, RefWhy } from "./RefTrace";
@@ -31,6 +32,7 @@ const Rules = styled.div<{ stylesOverride?: SerializedStyles }>`
   ${(p) => p.stylesOverride}
 `;
 export const RuleBox = styled.section`
+  scroll-margin-top: ${(p) => scrollClearance(p.theme.space)};
   display: grid;
   gap: ${(p) => p.theme.space(3)};
   min-width: 0;
