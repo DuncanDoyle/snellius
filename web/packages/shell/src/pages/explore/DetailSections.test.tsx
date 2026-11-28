@@ -193,6 +193,31 @@ it("a hash in the URL scrolls to its section on mount", () => {
   expect(link("route-policies")).toHaveAttribute("aria-current", "location");
 });
 
+it("a malformed hash renders the page without scrolling", () => {
+  window.history.replaceState(null, "", "/i/kgw/routes/x?tab=overview#%E0%A4%A");
+  expect(() => mount([sec("route-rules", "does")])).not.toThrow();
+  expect(screen.getByRole("region", { name: "route-rules" })).toBeInTheDocument();
+  expect(scrolled).toEqual([]);
+});
+
+it("a hashed section that appears later is scrolled to once", () => {
+  window.history.replaceState(null, "", "/i/kgw/routes/x?tab=overview#route-policies");
+  const ui = (sections: DetailSection[]) => (
+    <ThemeProvider themes={defaultThemes}>
+      <BrowserRouter>
+        <DetailSections sections={sections} label={LABEL} />
+      </BrowserRouter>
+    </ThemeProvider>
+  );
+  const { rerender } = render(ui([sec("route-rules", "does")]));
+  expect(scrolled).toEqual([]);
+  rerender(ui([sec("route-rules", "does"), sec("route-policies", "actsOn")]));
+  expect(scrolled.map((e) => e.id)).toEqual(["route-policies"]);
+  // Later lists do not scroll again.
+  rerender(ui([sec("route-rules", "does"), sec("route-policies", "actsOn"), sec("route-children", "related")]));
+  expect(scrolled.map((e) => e.id)).toEqual(["route-policies"]);
+});
+
 it("narrow window shows the Sections control with the same entries", () => {
   vi.stubGlobal("matchMedia", (q: string) => ({
     matches: q.includes("max-width"),

@@ -246,6 +246,15 @@ function Count({ value }: { value: DetailSection["count"] }) {
   return <Badge className="count">{value}</Badge>;
 }
 
+// The section id in a URL hash; a malformed escape (a bad shared link) falls back to the raw text.
+function decodeHash(hash: string): string {
+  try {
+    return decodeURIComponent(hash.slice(1));
+  } catch {
+    return hash.slice(1);
+  }
+}
+
 // Whether the page is scrolled to its end, where a short last card can never reach the top.
 function atBottom(): boolean {
   const doc = document.documentElement;
@@ -312,8 +321,8 @@ export function DetailSections({ sections, label }: DetailSectionsProps) {
   latest.current = ordered;
   // A jumped-to section stays current until the user scrolls, even when it cannot reach the top.
   const pinned = useRef<string | undefined>(undefined);
-  // The hash this component pushed itself, so the hash effect does not scroll a second time.
-  const pushed = useRef<string | undefined>(undefined);
+  // The hash already scrolled to or pushed by a click, so each hash scrolls once.
+  const resolved = useRef<string | undefined>(undefined);
   const ids = ordered.map((s) => s.id).join("\n");
 
   const jump = (id: string) => {
@@ -328,21 +337,20 @@ export function DetailSections({ sections, label }: DetailSectionsProps) {
     jump(id);
     // A new history entry that changes only the hash, so Back returns to the previous section.
     if (hash !== `#${id}`) {
-      pushed.current = id;
+      resolved.current = `#${id}`;
       navigate({ pathname, search, hash: `#${id}` });
     }
   };
 
-  // A hash from a link, Back or Forward scrolls to its section; on mount too, as the page has its data by then.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on hash changes only; jump reads refs and state setters.
+  // A hash from a link, Back or Forward scrolls to its section once; a section that appears later is scrolled to then.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on hash or section id changes; jump reads refs and state setters.
   useEffect(() => {
-    const id = decodeURIComponent(hash.slice(1));
-    if (pushed.current === id) {
-      pushed.current = undefined;
-      return;
-    }
-    if (latest.current.some((s) => s.id === id)) jump(id);
-  }, [hash]);
+    if (!hash || resolved.current === hash) return;
+    const id = decodeHash(hash);
+    if (!latest.current.some((s) => s.id === id)) return;
+    resolved.current = hash;
+    jump(id);
+  }, [hash, ids]);
 
   // Scroll-spy: the first card in a band below the sticky offset is current; at the page end, the last card.
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-observes only when the section ids change.
