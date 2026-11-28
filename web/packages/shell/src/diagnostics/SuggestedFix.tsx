@@ -117,7 +117,7 @@ function download(text: string, file: string) {
 interface SuggestedFixProps {
   fix: SuggestedFixData;
   installId: string;
-  /** The heading's id, unique per page when several fixes show. */
+  /** The heading's id, unique per page when several fixes show; ignored when `bare`. */
   headingId?: string;
   /** Only the body, for a host that supplies the section card and its heading. */
   bare?: boolean;

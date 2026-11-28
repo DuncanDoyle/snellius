@@ -1,4 +1,3 @@
-import type { SerializedStyles } from "@emotion/react";
 import styled from "@emotion/styled";
 import type { LinkedRef, PolicyRelation, PolicyRelationHop, PolicyRelations } from "../../api/types";
 import { readingNoteCopy, relationsCopy } from "../../copy/policies";
@@ -8,13 +7,9 @@ import { SourceTag } from "../../explore/SourceTag";
 import { HealthIcon } from "../../health/HealthIcon";
 import { installPath } from "../../shell/paths";
 import { InlineLink } from "../../states/controls";
-import { Section } from "../explore/detailParts";
 import { kindValue } from "./policyText";
 
 // region Styles
-const Block = styled(Section)<{ stylesOverride?: SerializedStyles }>`
-  ${(p) => p.stylesOverride}
-`;
 const GroupTitle = styled.h3`
   margin: ${(p) => p.theme.space(3)} 0 ${(p) => p.theme.space(1)};
   font-size: ${(p) => p.theme.font.size.md};
@@ -213,28 +208,5 @@ export function PolicyRelationsBody({ installId, subject, relations }: PolicyRel
         </NoteLink>
       </SelectorNote>
     </div>
-  );
-}
-
-interface PolicyRelationsSectionProps {
-  installId: string;
-  /** The page's object, for the parent note's noun. */
-  subject: LinkedRef;
-  relations?: PolicyRelations;
-  stylesOverride?: SerializedStyles;
-}
-
-/**
- * The policies related to a Gateway, ListenerSet, route or backend (design §6.5): those targeting it, those naming
- * a parent it declares, and those kgateway reports attached here. Groups the response leaves out are not shown.
- */
-export function PolicyRelationsSection({ installId, subject, relations, stylesOverride }: PolicyRelationsSectionProps) {
-  // An older server sends no relations.
-  if (!relations) return null;
-  return (
-    <Block aria-labelledby="policy-relations" stylesOverride={stylesOverride}>
-      <h2 id="policy-relations">{relationsCopy.title}</h2>
-      <PolicyRelationsBody installId={installId} subject={subject} relations={relations} />
-    </Block>
   );
 }

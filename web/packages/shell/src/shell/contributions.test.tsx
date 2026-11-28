@@ -201,9 +201,8 @@ it("a contribution colliding with a core tab is ignored", async () => {
         noun="HTTPRoute"
         data={{ health: "healthy", collectedAt: now() }}
         extraTabs={[{ id: "delegation", label: "Delegation", content: <p>core delegation</p> }]}
-      >
-        <p>overview</p>
-      </DetailFrame>
+        sections={[{ id: "rt-summary", group: "status", title: "Summary", render: () => <p>overview</p> }]}
+      />
     </With>,
     { path: `/i/${ID}/routes/${GW}/HTTPRoute/shop/web?tab=delegation` },
   );
@@ -557,9 +556,8 @@ it("a detail slot retries when the object changes under loaded data", async () =
           refValue={{ group: GW, kind: "Gateway", namespace: "infra", name, link: "detail" }}
           noun="Gateway"
           data={{ health: "healthy", collectedAt: now() }}
-        >
-          <p>overview</p>
-        </DetailFrame>
+          sections={[{ id: "gw-summary", group: "status", title: "Summary", render: () => <p>overview</p> }]}
+        />
         <button type="button" onClick={() => setName("other")}>
           next
         </button>

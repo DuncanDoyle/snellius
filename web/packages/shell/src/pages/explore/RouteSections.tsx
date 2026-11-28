@@ -316,12 +316,12 @@ export function AttachedRoutesBody({ installId, parent, counts, pick }: Attached
   );
 }
 
-/** The routes that failed to attach, with Not accepted, Waiting and Unwatched sub-filters. */
+/** How many routes failed to attach. */
 export function failedRoutesCount(c: RouteCounts): number {
   return c.notAccepted + c.pending + c.unwatched;
 }
 
-/** Body of the not-attached card. */
+/** Body of the not-attached card, with Not accepted, Waiting and Unwatched sub-filters. */
 export function FailedRoutesBody({
   installId,
   parent,

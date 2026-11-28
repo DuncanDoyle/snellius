@@ -79,7 +79,7 @@ interface ListenerSetPageProps {
   stylesOverride?: SerializedStyles;
 }
 
-/** One ListenerSet: its parent Gateway, conditions, listeners and routes (design §8.5). */
+/** One ListenerSet as sections in the D-148 order: parent, conditions, listeners, routes, then the policies that act on it. */
 export function ListenerSetPage({ stylesOverride }: ListenerSetPageProps = {}) {
   const id = useInstallId();
   const { group = "", kind = "", ns = "", name = "" } = useParams();

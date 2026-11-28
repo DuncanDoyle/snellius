@@ -1,7 +1,7 @@
 import type { SerializedStyles } from "@emotion/react";
 import styled from "@emotion/styled";
 import { FileCode, LayoutList, type LucideIcon } from "lucide-react";
-import { createContext, type ReactNode, useEffect, useId, useMemo, useState } from "react";
+import { createContext, type ReactNode, useEffect, useMemo, useState } from "react";
 import type { ApiError } from "../../api/client";
 import { useNow } from "../../api/clock";
 import { ApiErrorState } from "../../api/errorState";
@@ -25,7 +25,7 @@ import {
   useShownDetailTabs,
   useSideSectionContributions,
 } from "../../shell/contributions";
-import { DetailColumns, layout, useTwoColumns } from "../../shell/layout";
+import { layout } from "../../shell/layout";
 import { OBJECT_HEADER_H, ObjectHeader } from "../../shell/ObjectHeader";
 import { installPath } from "../../shell/paths";
 import { useUrlParams } from "../../shell/urlParams";
@@ -139,18 +139,12 @@ interface DetailFrameProps {
   problem?: Pick<ProblemStripProps, "condition" | "conditionsId" | "parent" | "gateway">;
   /** The page draws its own strip with id PROBLEM_ID, e.g. the backend status line; the badge still links to it. */
   ownProblem?: boolean;
-  /** Shown above the sections where the problem strip goes, e.g. the backend status line; sections path only. */
+  /** Shown above the sections where the problem strip goes, e.g. the backend status line. */
   banner?: ReactNode;
   /** The Overview tab's sections, nav and cards from one list; contributed sections follow in "Related" (D-148). */
-  sections?: DetailSection[];
+  sections: DetailSection[];
   /** A section that a deeper link scrolls into itself, such as a route's ?rule=: it is current, the hash is not used. */
   sectionFocus?: string;
-  /** The Overview tab's main column when there are no sections; rendered only once data has loaded. */
-  children?: ReactNode;
-  /** The Overview tab's side column, e.g. conditions and related objects from 1600 px. Contributed sections follow it. */
-  side?: ReactNode;
-  /** The page fills the side column from 1600 px ({@link useTwoColumns}), so the skeleton holds a place for it there. */
-  sideWhenWide?: boolean;
   /** Tabs after YAML; a ?tab= naming none of them shows Overview. */
   extraTabs?: ExtraTab[];
   /** Refs the page's data links, for the trail above the header. */
@@ -172,15 +166,11 @@ export function DetailFrame({
   banner,
   sections,
   sectionFocus,
-  children,
-  side,
-  sideWhenWide,
   extraTabs,
   trailRefs,
   yaml = true,
   stylesOverride,
 }: DetailFrameProps) {
-  const wide = useTwoColumns();
   const urlParams = useUrlParams();
   const [params, update] = urlParams;
   const coreIds = useMemo(() => [...CORE_TAB_IDS, ...(extraTabs ?? []).map((t) => t.id)], [extraTabs]);
@@ -198,7 +188,6 @@ export function DetailFrame({
   const extra = extraTabs?.find((t) => t.id === tab);
   const own = contributed.find((t) => t.id === tab);
   const ctx = { installId, ref: refValue, detail: data };
-  const sideId = useId();
   const objectKey = `${installId}|${refParam(refValue)}`;
   const errorTitle = listCopy.cannotLoad(noun);
   const now = useNow();
@@ -252,7 +241,7 @@ export function DetailFrame({
       extra.content
     ) : own ? (
       <Slot key={own.id} id={`detail-tab:${own.id}`} resetKey={objectKey} render={() => own.render(ctx)} />
-    ) : sections ? (
+    ) : (
       <Overview>
         {strip}
         {banner}
@@ -273,46 +262,18 @@ export function DetailFrame({
           ]}
         />
       </Overview>
-    ) : (
-      <DetailColumns
-        main={
-          <>
-            {strip}
-            {children}
-          </>
-        }
-        side={
-          side || sideSections.length ? (
-            <>
-              {side}
-              {sideSections.map((s) => (
-                <Section key={s.id} aria-labelledby={`${sideId}-${s.id}`} data-slot="side-section">
-                  <h2 id={`${sideId}-${s.id}`}>{s.title}</h2>
-                  {contributedSection(s)}
-                </Section>
-              ))}
-            </>
-          ) : null
-        }
-      />
     )
   ) : error ? (
     <ApiErrorState error={error} title={errorTitle} />
   ) : (
     <div aria-busy="true" data-testid="detail-skeleton">
-      {sections && tab === "overview" ? (
+      {tab === "overview" ? (
         <DetailSectionsSkeleton />
       ) : (
-        <DetailColumns
-          main={
-            <Stack>
-              <Shimmer h={20} />
-              <Shimmer h={200} />
-            </Stack>
-          }
-          // The same split as the loaded page, so nothing moves when data arrives.
-          side={(sideSections.length || (wide && sideWhenWide)) && tab === "overview" ? <Shimmer h={120} /> : null}
-        />
+        <Stack>
+          <Shimmer h={20} />
+          <Shimmer h={200} />
+        </Stack>
       )}
     </div>
   );

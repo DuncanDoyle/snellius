@@ -109,7 +109,10 @@ export function FindingPage({ stylesOverride }: FindingPageProps = {}) {
   const now = useNow();
   const f = data?.finding;
   // The wire finding as a Finding, for the renderers and actions a downstream registers.
-  const finding = f && data ? { ...f, install: id, message: f.message ?? "", evidence: data.evidence } : undefined;
+  const finding = useMemo(
+    () => (f && data ? { ...f, install: id, message: f.message ?? "", evidence: data.evidence } : undefined),
+    [f, data, id],
+  );
   const sections = useMemo<DetailSection[]>(() => {
     if (!data || !f) return [];
     const list: DetailSection[] = [

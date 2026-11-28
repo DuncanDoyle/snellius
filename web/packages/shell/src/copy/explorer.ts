@@ -204,7 +204,6 @@ export const listenerCopy = {
 
 // region ListenerSet page
 export const listenerSetCopy = {
-  parent: "Parent",
   reachedThrough: "Reached through", // S863
   parentGateway: "Parent Gateway",
   notAvailable: "Not available", // S56

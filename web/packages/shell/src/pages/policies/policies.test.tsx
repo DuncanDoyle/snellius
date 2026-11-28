@@ -12,7 +12,7 @@ import { setNamespaceScope } from "../../shell/namespaceScopeStore";
 import { renderWithTheme } from "../../test/render";
 import { PoliciesPage } from "./PoliciesPage";
 import { PolicyPage } from "./PolicyPage";
-import { PolicyRelationsSection } from "./PolicyRelationsSection";
+import { PolicyRelationsBody } from "./PolicyRelationsSection";
 
 const ID = "kgw.kgateway";
 const API = `/api/v1/installs/${ID}`;
@@ -215,7 +215,7 @@ const asRef = (r: { group: string; kind: string; namespace?: string; name: strin
 
 it("a Gateway lists policies targeting it and reported attached here, each linked to its policy page with a source", () => {
   const d = structuredClone(gatewayGolden.body) as unknown as GatewayDetail;
-  renderWithTheme(<PolicyRelationsSection installId={ID} subject={asRef(d.ref)} relations={d.policyRelations} />);
+  renderWithTheme(<PolicyRelationsBody installId={ID} subject={asRef(d.ref)} relations={d.policyRelations} />);
   const targeting = screen.getByTestId("relations-targeting");
   const attached = screen.getByTestId("relations-attached-here");
   expect(screen.queryByTestId("relations-targeting-parent")).toBeNull();
@@ -251,7 +251,7 @@ it("a Gateway lists policies targeting it and reported attached here, each linke
 it("a route shows policies naming a parent with the fixed note and the path walked, and links selectors by kind", () => {
   const d = structuredClone(routeGolden.body) as unknown as RouteDetail;
   d.policyRelations.selectors.kinds = [{ group: "gateway.kgateway.dev", kind: "TrafficPolicy" }];
-  renderWithTheme(<PolicyRelationsSection installId={ID} subject={asRef(d.ref)} relations={d.policyRelations} />);
+  renderWithTheme(<PolicyRelationsBody installId={ID} subject={asRef(d.ref)} relations={d.policyRelations} />);
   const parent = screen.getByTestId("relations-targeting-parent");
   expect(parent).toHaveTextContent(copy.relationsCopy.parentNote("route"));
   const via = within(parent).getAllByTestId("relation-via")[0] as HTMLElement;
@@ -264,19 +264,16 @@ it("a route shows policies naming a parent with the fixed note and the path walk
   expect(q.get("kind")).toBe("gateway.kgateway.dev/TrafficPolicy");
 });
 
-it("an empty group says so, and an older body without relations shows no section", () => {
+it("an empty group says so", () => {
   const d = structuredClone(gatewayGolden.body) as unknown as GatewayDetail;
-  const { unmount } = renderWithTheme(
-    <PolicyRelationsSection
+  renderWithTheme(
+    <PolicyRelationsBody
       installId={ID}
       subject={asRef(d.ref)}
       relations={{ ...d.policyRelations, targeting: [], attachedHere: [] }}
     />,
   );
   expect(within(screen.getByTestId("relations-targeting")).getByText(copy.relationsCopy.none)).toBeInTheDocument();
-  unmount();
-  renderWithTheme(<PolicyRelationsSection installId={ID} subject={asRef(d.ref)} />);
-  expect(screen.queryByTestId("policy-relations")).toBeNull();
 });
 
 it("an ancestor waiting for status is marked so and left out of the summaries", async () => {
@@ -308,7 +305,7 @@ it("a policy the viewer may not open by name is text, not a link, in the list an
   const d = structuredClone(gatewayGolden.body) as unknown as GatewayDetail;
   const rel = d.policyRelations.targeting[0];
   if (rel) delete (rel.policy as Partial<LinkedRef>).link;
-  renderWithTheme(<PolicyRelationsSection installId={ID} subject={asRef(d.ref)} relations={d.policyRelations} />);
+  renderWithTheme(<PolicyRelationsBody installId={ID} subject={asRef(d.ref)} relations={d.policyRelations} />);
   const item = within(screen.getByTestId("relations-targeting")).getAllByTestId("policy-relation")[0] as HTMLElement;
   expect(within(item).queryByRole("link")).toBeNull();
 });
