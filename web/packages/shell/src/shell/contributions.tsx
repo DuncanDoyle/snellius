@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { Component, type ReactNode, useMemo } from "react";
+import { Component, Fragment, isValidElement, type ReactNode, useMemo } from "react";
 import { useFeatureCheck } from "../api/hooks";
 import type { Finding, Ref } from "../api/types";
 import { useShellExtension } from "./extension";
@@ -108,9 +108,15 @@ function unique<T extends { id: string }>(all: T[], slot: string): T[] {
   });
 }
 
-// Output that renders nothing: null, undefined, a boolean, "" or an empty list.
-const isEmpty = (n: ReactNode) =>
-  n === null || n === undefined || typeof n === "boolean" || n === "" || (Array.isArray(n) && n.length === 0);
+// Output that renders nothing: null, undefined, a boolean, "", or a list or fragment of only those.
+// A component that returns null cannot be seen without rendering it, so it is not caught here.
+const isEmpty = (n: ReactNode): boolean =>
+  n === null ||
+  n === undefined ||
+  typeof n === "boolean" ||
+  n === "" ||
+  (Array.isArray(n) && n.every(isEmpty)) ||
+  (isValidElement<{ children?: ReactNode }>(n) && n.type === Fragment && isEmpty(n.props.children));
 
 function Call({ render, fallback }: { render: () => ReactNode; fallback?: ReactNode }) {
   const out = render();

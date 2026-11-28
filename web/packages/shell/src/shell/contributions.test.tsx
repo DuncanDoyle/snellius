@@ -366,6 +366,38 @@ it("a contribution that renders nothing shows the same short line", async () => 
   expect(screen.getByRole("region", { name: "Blank" })).toHaveTextContent(sectionsCopy.nothingToShow);
 });
 
+it.each([
+  ["an empty fragment", () => <></>],
+  ["[null]", () => [null]],
+  // biome-ignore lint/complexity/noUselessFragments: a fragment of nothing is the case under test.
+  ["nested empty output", () => [false, <>{null}</>, []]],
+])("a contribution that renders %s shows the same short line", async (_, render) => {
+  mountSections({ sideSections: { [`${GW}/Gateway`]: [{ id: "blank", title: "Blank", render }] } });
+  expect(screen.getByRole("region", { name: "Blank" })).toHaveTextContent(sectionsCopy.nothingToShow);
+});
+
+it("a contributed section whose id needs encoding opens from its link on reload", async () => {
+  const notes = { [`${GW}/Gateway`]: [{ id: "team%2Fops", title: "Ops", render: () => <p>ops notes</p> }] };
+  const scrolled: string[] = [];
+  const saved = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+    scrolled.push(this.id);
+  });
+  const nav = () => screen.getByRole("navigation", { name: "Gateway sections" });
+  const first = mountSections({ sideSections: notes });
+  const href = within(nav()).getByRole("link", { name: "Ops" }).getAttribute("href") ?? "";
+  first.unmount();
+  stubApi({ "/api/v1/meta": metaGolden.body });
+  renderWithTheme(
+    <With contributions={{ sideSections: notes }}>
+      <Sectioned />
+    </With>,
+    { path: `${GW_PATH}${href}` },
+  );
+  Element.prototype.scrollIntoView = saved;
+  expect(scrolled).toContain("ext-team%2Fops");
+});
+
 it("a contribution named like a core section does not collide", async () => {
   mountSections({
     sideSections: { [`${GW}/Gateway`]: [{ id: "gw-listeners", title: "More listeners", render: () => <p>more</p> }] },
@@ -388,7 +420,7 @@ it("skeleton reserves one column", async () => {
   const reserved = within(skeleton).getByTestId("detail-sections-skeleton");
   expect(within(reserved).getAllByTestId("nav-placeholder").length).toBeGreaterThan(0);
   const columns = getComputedStyle(reserved).gridTemplateColumns;
-  expect(columns).toMatch(/^150px /);
+  expect(columns).toMatch(/^176px /);
   await userEvent.setup().click(screen.getByRole("button", { name: "load" }));
   expect(getComputedStyle(await screen.findByTestId("detail-sections")).gridTemplateColumns).toBe(columns);
 });

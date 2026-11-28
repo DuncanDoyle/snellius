@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter, useNavigate } from "react-router-dom";
 import { sectionsCopy } from "../../copy/explorer";
 import { CHIP_PRESSED_ACTIVE_PCT } from "../../shell/constants";
 import { contrastRatio } from "../../theme/contrast";
@@ -241,6 +241,129 @@ it("narrow window shows the Sections control with the same entries", () => {
   expect(toggle).toHaveAttribute("aria-expanded", "false");
   // Cards keep the same order as on a wide window.
   expect(screen.getAllByRole("region").map((r) => r.id)).toEqual(sections.map((s) => s.id));
+});
+
+it("a cut nav title shows in full on hover; one that fits gets no tooltip", () => {
+  const long = "How this backend is exposed";
+  mount([
+    sec("backend-exposure", "related", { title: long, count: 3 }),
+    sec("route-rules", "does", { title: "Rules" }),
+  ]);
+  const title = (name: string) => link(name).querySelector(".title") as HTMLElement;
+  Object.defineProperty(title(long), "scrollWidth", { configurable: true, value: 200 });
+  Object.defineProperty(title(long), "clientWidth", { configurable: true, value: 90 });
+  fireEvent.mouseEnter(link(long));
+  expect(link(long)).toHaveAttribute("title", long);
+  // The count stays outside the cut title.
+  expect(title(long)).not.toHaveTextContent("3");
+  fireEvent.mouseEnter(link("Rules"));
+  expect(link("Rules")).not.toHaveAttribute("title");
+});
+
+it("the scroll-spy band is in pixels of the window height and follows resizes", () => {
+  const options: (IntersectionObserverInit | undefined)[] = [];
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class extends FakeObserver {
+      constructor(cb: IntersectionObserverCallback, o?: IntersectionObserverInit) {
+        super(cb);
+        options.push(o);
+      }
+    },
+  );
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: 1000 });
+  mount([sec("route-rules", "does"), sec("route-policies", "actsOn")]);
+  // A percentage margin resolves against the root's width in the spec; pixels avoid that.
+  expect(options.at(-1)?.rootMargin).toMatch(/^-\d+px 0px -600px 0px$/);
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: 500 });
+  act(() => {
+    window.dispatchEvent(new Event("resize"));
+  });
+  expect(options.at(-1)?.rootMargin).toMatch(/^-\d+px 0px -300px 0px$/);
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
+});
+
+it("the observer is rebuilt when the window crosses the narrow breakpoint", () => {
+  let narrow = false;
+  const listeners = new Set<() => void>();
+  vi.stubGlobal("matchMedia", (q: string) => ({
+    get matches() {
+      return narrow && q.includes("max-width");
+    },
+    addEventListener: (_: string, f: () => void) => listeners.add(f),
+    removeEventListener: (_: string, f: () => void) => listeners.delete(f),
+  }));
+  let built = 0;
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class extends FakeObserver {
+      constructor(cb: IntersectionObserverCallback) {
+        super(cb);
+        built++;
+      }
+    },
+  );
+  mount([sec("route-rules", "does"), sec("route-policies", "actsOn")]);
+  const before = built;
+  act(() => {
+    narrow = true;
+    for (const f of listeners) f();
+  });
+  expect(built).toBeGreaterThan(before);
+});
+
+it("a scrollbar drag after a jump hands the highlight back to the scroll-spy", () => {
+  mount([sec("route-rules", "does"), sec("route-policies", "actsOn"), sec("route-children", "related")]);
+  fireEvent.click(link("route-children"));
+  // The jump's own scroll event, at the settled position, keeps the jumped-to entry.
+  fireEvent.scroll(window);
+  fire(["route-policies"]);
+  expect(link("route-children")).toHaveAttribute("aria-current", "location");
+  // A drag fires only scroll events, at a new position.
+  Object.defineProperty(window, "scrollY", { configurable: true, value: 400 });
+  fireEvent.scroll(window);
+  fire(["route-rules"]);
+  expect(link("route-rules")).toHaveAttribute("aria-current", "location");
+  Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+});
+
+it("Back to a section after a hashless entry scrolls there again", async () => {
+  function Filter() {
+    const navigate = useNavigate();
+    return (
+      <button type="button" onClick={() => navigate({ search: "?tab=overview&q=x" })}>
+        filter
+      </button>
+    );
+  }
+  render(
+    <ThemeProvider themes={defaultThemes}>
+      <BrowserRouter>
+        <DetailSections sections={[sec("route-rules", "does"), sec("route-policies", "actsOn")]} label={LABEL} />
+        <Filter />
+      </BrowserRouter>
+    </ThemeProvider>,
+  );
+  fireEvent.click(link("route-policies"));
+  fireEvent.click(screen.getByRole("button", { name: "filter" }));
+  expect(window.location.hash).toBe("");
+  scrolled = [];
+  act(() => window.history.back());
+  await waitFor(() => expect(window.location.hash).toBe("#route-policies"));
+  await waitFor(() => expect(scrolled.at(-1)?.id).toBe("route-policies"));
+});
+
+it.each(["ext-team/ops", "ext-team%2Fops", "ext-a b"])("the %s link written by a click opens it on reload", (id) => {
+  const { unmount } = mount([sec("route-rules", "does"), sec(id, "related")]);
+  fireEvent.click(link(id));
+  expect(scrolled.at(-1)?.id).toBe(id);
+  const url = window.location.pathname + window.location.search + window.location.hash;
+  unmount();
+  scrolled = [];
+  window.history.replaceState(null, "", url);
+  mount([sec("route-rules", "does"), sec(id, "related")]);
+  expect(scrolled.map((e) => e.id)).toEqual([id]);
+  expect(link(id)).toHaveAttribute("aria-current", "location");
 });
 
 describe.each([controlRoomDark, controlRoomLight])("$name nav entries meet WCAG AA", (t) => {
