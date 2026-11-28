@@ -2,20 +2,22 @@
 
 ## Phase
 Phase: 9 — Search & Route Tester
-Base: n/a (set when the phase starts)
+Base: 31c50949c97ab3c0144e856e9d4aeab25b00d92e (main after `v0.9.1` merged into `duncandoyle/phase9Design`)
 Docs: docs/phases/phase-9/
-Status: not started. The user decides when it starts. At the start: read the program file, check kgateway#15070 (M-4) and kgateway#14815, audit the remaining D-040 rank-based IDs against P-011 rule 2, then design.
-Author: n/a
+Status: design and plan drafted 2026-11-28 (`design.md`, `implementation-plan.md`, D-139 … D-147 proposed); Codex design review next, then the user's approval. No code before approval.
+Author: claude
 
 ## Sub-phase
 none
 
 ## Program
-Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md (last read 2026-11-26 at `dbf7140`).
-Waiting on: nothing for Phase 9. Phase 12 targets xdsview `v0.7.0` (E15, released 2026-11-26, #71).
-Provides: E7 (`pkg/policy`) and E2 (`install.Scope.Excluded`) delivered in `v0.9.0` (kgwctl#16). Program-file update for E7, M-1 and open questions 1 and 3 is drafted (`.agents-tmp/phase8.3/notices.md` §4 in the Phase 8 worktree); it is committed after the program session commits its own E15 edits to the same file.
-Consumers: E2, E3, E8 delivered through `v0.8.0` (kgwctl#3 … #8); E7 and E2's `Excluded` in `v0.9.0`.
-Open `cross-repo` issues here: #15, #21, #63 (xdsview E4/E5, for Phase 12), #71 (xdsview `v0.7.0`, E15, for Phase 12).
+Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md (last read 2026-11-28 at `4986792`).
+Waiting on: nothing for Phase 9. Phase 12 targets xdsview `v0.7.0` or later (E15; xdsview is at `v0.7.2`, kgwctl#18).
+Provides: E7 and E2 (`v0.9.0`), E14 wording (`v0.9.1`). Phase 9 proposes E16 (`kgateway-route-conformance`) and M-1 view D (D-140, D-141), committed to the program file only after design approval.
+Consumers: kgwctl (E2, E3, E7, E8); E16 consumers to be: xdsview, kgwctl.
+Open `cross-repo` issues here: #15, #21, #63, #70, #71 (all xdsview/krp, for Phase 12). In providers: none in xdsview; kgwctl's are its own (#2, #8, #13, #18).
+Upstream at phase start: kgateway#15070 (M-4) open; #14815 open; #15067 and #15068 (U2) open.
+P-011 audit: remaining D-040 ranks listed in D-147; handling for the user to decide.
 
 ## Carry-over (deferred to later phases)
 - (P4) Phase 8 and 9 (phase review PH6): extensions receive the raw publication beside per-object visibility helpers; policy relations (Phase 8, no inherited policy, D-121) and winning-route predictions must use viewer-scoped computations so a hidden input cannot change a readable result (D-085) — src: phases/phase-7/reviews/phase-codex.md

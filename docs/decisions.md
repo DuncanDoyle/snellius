@@ -1876,3 +1876,68 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** `policy.Inputs.ListOnlyKinds` carries the caller's list-only classification, and `Relations` makes no `attached-on-ancestor` relation for a policy of those kinds. Nil means no kind is list-only. The API passes its served list-only kinds and drops its own filter.
 
 **Consequences:** Every consumer gets the same relations from the same inputs. The field is additive within the minor (D-123). The README's one-shot caller example names the field.
+
+## D-139 — Route prediction uses strategies (2026-11-28, Phase 9)
+**Status:** proposed (user, 2026-11-28: the strategy approach; Phase 9 design §3)
+
+**Context:** "Why does this request go here?" needs Snellius to apply route precedence. Gateway API precedence is spec. HTTPRoute delegation, which a large share of kgateway users run, and kgateway's own order are not. A spec-only prediction would answer "can't predict" for most kgateway users.
+
+**Decision:** A prediction comes from a strategy. Phase 9 ships a Gateway API strategy in the core and a kgateway strategy in the kgateway pack, per minor. Phase 12 adds the proxy's loaded route table through xdsview as an observed source. Every answer names its source ("Predicted · Gateway API", "Predicted · kgateway 2.5"), and an answer that any unknown input could change is "Can't predict" with the reason.
+
+**Consequences:** Delegated installs get answers in Phase 9. Snellius stays usable with other implementations through the Gateway API strategy. The kgateway strategy is a registered mirror (D-140).
+
+**Alternatives:** Spec-only with "can't predict" for kgateway-only features: rejected by the user, too many users lose the answer. Pull xdsview into Phase 9: moves most of Phase 12 forward, including its secure-mode work.
+
+## D-140 — The kgateway strategy is M-1 view D (2026-11-28, Phase 9)
+**Status:** proposed (Phase 9 design §4.4)
+
+**Decision:** The kgateway strategy's order and request matching become M-1 view D in the program's mirror register: kgateway `translator/routeutils/sortable_route.go` and the listener translator's per-host grouping, per tag, kgateway 2.3–2.5. It meets the mirror rules as design §4.4 states: conformance through `kgateway-route-conformance` (D-141), runtime checks through status and the test request (the Envoy table in Phase 12), the "Predicted" label, and retirement with U2 and U10.
+
+**Consequences:** A program commit after design approval (the user approves it). The user's view, recorded: implementing the documented composition rules is not copying controller logic, but the program's mirror rules still apply.
+
+## D-141 — `kgateway-route-conformance` proves the kgateway strategy (2026-11-28, Phase 9)
+**Status:** proposed (user, 2026-11-28: separate public repo and its name; Phase 9 design §9)
+
+**Decision:** Request-level cases (resources, requests, expected listener, route, rule, optional delegation chain and backend, or an outcome) live in https://github.com/DuncanDoyle/kgateway-route-conformance with a versioned schema, a Go loader and a reference runner that proves each case on kind per kgateway minor, using `EnableRouteSourceMetadata` where the minor has it and a distinct echo backend per rule. The repo holds no predictor. Expectation changes need a reason and runner evidence. Snellius runs the same cases against its strategies in unit tests.
+
+**Consequences:** M-1 rule 2 is met for view C (D-128 item 2) and view D. The corpus is a new program provider (edge E16, proposed). Other consumers (xdsview, kgwctl) and kgateway upstream can reuse it.
+
+**Alternatives:** Cases inside Snellius: harder to reuse and to adopt upstream (user). Envoy's `router_check_tool` on translator output: a secondary check only, it skips listener selection and reconciliation (Codex, 2026-11-28). Formal methods (TLA+, Alloy, Quint): only for narrow invariants.
+
+## D-142 — No nearest-version fallback for predictions (2026-11-28, Phase 9)
+**Status:** proposed (Codex, 2026-11-28; Phase 9 design §3.2)
+
+**Decision:** An unknown or unverified kgateway minor never gets the kgateway strategy. The Gateway API strategy answers only when no candidate in the virtual host uses delegation, route weights or regex paths; otherwise "Can't predict: rules not verified for <minor>". D-058's nearest-set fallback stays for the computed views.
+
+## D-143 — Predictions are derived: full read only in secure mode (2026-11-28, Phase 9)
+**Status:** proposed (our call; Phase 9 design §8; follows D-114 and D-085)
+
+**Decision:** A prediction depends on every route that could compete, including hidden ones. In secure mode a viewer without the full read gets one uniform "Prediction unavailable for your access", decided by permissions alone. Route search shows visible rows only (D-077) and no ordering. Hidden-change tests cover `predict` and `route-search`.
+
+**Consequences:** Application teams in secure mode can search, copy as curl and send (with D-144's permission), but get no prediction until a per-viewer design proves read access to the whole candidate scope. Open question 1 in the design.
+
+## D-144 — Test requests: methods, permission and guard values (2026-11-28, Phase 9, refines D-064)
+**Status:** proposed (user, 2026-11-28: methods and permission; guard values our call; Phase 9 design §7)
+
+**Decision:** GET, HEAD and OPTIONS only in Phase 9. In secure mode the viewer needs `create` on `pods/portforward` in the proxy's namespace, checked by SubjectAccessReview; this matches "Copy as curl", so Snellius grants nothing the viewer lacks. Off by default; connect timeout 2 s, total 10 s, body cap 64 KiB; no redirects; audit without header values.
+
+**Consequences:** No new chart RBAC: the check uses the viewer's identity. Network egress from the UI pod to the proxy Services is the only new surface (D-064).
+
+## D-145 — Phase 9 predicts HTTPRoute only; #26 and #27 out (2026-11-28, Phase 9)
+**Status:** proposed (our call; Phase 9 design §2)
+
+**Decision:** Prediction covers HTTPRoute. GRPCRoute, TLSRoute and TCPRoute are later. #26 (access-log line per test request) needs `pods/log` and a known log format and moves to Phase 11; #27 (certificate per SNI) moves to Phase 10.
+
+## D-146 — Route weights are evaluated for prediction (2026-11-28, Phase 9)
+**Status:** proposed (Phase 9 design §4.3)
+
+**Decision:** The kgateway strategy reads `KGW_WEIGHTED_ROUTE_PRECEDENCE` (new `install.Settings` field) and evaluates `kgateway.dev/route-weight` on HTTPRoutes, as kgateway sorts them (EP-11466). An unknown setting matters only when a candidate carries the annotation; then the answer is "Can't predict". D-126 stays: policy precedence annotations are shown, not evaluated.
+
+## D-147 — P-011 audit of D-040's remaining ranks (2026-11-28, Phase 9 start)
+**Status:** proposed (audit at the Phase 9 start, program P-011)
+
+**Context:** P-011 rule 2 forbids ranks in logical IDs. D-132 removed them for policy-ancestor KGWUI-002 only.
+
+**Finding:** These IDs still carry ranks (`pkg/health/checks.go:516-533`, `identity.go:184-221`, `computed.go:64-65`, `backend.go:52-54`): status-only owners (route parents and policy ancestors outside policy-ancestor 002, `rankOwners`); KGWUI-002 condition types on other resources; the KGWUI-015 (rule replaced) match index; KGWUI-011's computed parent; KGWUI-012 check keys; every computed finding's check kind and key; Backend 002 (`ordinal(1)`, a constant, so stable).
+
+**Proposed handling:** D-132's pattern per case: hash the discriminator where every hashed value is visible to every viewer shown the finding; keep a rank only where D-040's privacy reason still applies, and record that as P-011's documented exception. This is not route-tester work: a separate stabilization sub-phase after Phase 9, or a carry-over, as the user decides. Phase 9 adds no ranked ID.
