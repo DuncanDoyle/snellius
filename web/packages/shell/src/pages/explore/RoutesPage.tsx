@@ -17,7 +17,7 @@ import {
 import { LinkedName } from "../../explore/LinkedName";
 import { ListFrame } from "../../explore/ListFrame";
 import { listValues, useListPage } from "../../explore/listQuery";
-import { NAME_MIN_W, type ObjectColumn, ObjectTable } from "../../explore/ObjectTable";
+import { type ObjectColumn, ObjectTable } from "../../explore/ObjectTable";
 import { signalColumns } from "../../explore/RouteSignals";
 import { type FilterOption, StateFilter } from "../../explore/StateFilter";
 import { HealthBadge } from "../../health/HealthBadge";
@@ -108,7 +108,6 @@ function columns(installId: string): ObjectColumn<RouteRow>[] {
     {
       id: "name",
       header: columnCopy.route,
-      minWidth: NAME_MIN_W,
       sortKey: "name",
       cell: (r) => (
         <NameRow>

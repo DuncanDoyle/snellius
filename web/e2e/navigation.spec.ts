@@ -8,6 +8,7 @@ import {
   routeCopy,
   routeStateCopy,
   sectionsCopy,
+  viewACopy,
 } from "../packages/shell/src/copy/explorer";
 import { breadcrumbsCopy } from "../packages/shell/src/copy/navigation";
 
@@ -199,8 +200,8 @@ for (const p of CORE_PAGES) {
   });
 }
 
-// Layout (design §8.7, §17.6, D-035): fluid up to 2400 px and no page scroll. Core detail pages are two columns
-// from 1600 px (conditions and related objects beside the structure) and one column below.
+// Layout (design §8.7, §17.6, D-035, D-148): fluid up to 2400 px and no page scroll. Core detail pages are one
+// column of section cards beside a section nav, or under the Sections control below 960 px.
 // 1000 and 1100 px: section cards beside the nav are narrower than the window suggests (D-148).
 const WIDTHS = [720, 1000, 1100, 1280, 1600, 3008];
 const LONG_ROUTE = "shop/a-route-with-a-deliberately-long-name-that-must-not-wrap-or-shift-the-table";
@@ -293,19 +294,39 @@ for (const width of WIDTHS) {
             .evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent));
           expect(cut).toEqual([]);
         }
-        // Each route table keeps its Route column at least NAME_MIN_W wide; a long name is cut and shown in full on hover.
+        // Route tables keep the Route column at least NAME_MIN_W wide, with a visible link in every row.
+        // The Gateway fixture fills both tables; the other pages check the rows they have.
         for (const name of [gatewayCopy.attachedRoutes, gatewayCopy.notAttached]) {
           const t = page.getByRole("table", { name, exact: true });
-          if ((await t.count()) === 0) continue;
-          await dataRows(t);
-          const route = await t.getByRole("columnheader", { name: columnCopy.route, exact: true }).boundingBox();
-          expect(route?.width ?? 0, `${name}: Route column`).toBeGreaterThanOrEqual(NAME_MIN_W - 1);
-          const long = t.getByRole("link", { name: LONG_ROUTE });
-          if (name !== gatewayCopy.attachedRoutes || (await long.count()) === 0) continue;
+          if (p.name === "Gateway") await expect(t, name).toHaveCount(1);
+          else if ((await t.count()) === 0) continue;
+          const rows = await dataRows(t);
+          const heads = await t.getByRole("columnheader").allTextContents();
+          const col = heads.indexOf(columnCopy.route) + 1;
+          expect(col, `${name}: Route column`).toBeGreaterThan(0);
+          const cells = await rows.locator(`> td:nth-child(${col})`).evaluateAll((tds) =>
+            tds.map((td) => ({
+              text: td.textContent,
+              cell: td.getBoundingClientRect().width,
+              link: td.querySelector("a")?.getBoundingClientRect().width ?? 0,
+            })),
+          );
+          if (p.name === "Gateway") expect(cells.length, `${name}: rows`).toBeGreaterThan(0);
+          expect(
+            cells.filter((c) => c.cell < NAME_MIN_W - 1 || c.link < 1),
+            `${name}: Route cells too narrow or without a visible link`,
+          ).toEqual([]);
+        }
+        // At 1280 px and below the fixture's long route name is cut, and its full text shows on hover.
+        if (p.name === "Gateway" && width <= 1280) {
+          const long = page
+            .getByRole("table", { name: gatewayCopy.attachedRoutes, exact: true })
+            .getByRole("link", { name: LONG_ROUTE });
+          await expect(long).toBeVisible();
           const cut = await long.evaluate((a) =>
             [a, ...a.querySelectorAll("*")].some((e) => e.scrollWidth > e.clientWidth + 1),
           );
-          if (!cut) continue;
+          expect(cut, "the long route name is cut").toBe(true);
           await long.hover();
           await expect(page.getByRole("tooltip")).toHaveText(LONG_ROUTE);
           await page.mouse.move(0, 0);
@@ -313,5 +334,21 @@ for (const width of WIDTHS) {
         expectFluid(await frame(page));
       });
     }
+
+    test("Gateway page with a listener selected fills the width without page scroll", async ({ page }) => {
+      // The listener view adds the Effective hostnames column, whose header carries the Computed chip.
+      await page.goto(`${install}/gateways/infra/edge?listener=https`);
+      const t = page.getByRole("table", { name: viewACopy.routesOnListener("https"), exact: true });
+      expect(await (await dataRows(t)).count(), "https routes").toBeGreaterThan(0);
+      // The header's content box stays inside its cell (it clips the chip); the label is cut first.
+      const past = await t
+        .getByRole("columnheader", { name: new RegExp(viewACopy.effectiveHostnames) })
+        .evaluate((th) => {
+          const end = th.getBoundingClientRect().right;
+          return [...th.children].filter((e) => e.getBoundingClientRect().right > end + 1).length;
+        });
+      expect(past, "header content past its cell").toBe(0);
+      expectFluid(await frame(page));
+    });
   });
 }

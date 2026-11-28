@@ -207,8 +207,8 @@ interface ListenerTableProps {
  * Conditions and the policies naming the listener open per row; open rows are kept by name, so polling never collapses them.
  */
 export function ListenerTable({ listeners, generation, installId, policies, stylesOverride }: ListenerTableProps) {
-  const table = useRef<HTMLTableElement>(null);
-  const width = useWidth(table);
+  const frame = useRef<HTMLDivElement>(null);
+  const width = useWidth(frame);
   const stale = useContext(StaleView);
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const toggle = (name: string) =>
@@ -226,8 +226,8 @@ export function ListenerTable({ listeners, generation, installId, policies, styl
   const narrow = useMedia(NARROW) || (width !== undefined && width < fixed + WIDE_ROOM);
   const cols = (narrow ? 6 : 9) + (computed ? 1 : 0);
   return (
-    <TableFrame stylesOverride={css`${tableExtra}${stylesOverride}`}>
-      <TableStyles ref={table} aria-label={listenerCopy.table}>
+    <TableFrame ref={frame} stylesOverride={css`${tableExtra}${stylesOverride}`}>
+      <TableStyles aria-label={listenerCopy.table}>
         <colgroup>
           <col style={{ width: "40px" }} />
           <col style={{ width: "120px" }} />

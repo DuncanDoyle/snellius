@@ -21,18 +21,22 @@ export function useMedia(q: string): boolean {
   );
 }
 
-/** The element's border-box width, measured before paint and on every resize; undefined until known. */
-export function useWidth(ref: RefObject<HTMLElement | null>): number | undefined {
+/** The element's content-box width: read before first paint, then on every resize; undefined until known or when off. */
+export function useWidth(ref: RefObject<HTMLElement | null>, on = true): number | undefined {
   const [width, setWidth] = useState<number>();
   useLayoutEffect(() => {
     const el = ref.current;
-    if (!el) return;
+    if (!el || !on) {
+      setWidth(undefined);
+      return;
+    }
     const set = (w: number) => setWidth(w > 0 ? w : undefined);
-    set(el.getBoundingClientRect().width);
+    const s = getComputedStyle(el);
+    set(el.clientWidth - (Number.parseFloat(s.paddingLeft) || 0) - (Number.parseFloat(s.paddingRight) || 0));
     if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(([e]) => e && set(e.borderBoxSize?.[0]?.inlineSize ?? e.contentRect.width));
+    const ro = new ResizeObserver(([e]) => e && set(e.contentRect.width));
     ro.observe(el);
     return () => ro.disconnect();
-  }, [ref]);
+  }, [ref, on]);
   return width;
 }

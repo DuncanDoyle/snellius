@@ -1511,3 +1511,36 @@ it("the Listeners table moves hostname, TLS and allowed routes out in a 736 px c
     unmount();
   }
 });
+
+it("route tables read their card's width before the first paint and follow it across the switch on resize", async () => {
+  // The first read is the frame's own width; the observer only reports later resizes.
+  let room = 736;
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => room);
+  const observers: ResizeObserverCallback[] = [];
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(private cb: ResizeObserverCallback) {}
+      observe() {
+        observers.push(this.cb);
+      }
+      disconnect() {
+        observers.splice(observers.indexOf(this.cb), 1);
+      }
+    },
+  );
+  const resize = (w: number) =>
+    act(() => {
+      room = w;
+      for (const cb of [...observers]) cb([{ contentRect: { width: w } } as ResizeObserverEntry], {} as never);
+    });
+  serve(api());
+  mount(GW_PATH);
+  const t = await screen.findByRole("table", { name: "Attached routes" });
+  const kind = () => within(t).queryByRole("columnheader", { name: "Kind" });
+  expect(kind()).toBeNull();
+  resize(1016);
+  expect(kind()).not.toBeNull();
+  resize(736);
+  expect(kind()).toBeNull();
+});

@@ -5,6 +5,7 @@ import {
   createColumnHelper,
   flexRender,
   getCoreRowModel,
+  type SortDirection,
   type SortingState,
   useReactTable,
   type VisibilityState,
@@ -93,6 +94,24 @@ const Table = styled.table`
     text-transform: none;
     letter-spacing: normal;
     font-weight: ${(p) => p.theme.font.weight.regular};
+  }
+  /* A narrow cell puts the chip under the label and cuts the label; nothing reaches past the cell. */
+  th .head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 8px;
+    padding: 4px 0;
+    overflow: clip;
+    overflow-clip-margin: 4px;
+  }
+  th .head > .label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  th .head > .extra {
+    margin-left: 0;
   }
   td {
     padding: 6px 12px;
@@ -248,6 +267,19 @@ function autoShare<T>(cols: ObjectColumn<T>[], width: number, extra = 0): number
   return n ? (width - taken) / n : Number.POSITIVE_INFINITY;
 }
 
+/** A header's label: its sort button when it sorts, else its text, or a hidden label for the expand column. */
+function headerLabel<T>(col: ObjectColumn<T> | undefined, s: false | SortDirection, onSort: (key: string) => void) {
+  return col?.sortKey ? (
+    <button type="button" onClick={() => col.sortKey && onSort(col.sortKey)}>
+      {col.header}
+      {s === "asc" ? <ArrowUp size={12} aria-hidden="true" /> : null}
+      {s === "desc" ? <ArrowDown size={12} aria-hidden="true" /> : null}
+    </button>
+  ) : (
+    (col?.header ?? <VisuallyHidden>{listCopy.details}</VisuallyHidden>)
+  );
+}
+
 const refKey = (r: LinkedRef) => [r.group, r.kind, r.namespace ?? "", r.name].join("/");
 const nameOf = (r: LinkedRef) => (r.namespace ? `${r.namespace}/${r.name}` : r.name);
 
@@ -326,10 +358,10 @@ export function ObjectTable<T>({
   const [active, setActive] = useState(0);
   const rowEls = useRef<(HTMLTableRowElement | null)[]>([]);
   const secondary = columns.filter((c) => c.secondary);
-  // The table's own width decides too: a section card beside the nav is narrower than the window suggests.
-  const tableEl = useRef<HTMLTableElement>(null);
-  const width = useWidth(tableEl);
   const least = Math.max(0, ...columns.filter((c) => !c.width).map((c) => c.minWidth ?? 0));
+  // The room the frame gives the table decides too (a card beside the nav); measured only when a column needs it.
+  const frameEl = useRef<HTMLDivElement>(null);
+  const width = useWidth(frameEl, least > 0);
   const tight = least > 0 && width !== undefined && autoShare(columns, width) < least;
   const collapse = (narrow || tight) && secondary.length > 0;
   const keyOf = useCallback((r: T) => (rowKey ? rowKey(r) : refKey(rowRef(r))), [rowKey, rowRef]);
@@ -420,9 +452,9 @@ export function ObjectTable<T>({
   };
   const focusable = Math.min(active, Math.max(0, rows.length - 1));
   return (
-    <Frame stylesOverride={stylesOverride}>
+    <Frame ref={frameEl} stylesOverride={stylesOverride}>
       {busy ? <BusyBar data-testid="table-busy" aria-hidden="true" /> : null}
-      <Table ref={tableEl} aria-label={label} aria-busy={loading || busy}>
+      <Table aria-label={label} aria-busy={loading || busy}>
         <colgroup>
           {shown.map((c) => (
             <col key={c.id} style={{ width: widths[c.id] }} />
@@ -440,16 +472,16 @@ export function ObjectTable<T>({
                   className={col?.headerExtra ? "has-extra" : undefined}
                   aria-sort={s === "asc" ? "ascending" : s === "desc" ? "descending" : undefined}
                 >
-                  {col?.sortKey ? (
-                    <button type="button" onClick={() => col.sortKey && onSort(col.sortKey)}>
-                      {col.header}
-                      {s === "asc" ? <ArrowUp size={12} aria-hidden="true" /> : null}
-                      {s === "desc" ? <ArrowDown size={12} aria-hidden="true" /> : null}
-                    </button>
+                  {col?.headerExtra ? (
+                    <span className="head">
+                      <span className="label" title={col.header}>
+                        {headerLabel(col, s, onSort)}
+                      </span>
+                      <span className="extra">{col.headerExtra}</span>
+                    </span>
                   ) : (
-                    (col?.header ?? <VisuallyHidden>{listCopy.details}</VisuallyHidden>)
+                    headerLabel(col, s, onSort)
                   )}
-                  {col?.headerExtra ? <span className="extra">{col.headerExtra}</span> : null}
                 </th>
               );
             })}
