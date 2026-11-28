@@ -1876,3 +1876,14 @@ Measured on the reference machine, 5 runs per world:
 **Decision:** `policy.Inputs.ListOnlyKinds` carries the caller's list-only classification, and `Relations` makes no `attached-on-ancestor` relation for a policy of those kinds. Nil means no kind is list-only. The API passes its served list-only kinds and drops its own filter.
 
 **Consequences:** Every consumer gets the same relations from the same inputs. The field is additive within the minor (D-123). The README's one-shot caller example names the field.
+
+## D-148 — Detail pages: section cards, a sticky section nav and one reading order (2026-11-28, UI round 0.9.2)
+**Status:** proposed (owner chose the layout; design awaiting approval)
+
+**Context:** Detail page sections are plain headings at body size, so users cannot tell them apart, and policies come before rules. From 1600 px some sections move to a right-hand column, so the order depends on window width. Long rule lists push later sections out of view.
+
+**Decision:** Every detail page shows its Overview as section cards in one column, in a fixed order by group (Where it sits, Status, What it does, Runtime, What acts on it, Related), with a sticky left nav that lists the sections with counts and highlights the current one. The right-hand column is folded into that order. No tabs per section and no collapsing. Design: `docs/phases/ui-0.9.2/design.md`.
+
+**Alternatives:** one tab per section (Ctrl+F finds only the open tab); full-width collapsible bands with a jump bar (Codex's pick; weaker location signal); keeping the right-hand column (the hierarchy leaves the top and the order changes with width).
+
+**Consequences:** Ships as `v0.9.2`, before Phase 9. Core pages stop using the two-column layout; `DetailColumns` stays exported for downstream builds. The Runtime group is where xdsview information lands in later phases. The Phase 9 branch uses D-139 … D-147, so this entry takes D-148.

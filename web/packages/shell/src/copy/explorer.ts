@@ -204,7 +204,7 @@ export const listenerCopy = {
 
 // region ListenerSet page
 export const listenerSetCopy = {
-  parent: "Parent",
+  reachedThrough: "Reached through", // S863
   parentGateway: "Parent Gateway",
   notAvailable: "Not available", // S56
   allowedTitle: "Parent Gateway's", // S57, followed by the field name
@@ -278,7 +278,6 @@ export const routeCopy = {
     restricted: "Restricted", // S82
   },
   childRoutes: "Child routes",
-  toggleChildren: (open: boolean) => (open ? "Hide child routes" : "Show child routes"), // S92
   noChildRoutes: "No reported child routes.", // S93
   // A route's rule table (D-081).
   problemsOnly: "Problems only", // S771
@@ -449,6 +448,8 @@ export const findingsCopy = {
   affected: "Affected objects", // S288
   noAffected: "No affected objects you can view.", // S289
   suggestedFix: "Suggested fix", // S290
+  summary: "Summary", // S864
+  kind: "Finding", // S865: names the page's section nav
   nextSteps: "Next steps", // S291
   needs: (perms: string[]) => `Needs ${perms.join(", ")}`, // S292
   copy: "Copy", // S293
@@ -707,4 +708,22 @@ export const traceCopy = {
       : `Share of this rule's requests: ${parts.join(", ")}`, // S761
   connectionsHint: "% of this rule's connections", // S764
   onAttachment: (gateway: string, listener: string) => `On ${gateway}, listener ${listener}:`, // S762
+};
+
+// region Detail sections (ui-0.9.2, D-148)
+/** Group labels of the section nav and the narrow-window control (design §5, §6). */
+export const sectionsCopy = {
+  groups: {
+    where: "Where it sits", // S854
+    status: "Status", // S855
+    does: "What it does", // S856
+    runtime: "Runtime", // S857
+    actsOn: "What acts on it", // S858
+    related: "Related", // S859
+  },
+  sections: "Sections", // S860
+  /** The section nav's accessible name. */
+  nav: (kind: string) => `${kind} sections`, // S861
+  /** A contributed section that failed or rendered nothing. */
+  nothingToShow: "Nothing to show here.", // S862
 };

@@ -3,9 +3,7 @@ import styled from "@emotion/styled";
 import { useNow } from "../../api/clock";
 import type { Endpoints } from "../../api/types";
 import { endpointsCopy, portChainCopy } from "../../copy/backends";
-import { pathColumnCopy } from "../../copy/traffic";
 import { QuietButton } from "../../states/controls";
-import { Section } from "../explore/detailParts";
 import { ago } from "../install/HealthStrip";
 import { endpointsText } from "../traffic/pathText";
 
@@ -116,72 +114,69 @@ interface EndpointsSectionProps {
 /** Endpoints per referenced port, by source (Phase 6 design §9); "0" only where a complete read established it. */
 export function EndpointsSection({ sources, noSuchPorts = [], onRetry, stylesOverride }: EndpointsSectionProps) {
   return (
-    <Section aria-labelledby="backend-endpoints">
-      <h2 id="backend-endpoints">{pathColumnCopy.endpoints}</h2>
-      <Sources stylesOverride={stylesOverride}>
-        {sources.length ? null : <span>{endpointsCopy.noPorts}</span>}
-        {sources.map((e, i) => {
-          const port = e.port ? endpointsCopy.port(e.port.port, e.port.name) : "";
-          const lacks = !!e.port && noSuchPorts.includes(e.port.port);
-          const s = lacks ? { text: portChainCopy.noSuchPort(e.port?.port ?? 0), cached: false } : sourceSummary(e);
-          // Not applicable reads nothing, and an unavailable source without counts was not read: no read time.
-          const timed =
-            e.complete !== "not-applicable" &&
-            e.complete !== "not-permitted" &&
-            !(e.complete === "unavailable" && e.ready === undefined) &&
-            !lacks;
-          const items = e.complete === "complete" || e.complete === "partial" ? (e.items ?? []) : undefined;
-          return (
-            <Source key={`${e.source}/${e.port?.port ?? i}`} data-testid="endpoints-source" data-complete={e.complete}>
-              <h3>
-                {port}
-                <span className="muted">{endpointsCopy.source[e.source] ?? e.source}</span>
-                {timed ? <ReadAge readAt={e.readAt} /> : null}
-              </h3>
-              <div className="summary">
-                <span data-testid="endpoints-summary">{s.text}</span>
-                {s.cached ? <span className="muted">{endpointsCopy.cachedNote}</span> : null}
-                {e.complete === "partial" ? <span className="muted">{endpointsCopy.partialNote}</span> : null}
-                {e.cachedReady !== undefined ? (
-                  <span data-testid="endpoints-disagree">{endpointsCopy.disagree(e.cachedReady)}</span>
-                ) : null}
-                {e.complete === "busy" || e.complete === "timed-out" ? (
-                  <QuietButton type="button" onClick={onRetry}>
-                    {endpointsCopy.retry}
-                  </QuietButton>
-                ) : null}
-              </div>
-              {items?.length ? (
-                <table aria-label={endpointsCopy.table(port)}>
-                  <thead>
-                    <tr>
-                      <th scope="col">{endpointsCopy.address}</th>
-                      <th scope="col">{endpointsCopy.ready}</th>
-                      <th scope="col">{endpointsCopy.serving}</th>
-                      <th scope="col">{endpointsCopy.terminating}</th>
-                      <th scope="col">{endpointsCopy.pod}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((x) => (
-                      <tr key={`${x.address}:${x.port ?? ""}`}>
-                        <td className="mono">{x.port ? `${x.address}:${x.port}` : x.address}</td>
-                        <td>{yesNo(x.ready)}</td>
-                        <td>{yesNo(x.serving)}</td>
-                        <td>{yesNo(x.terminating)}</td>
-                        <td className="mono">{x.pod ?? ""}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : items && e.complete === "complete" ? (
-                <span className="muted">{endpointsCopy.noItems}</span>
+    <Sources stylesOverride={stylesOverride}>
+      {sources.length ? null : <span>{endpointsCopy.noPorts}</span>}
+      {sources.map((e, i) => {
+        const port = e.port ? endpointsCopy.port(e.port.port, e.port.name) : "";
+        const lacks = !!e.port && noSuchPorts.includes(e.port.port);
+        const s = lacks ? { text: portChainCopy.noSuchPort(e.port?.port ?? 0), cached: false } : sourceSummary(e);
+        // Not applicable reads nothing, and an unavailable source without counts was not read: no read time.
+        const timed =
+          e.complete !== "not-applicable" &&
+          e.complete !== "not-permitted" &&
+          !(e.complete === "unavailable" && e.ready === undefined) &&
+          !lacks;
+        const items = e.complete === "complete" || e.complete === "partial" ? (e.items ?? []) : undefined;
+        return (
+          <Source key={`${e.source}/${e.port?.port ?? i}`} data-testid="endpoints-source" data-complete={e.complete}>
+            <h3>
+              {port}
+              <span className="muted">{endpointsCopy.source[e.source] ?? e.source}</span>
+              {timed ? <ReadAge readAt={e.readAt} /> : null}
+            </h3>
+            <div className="summary">
+              <span data-testid="endpoints-summary">{s.text}</span>
+              {s.cached ? <span className="muted">{endpointsCopy.cachedNote}</span> : null}
+              {e.complete === "partial" ? <span className="muted">{endpointsCopy.partialNote}</span> : null}
+              {e.cachedReady !== undefined ? (
+                <span data-testid="endpoints-disagree">{endpointsCopy.disagree(e.cachedReady)}</span>
               ) : null}
-            </Source>
-          );
-        })}
-        <ProxySlot data-testid="per-proxy-slot">{endpointsCopy.perProxy}</ProxySlot>
-      </Sources>
-    </Section>
+              {e.complete === "busy" || e.complete === "timed-out" ? (
+                <QuietButton type="button" onClick={onRetry}>
+                  {endpointsCopy.retry}
+                </QuietButton>
+              ) : null}
+            </div>
+            {items?.length ? (
+              <table aria-label={endpointsCopy.table(port)}>
+                <thead>
+                  <tr>
+                    <th scope="col">{endpointsCopy.address}</th>
+                    <th scope="col">{endpointsCopy.ready}</th>
+                    <th scope="col">{endpointsCopy.serving}</th>
+                    <th scope="col">{endpointsCopy.terminating}</th>
+                    <th scope="col">{endpointsCopy.pod}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((x) => (
+                    <tr key={`${x.address}:${x.port ?? ""}`}>
+                      <td className="mono">{x.port ? `${x.address}:${x.port}` : x.address}</td>
+                      <td>{yesNo(x.ready)}</td>
+                      <td>{yesNo(x.serving)}</td>
+                      <td>{yesNo(x.terminating)}</td>
+                      <td className="mono">{x.pod ?? ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : items && e.complete === "complete" ? (
+              <span className="muted">{endpointsCopy.noItems}</span>
+            ) : null}
+          </Source>
+        );
+      })}
+      <ProxySlot data-testid="per-proxy-slot">{endpointsCopy.perProxy}</ProxySlot>
+    </Sources>
   );
 }

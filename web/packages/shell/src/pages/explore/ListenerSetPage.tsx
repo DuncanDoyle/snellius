@@ -6,18 +6,19 @@ import { useParams } from "react-router-dom";
 import { useListenerSetDetail } from "../../api/exploreHooks";
 import type { AllowedListeners, Condition, LinkedRef } from "../../api/types";
 import { detailCopy, gatewayCopy, listenerSetCopy } from "../../copy/explorer";
+import { relationsCopy } from "../../copy/policies";
 import { ConditionList } from "../../explore/ConditionList";
 import { LinkedName } from "../../explore/LinkedName";
 import { firstFailing } from "../../explore/ProblemStrip";
 import { ResourceName } from "../../resource/ResourceName";
 import { YamlBlock } from "../../resource/ResourceYaml";
 import { useInstallId } from "../../shell/extension";
-import { useTwoColumns } from "../../shell/layout";
-import { PolicyRelationsSection } from "../policies/PolicyRelationsSection";
-import { DetailFrame, Facts, Section } from "./detailParts";
+import { PolicyRelationsBody, policyRelationsCount } from "../policies/PolicyRelationsSection";
+import type { DetailSection } from "./DetailSections";
+import { DetailFrame, Facts } from "./detailParts";
 import { ListenerTable } from "./gateway/ListenerTable";
 import { Muted } from "./listParts";
-import { RouteSections } from "./RouteSections";
+import { AttachedRoutesBody, attachedRoutesTitle, FailedRoutesBody, failedRoutesCount } from "./RouteSections";
 
 // region Styles
 const Allowed = styled.div`
@@ -78,7 +79,7 @@ interface ListenerSetPageProps {
   stylesOverride?: SerializedStyles;
 }
 
-/** One ListenerSet: its parent Gateway, conditions, listeners and routes (design §8.5). */
+/** One ListenerSet as sections in the D-148 order: parent, conditions, listeners, routes, then the policies that act on it. */
 export function ListenerSetPage({ stylesOverride }: ListenerSetPageProps = {}) {
   const id = useInstallId();
   const { group = "", kind = "", ns = "", name = "" } = useParams();
@@ -87,43 +88,102 @@ export function ListenerSetPage({ stylesOverride }: ListenerSetPageProps = {}) {
   const allowed = data?.parentAllowedListeners;
   // The parent's server link decides its crumb in the trail.
   const parentRef = useMemo(() => (data ? [data.parent] : undefined), [data]);
-  // From 1600 px the parent and conditions sit beside the structure; below, above it.
-  const wide = useTwoColumns();
   // parentFound is false for a hidden parent too, so the page never says it does not exist (D-013).
-  const parentName = data ? (
-    data.parentFound ? (
-      <LinkedName refValue={data.parent} installId={id} />
-    ) : (
-      <>
-        <ResourceName namespace={data.parent.namespace} name={data.parent.name} />{" "}
-        <Muted>{listenerSetCopy.notAvailable}</Muted>
-      </>
-    )
-  ) : null;
-  const related = data ? (
-    <>
-      <Section aria-label={listenerSetCopy.parent}>
-        <Facts>
-          <dt>{listenerSetCopy.parentGateway}</dt>
-          <dd>{parentName}</dd>
-        </Facts>
-      </Section>
-      <Section aria-labelledby="ls-conditions">
-        <h2 id="ls-conditions">{detailCopy.conditions}</h2>
-        <ConditionList
-          conditions={data.conditions}
-          generation={data.generation}
-          empty={data.experimentalHint}
-          extra={(c) => (data.parentFound && allowed && isNotAllowed(c) ? <AllowedListenersBlock a={allowed} /> : null)}
-        />
-      </Section>
-    </>
-  ) : null;
+  const parentName = useMemo(
+    () =>
+      data ? (
+        data.parentFound ? (
+          <LinkedName refValue={data.parent} installId={id} />
+        ) : (
+          <>
+            <ResourceName namespace={data.parent.namespace} name={data.parent.name} />{" "}
+            <Muted>{listenerSetCopy.notAvailable}</Muted>
+          </>
+        )
+      ) : null,
+    [data, id],
+  );
+  const sections = useMemo<DetailSection[] | undefined>(() => {
+    if (!data) return undefined;
+    const relations = data.policyRelations;
+    const out: DetailSection[] = [
+      {
+        id: "ls-parent",
+        group: "where",
+        title: listenerSetCopy.reachedThrough,
+        render: () => (
+          <Facts>
+            <dt>{listenerSetCopy.parentGateway}</dt>
+            <dd>{parentName}</dd>
+          </Facts>
+        ),
+      },
+      {
+        id: "ls-conditions",
+        group: "status",
+        title: detailCopy.conditions,
+        count: data.conditions.length,
+        muted: !data.conditions.length,
+        render: () => (
+          <ConditionList
+            conditions={data.conditions}
+            generation={data.generation}
+            empty={data.experimentalHint}
+            extra={(c) =>
+              data.parentFound && allowed && isNotAllowed(c) ? <AllowedListenersBlock a={allowed} /> : null
+            }
+          />
+        ),
+      },
+      {
+        id: "ls-listeners",
+        group: "does",
+        title: gatewayCopy.listeners,
+        count: data.listeners.length,
+        muted: !data.listeners.length,
+        render: () => (
+          <ListenerTable
+            listeners={data.listeners}
+            generation={data.generation}
+            installId={id}
+            policies={relations?.targeting}
+          />
+        ),
+      },
+      {
+        id: "attached-routes",
+        group: "does",
+        title: attachedRoutesTitle(),
+        count: data.routeCounts.accepted,
+        muted: data.routeCounts.accepted === 0,
+        render: () => <AttachedRoutesBody installId={id} parent={data.ref} counts={data.routeCounts} />,
+      },
+      {
+        id: "failed-routes",
+        group: "does",
+        title: gatewayCopy.notAttached,
+        count: failedRoutesCount(data.routeCounts),
+        muted: failedRoutesCount(data.routeCounts) === 0,
+        render: () => <FailedRoutesBody installId={id} parent={data.ref} counts={data.routeCounts} />,
+      },
+    ];
+    // An older server sends no relations: no Policies section.
+    if (relations) {
+      const n = policyRelationsCount(relations);
+      out.push({
+        id: "policy-relations",
+        group: "actsOn",
+        title: relationsCopy.title,
+        count: n,
+        muted: n === 0,
+        render: () => <PolicyRelationsBody installId={id} subject={ref} relations={relations} />,
+      });
+    }
+    return out;
+  }, [data, parentName, allowed, id, ref]);
   return (
     <DetailFrame
       trailRefs={parentRef}
-      side={wide ? related : null}
-      sideWhenWide
       installId={id}
       refValue={ref}
       noun="ListenerSet"
@@ -137,26 +197,8 @@ export function ListenerSetPage({ stylesOverride }: ListenerSetPageProps = {}) {
           parent: { label: listenerSetCopy.parentGateway, name: parentName },
         }
       }
+      sections={sections ?? []}
       stylesOverride={stylesOverride}
-    >
-      {data ? (
-        <>
-          {wide ? null : related}
-          <PolicyRelationsSection installId={id} subject={ref} relations={data.policyRelations} />
-          <Section aria-labelledby="ls-listeners">
-            <h2 id="ls-listeners">
-              {gatewayCopy.listeners} <span className="note">{data.listeners.length}</span>
-            </h2>
-            <ListenerTable
-              listeners={data.listeners}
-              generation={data.generation}
-              installId={id}
-              policies={data.policyRelations?.targeting}
-            />
-          </Section>
-          <RouteSections installId={id} parent={data.ref} counts={data.routeCounts} />
-        </>
-      ) : null}
-    </DetailFrame>
+    />
   );
 }

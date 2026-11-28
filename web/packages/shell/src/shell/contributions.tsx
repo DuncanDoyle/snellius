@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { Component, type ReactNode, useMemo } from "react";
+import { Component, Fragment, isValidElement, type ReactNode, useMemo } from "react";
 import { useFeatureCheck } from "../api/hooks";
 import type { Finding, Ref } from "../api/types";
 import { useShellExtension } from "./extension";
@@ -108,8 +108,19 @@ function unique<T extends { id: string }>(all: T[], slot: string): T[] {
   });
 }
 
-function Call({ render }: { render: () => ReactNode }) {
-  return <>{render()}</>;
+// Output that renders nothing: null, undefined, a boolean, "", or a list or fragment of only those.
+// A component that returns null cannot be seen without rendering it, so it is not caught here.
+const isEmpty = (n: ReactNode): boolean =>
+  n === null ||
+  n === undefined ||
+  typeof n === "boolean" ||
+  n === "" ||
+  (Array.isArray(n) && n.every(isEmpty)) ||
+  (isValidElement<{ children?: ReactNode }>(n) && n.type === Fragment && isEmpty(n.props.children));
+
+function Call({ render, fallback }: { render: () => ReactNode; fallback?: ReactNode }) {
+  const out = render();
+  return <>{fallback !== undefined && isEmpty(out) ? fallback : out}</>;
 }
 
 // region Component
@@ -118,9 +129,11 @@ interface SlotProps {
   /** Names what the contribution renders for, e.g. the object; a change retries a failed render. */
   resetKey: string;
   render: () => ReactNode;
+  /** Shown when the contribution throws or renders nothing; without it, the slot stays empty. */
+  fallback?: ReactNode;
 }
 
-/** Renders a contribution; when it throws, renders nothing and warns once per id, so the core page stays up. */
+/** Renders a contribution; when it throws, renders its fallback (or nothing) and warns once per id, so the core page stays up. */
 export class Slot extends Component<SlotProps, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() {
@@ -133,7 +146,8 @@ export class Slot extends Component<SlotProps, { failed: boolean }> {
     if (this.state.failed && prev.resetKey !== this.props.resetKey) this.setState({ failed: false });
   }
   render() {
-    return this.state.failed ? null : <Call render={this.props.render} />;
+    const { render, fallback } = this.props;
+    return this.state.failed ? (fallback ?? null) : <Call render={render} fallback={fallback} />;
   }
 }
 

@@ -532,6 +532,10 @@ Saved theme choices carry over. Finding codes keep the `KGWUI-` prefix, so API v
 
 ## Upgrade notes
 
+### v0.9.2
+
+- **Detail pages.** Detail pages show section cards with a section nav, in one fixed order. The right-hand column from 1600 px is gone. Extension side sections now appear in the nav under "Related", with `#ext-<id>` anchors, and a side section that fails shows a short line instead of disappearing. No API fields change.
+
 ### v0.9.0: policies (Phase 8)
 
 New Policies pages, policy sections on Gateway, ListenerSet, route and backend pages, and policies in each expanded listener row: see [Policies](#policies). The new endpoints and fields are additive to API v1. Two existing wire values change: policy `link` values, and the IDs of policy-ancestor KGWUI-002 findings. Both are below.

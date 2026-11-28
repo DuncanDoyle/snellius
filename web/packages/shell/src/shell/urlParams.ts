@@ -38,16 +38,22 @@ export function useUrlParams(): [URLSearchParams, (changes: ParamChanges) => voi
   }, [location, navType, id]);
   // useNavigate() changes identity with the pathname; depending on it would mirror stale params onto a new path.
   const navigateRef = useRef(navigate);
+  // The current hash, so a query write keeps the section the URL points at.
+  const hashRef = useRef(location.hash);
   useLayoutEffect(() => {
     navigateRef.current = navigate;
-  }, [navigate]);
+    hashRef.current = location.hash;
+  }, [navigate, location.hash]);
   // Mirrors local state to the URL; it never reads the location, so a late commit of an older write changes nothing.
   // Known limit: typing while a route transition is pending writes the old path back and undoes that navigation.
   useEffect(() => {
     const s = params.toString();
     if (s === written.current) return;
     written.current = s;
-    navigateRef.current({ search: s ? `?${s}` : "" }, { replace: true, state: { [WRITER]: id } });
+    navigateRef.current(
+      { search: s ? `?${s}` : "", hash: hashRef.current },
+      { replace: true, state: { [WRITER]: id } },
+    );
   }, [params, id]);
   const update = useCallback((changes: ParamChanges) => {
     setParams((prev) => {

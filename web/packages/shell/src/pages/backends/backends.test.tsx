@@ -331,7 +331,7 @@ it("a Service has no YAML tab; its facts, port chain and per-proxy slot show", a
   await statusLine();
   expect(screen.getByRole("tab", { name: "Overview" })).toBeInTheDocument();
   expect(screen.queryByRole("tab", { name: "YAML" })).toBeNull();
-  expect(screen.getByText("Service facts")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Service facts" })).toBeInTheDocument();
   expect(screen.getByText("ClusterIP")).toBeInTheDocument();
   const chain = screen.getByTestId("port-chain");
   expect(chain).toHaveTextContent("Route port80");
@@ -478,4 +478,79 @@ it("a stale detail shows every state unknown and the status line claims no impac
   expect(line).toHaveAttribute("data-state", "unknown");
   expect(line).toHaveTextContent("its state is unknown while the data is out of date");
   expect(line).not.toHaveTextContent("requests fail");
+});
+
+// region Sections (D-148)
+const cardTitles = () =>
+  Array.from(screen.getByTestId("detail-sections").querySelectorAll(":scope > div > section > header h2")).map(
+    (h) => h.textContent,
+  );
+const navEntry = (kind: string, title: string) =>
+  within(screen.getByRole("navigation", { name: `${kind} sections` })).getByRole("link", {
+    name: new RegExp(`^${title}`),
+  });
+
+it("backend sections follow the design order", async () => {
+  const d = detail(backendGolden);
+  d.consumers = [
+    {
+      consumer: {
+        group: "gateway.kgateway.dev",
+        kind: "GatewayExtension",
+        namespace: "shop",
+        name: "authz",
+        link: "yaml",
+      },
+      role: "ext-auth",
+      field: "spec.extAuth.grpcService.backendRef",
+    },
+  ];
+  d.portChain = detail(serviceGolden).portChain;
+  d.explanations = detail(explainedGolden).explanations;
+  serveDetail(d, `${API}/backends/gateway.kgateway.dev/Backend/shop/be-used`);
+  mount(`/i/${ID}/backends/gateway.kgateway.dev/Backend/shop/be-used`);
+  await screen.findByTestId("detail-sections");
+  expect(cardTitles()).toEqual([
+    "Backend facts",
+    "Conditions",
+    "Port chain",
+    "Endpoints",
+    "Why refs fail",
+    "Policies",
+    "How this backend is exposed",
+    "Other users",
+  ]);
+  expect(navEntry("Backend", "Conditions")).toHaveTextContent(String((d.conditions ?? []).length));
+  expect(navEntry("Backend", "How this backend is exposed")).toHaveTextContent(String(d.exposure.summary.paths));
+  expect(navEntry("Backend", "Other users")).toHaveTextContent("1");
+  // Section ids keep today's heading ids.
+  for (const id of [
+    "backend-facts",
+    "backend-conditions",
+    "backend-ports",
+    "backend-endpoints",
+    "backend-explanations",
+  ])
+    expect(document.getElementById(id)).not.toBeNull();
+});
+
+it("a Service has no Conditions section", async () => {
+  serveDetail(detail(serviceGolden));
+  mount(`/i/${ID}/backends/-/Service/shop/named-svc`);
+  await screen.findByTestId("detail-sections");
+  expect(cardTitles()).not.toContain("Conditions");
+  expect(cardTitles()[0]).toBe("Service facts");
+});
+
+it("the status line sits above the first card and the header badge links to it", async () => {
+  const d = detail(serviceGolden);
+  d.problem = { state: "error", signals: [] };
+  d.status = [{ kind: "finding", code: "KGWUI-023", state: "error" } as PathSignal];
+  serveDetail(d);
+  mount(`/i/${ID}/backends/-/Service/shop/named-svc`);
+  const line = await statusLine();
+  const sections = screen.getByTestId("detail-sections");
+  expect(sections).not.toContainElement(line);
+  expect(line.compareDocumentPosition(sections) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.getByTestId("state-link")).toHaveAttribute("href", `#${line.id}`);
 });

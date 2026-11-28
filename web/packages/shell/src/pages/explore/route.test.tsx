@@ -172,7 +172,7 @@ it("permission line: Allows any parent route / Allows: shop/api", async () => {
   expect(screen.getByText("Allows no parent route")).toBeInTheDocument();
 });
 
-it("child routes are paged and fetched when expanded", async () => {
+it("child routes start open, are fetched with the page and are paged", async () => {
   let release: (() => void) | undefined;
   const gate = new Promise<void>((r) => {
     release = r;
@@ -188,12 +188,8 @@ it("child routes are paged and fetched when expanded", async () => {
   );
   mount(MID);
   await loaded();
-  // Nothing fetched until the section opens.
-  expect(routeCalls()).toHaveLength(0);
-  const toggle = screen.getByRole("button", { name: "Show child routes" });
-  expect(toggle).toHaveAttribute("aria-expanded", "false");
-  fireEvent.click(toggle);
-  expect(toggle).toHaveAttribute("aria-expanded", "true");
+  // No toggle: every section is open (design §10.8).
+  expect(screen.queryByRole("button", { name: /child routes/ })).toBeNull();
   const t = await screen.findByRole("table", { name: "Child routes" });
   // childCount 2; declared candidates are never children, so declaredCount does not count.
   expect(within(t).getAllByTestId("skeleton-row")).toHaveLength(2);
@@ -218,7 +214,7 @@ it("a route with no children says so and fetches nothing", async () => {
   mount(MID);
   await loaded();
   expect(screen.getByText("No reported child routes.")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Show child routes" })).toBeNull();
+  expect(screen.queryByRole("table", { name: "Child routes" })).toBeNull();
   expect(routeCalls()).toHaveLength(0);
 });
 
@@ -507,7 +503,7 @@ it("the header and tabs keep their size from loading to loaded", async () => {
 });
 
 describe.each([controlRoomLight, controlRoomDark])("interactive styles in $id", (theme) => {
-  it("up-chain links, the Traffic and backend links, the rule rows and the expanders have hover, active and focus-visible styles", async () => {
+  it("up-chain links, the Traffic and backend links, the rule rows and the expander have hover, active and focus-visible styles", async () => {
     serve(api());
     mount(FAR, theme.id);
     await loaded();
@@ -523,7 +519,6 @@ describe.each([controlRoomLight, controlRoomDark])("interactive styles in $id", 
     expect(step).toHaveFocus();
     els.push(
       step,
-      within(r.container).getByRole("button", { name: "Show child routes" }),
       within(r.container).getByRole("link", { name: trafficCopy.routeEntry }),
       within(r.container).getAllByRole("link", { name: /shop\/cart-svc/ })[0] as HTMLElement,
       within(within(r.container).getAllByTestId("rule-row")[0] as HTMLElement).getByRole("button"),
@@ -671,25 +666,105 @@ function viewport(wide: boolean) {
   }));
 }
 
-it("from 1600 px the up-chain and parents render in the side column; below, at the top of the main", async () => {
-  for (const wide of [true, false]) {
-    viewport(wide);
-    serve(api());
-    const view = mount(MID);
-    const upChain = await loaded();
-    const parents = screen.getByRole("region", { name: /^Parents/ });
-    const rules = screen.getByRole("region", { name: /^Rules/ });
-    const column = screen.getByTestId(wide ? "detail-side" : "detail-main");
-    expect(column).toContainElement(upChain);
-    expect(column).toContainElement(parents);
-    expect(screen.getByTestId("detail-main")).toContainElement(rules);
-    // DOM order is visual order at each width, so tab order follows what is visible.
-    const order = (a: Node, b: Node) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(order(rules, parents)).toBe(wide);
-    expect(order(upChain, parents)).toBe(true);
-    view.unmount();
-    vi.unstubAllGlobals();
-  }
+// region Sections (D-148)
+/** The section cards' titles, in page order. */
+const cardTitles = () =>
+  Array.from(screen.getByTestId("detail-sections").querySelectorAll(":scope > div > section > header h2")).map(
+    (h) => h.textContent,
+  );
+const card = (title: string) => screen.getByRole("region", { name: title });
+const navEntry = (title: string) =>
+  within(screen.getByRole("navigation", { name: "HTTPRoute sections" })).getByRole("link", {
+    name: new RegExp(`^${title}`),
+  });
+const PLAIN = `/i/${ID}/routes/${GW}/TCPRoute/shop/plain`;
+/** mid as a TCPRoute: no delegation, so no effective matches and no child routes. */
+function plainRoute(): RouteDetail {
+  const d = detail(routeGolden);
+  d.ref = { ...d.ref, kind: "TCPRoute", name: "plain" };
+  d.effective = undefined;
+  d.rules = d.rules.map((r) => ({ ...r, backendRefs: r.backendRefs.filter((b) => !b.delegation) }));
+  return d;
+}
+
+it("route sections follow the design order", async () => {
+  serve((u) => (u.pathname === `${API}/routes/${GW}/TCPRoute/shop/plain` ? plainRoute() : api()(u)));
+  const first = mount(PLAIN);
+  await loaded();
+  expect(cardTitles()).toEqual(["Reached through", "Parents", "Summary", "Rules", "Policies"]);
+  first.unmount();
+
+  serve(api());
+  mount(MID);
+  await loaded();
+  expect(cardTitles()).toEqual([
+    "Reached through",
+    "Parents",
+    "Summary",
+    "Rules",
+    "Effective matches",
+    "Policies",
+    "Child routes",
+  ]);
+  // The up-chain sits at the top of "Reached through", above the serves list.
+  const reached = card("Reached through");
+  expect(reached).toContainElement(screen.getByRole("navigation", { name: "Route parents" }));
+  // Counts come from the detail response.
+  expect(navEntry("Parents")).toHaveTextContent("7");
+  expect(navEntry("Rules")).toHaveTextContent(String(detail(routeGolden).rules.length));
+  expect(navEntry("Child routes")).toHaveTextContent("2");
+});
+
+it("no side column at 1600 px", async () => {
+  viewport(true);
+  serve(api());
+  mount(MID);
+  await loaded();
+  expect(screen.queryByTestId("detail-side")).toBeNull();
+  const order = (a: Node, b: Node) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const sections = screen.getByTestId("detail-sections");
+  const parents = card("Parents");
+  expect(sections).toContainElement(parents);
+  expect(order(card("Reached through"), parents)).toBe(true);
+  expect(order(parents, card("Rules"))).toBe(true);
+});
+
+it("deep link opens Rules after load", async () => {
+  const scroll = vi.fn();
+  Element.prototype.scrollIntoView = scroll;
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const reply = api();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      await gate;
+      return new Response(JSON.stringify(reply(new URL(url, "http://ui"))), { status: 200 });
+    }),
+  );
+  mount(`${MID}#route-rules`);
+  expect(scroll).not.toHaveBeenCalled();
+  await act(async () => release?.());
+  await loaded();
+  await waitFor(() => expect(scroll.mock.contexts.map((el) => (el as Element).id)).toContain("route-rules"));
+  expect(navEntry("Rules")).toHaveAttribute("aria-current", "location");
+  Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+});
+
+it("route with no policies keeps an empty Policies card", async () => {
+  // mid's golden relations list no policies in any group.
+  serve(api());
+  mount(MID);
+  await loaded();
+  const policies = card("Policies");
+  expect(within(policies).getAllByText("None.").length).toBeGreaterThan(0);
+  // The card header has the title; the body has no heading of its own.
+  expect(policies.querySelectorAll("h2")).toHaveLength(1);
+  expect(within(policies).getByText("0")).toBeInTheDocument();
+  expect(navEntry("Policies")).toHaveAttribute("data-muted", "true");
+  expect(navEntry("Policies")).toHaveTextContent("0");
 });
 
 describe("a route's rule table", () => {
@@ -867,6 +942,20 @@ describe("a route's rule table", () => {
     Reflect.deleteProperty(Element.prototype, "scrollIntoView");
   });
 
+  it("?rule= wins over a section hash", async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    mountLong(9, "?rule=7#policy-relations");
+    await loaded();
+    expect(screen.getByRole("region", { name: /^Rule 7\b/ })).toBeInTheDocument();
+    // Only rule 7 is scrolled to; the Policies card never is, and the nav shows Rules.
+    expect(scroll.mock.contexts).toEqual([rows()[6]]);
+    expect(
+      within(screen.getByRole("navigation", { name: "HTTPRoute sections" })).getByRole("link", { name: /^Rules/ }),
+    ).toHaveAttribute("aria-current", "location");
+    Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+  });
+
   it("Expand all opens every rule, Collapse all closes them", async () => {
     mountLong(9);
     await loaded();
@@ -876,4 +965,49 @@ describe("a route's rule table", () => {
     expect(openRegions()).toHaveLength(0);
     expect(new URLSearchParams(screen.getByTestId("search").textContent ?? "").get("open")).toBe("none");
   });
+});
+
+it("a plain HTTPRoute that delegates nothing has no Child routes section", async () => {
+  const plain = detail(routeGolden);
+  for (const r of plain.rules) r.backendRefs = r.backendRefs.filter((b) => !b.delegation);
+  plain.childCount = 0;
+  serve(api({ mid: plain }));
+  mount(MID);
+  await loaded();
+  const nav = screen.getByRole("navigation", { name: "HTTPRoute sections" });
+  expect(within(nav).queryByRole("link", { name: /^Child routes/ })).toBeNull();
+  expect(document.getElementById("child-routes")).toBeNull();
+  expect(routeCalls()).toHaveLength(0);
+});
+
+it("a linked rule clears the sticky Sections bar as a card does", async () => {
+  vi.stubGlobal("matchMedia", (q: string) => ({
+    matches: q.includes("max-width"),
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+  serve(api());
+  mount(`${MID}?rule=2`);
+  await loaded();
+  const margin = (el: Element | null) => getComputedStyle(el as Element).scrollMarginTop;
+  const card = margin(document.getElementById("route-rules"));
+  expect(card).toContain("--detail-sections-bar");
+  expect(margin(document.getElementById("rule-2"))).toBe(card);
+});
+
+it("every section card has the stable id its nav entry links; an open rule's body is not a card", async () => {
+  serve(api());
+  mount(MID_OPEN);
+  await loaded();
+  const nav = screen.getByRole("navigation", { name: "HTTPRoute sections" });
+  const hrefs = within(nav)
+    .getAllByRole("link")
+    .map((a) => a.getAttribute("href"));
+  const cards = Array.from(document.querySelectorAll("[data-testid=detail-sections] > div > section"));
+  expect(cards.map((c) => `#${c.id}`)).toEqual(hrefs);
+  for (const c of cards) expect(c.id).toMatch(/^[a-z]+(-[a-z]+)*$/);
+  // A probe of section[id] also finds the open rule bodies: generated ids, inside the Rules card, named by their row.
+  const bodies = Array.from(document.querySelectorAll("#route-rules section[id]"));
+  expect(bodies.length).toBeGreaterThan(0);
+  for (const b of bodies) expect(document.querySelector(`[aria-controls="${b.id}"]`)).not.toBeNull();
 });
