@@ -62,8 +62,8 @@
 - README, `docs/documentation-notes.md`, upgrade notes (chart value).
 - snellius.dev `cross-repo` issue (P-006). **Gate:** the release is done only when the site update is live.
 - snellius-demo scenario for a delegated route, verified on a cluster (P-007).
-- Program file, with the user's approval: E16, M-1 view D and the explicit mirror rule 3 exception until Phase 12 (D-140, D-141). **Gate:** the exception is recorded before 9.5 ships.
-- E16 at phase close: the corpus tag in the contract table and a `cross-repo` notice to each consumer (xdsview, kgwctl).
+- Program file, with the user's approval: E17, M-1 view D and the explicit mirror rule 3 exception until Phase 12 (D-140, D-141). **Gate:** the exception is recorded before 9.5 ships.
+- E17 at phase close: the corpus tag in the contract table and a `cross-repo` notice to each consumer (xdsview, kgwctl).
 
 ## Out of the phase (tracked in phase-status)
 

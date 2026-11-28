@@ -13,8 +13,8 @@ none
 ## Program
 Program file: https://github.com/DuncanDoyle/kgateway-tooling/blob/main/program.md (last read 2026-11-28 at `4986792`).
 Waiting on: nothing for Phase 9. Phase 12 targets xdsview `v0.7.0` or later (E15; xdsview is at `v0.7.2`, kgwctl#18).
-Provides: E7 and E2 (`v0.9.0`), E14 wording (`v0.9.1`). Phase 9 proposes E16 (`kgateway-route-conformance`) and M-1 view D (D-140, D-141), committed to the program file only after design approval.
-Consumers: kgwctl (E2, E3, E7, E8); E16 consumers to be: xdsview, kgwctl.
+Provides: E7 and E2 (`v0.9.0`), E14 wording (`v0.9.1`). Phase 9 proposes E17 (`kgateway-route-conformance`) and M-1 view D (D-140, D-141), committed to the program file only after design approval.
+Consumers: kgwctl (E2, E3, E7, E8); E17 consumers to be: xdsview, kgwctl.
 Open `cross-repo` issues here: #15, #21, #63, #70, #71 (all xdsview/krp, for Phase 12). In providers: none in xdsview; kgwctl's are its own (#2, #8, #13, #18).
 Upstream at phase start: kgateway#15070 (M-4) open; #14815 open; #15067 and #15068 (U2) open.
 P-011 audit: remaining D-040 ranks listed in D-147; handling for the user to decide.

@@ -313,9 +313,9 @@ Outcomes: `match`, `no-match`, `replaced` (controller direct response), `no-list
 
 ## 10. Program and upstream
 
-- **New edge (proposed, not committed):** E16, provider `kgateway-route-conformance`, consumers Snellius Phase 9 (M-1 rule 2, view D), xdsview (route provenance tests), kgwctl (later). Proposed with the user's approval in a program commit after design approval.
+- **New edge (proposed, not committed):** E17, provider `kgateway-route-conformance`, consumers Snellius Phase 9 (M-1 rule 2, view D), xdsview (route provenance tests), kgwctl (later). Proposed with the user's approval in a program commit after design approval.
 - **Mirror register:** M-1 gains view D (§4.4), with a recorded exception to mirror rule 3 until Phase 12 (open question 4). The exception is a program change, approved by the user before 9.5 ships.
-- **Phase close (coordination protocol):** E16 needs the corpus's first tag and a `cross-repo` notice to each consumer; P-006 needs the site live before the release counts as done; P-007 a snellius-demo scenario for a delegated route.
+- **Phase close (coordination protocol):** E17 needs the corpus's first tag and a `cross-repo` notice to each consumer; P-006 needs the site live before the release counts as done; P-007 a snellius-demo scenario for a delegated route.
 - **Upstream asks:** no new ask is filed. U2 and U10 support view D's retirement (§4.4). An upstream adoption of the corpus is the user's call, after the first release of the repo.
 - **Phase-start checks (2026-11-28):** program file read at kgateway-tooling `4986792`; no edge Phase 9 needs is open. kgateway#15070 (M-4) and #14815 are still open; no change for Snellius. Open `cross-repo` issues here are all for Phase 12 (#15, #21, #63, #70, #71).
 - **P-011 audit (D-040 ranks):** the remaining rank-based IDs are listed in `phase-status.md` with a proposed handling (D-147); Phase 9 adds none.
@@ -366,5 +366,7 @@ Package and type names; the chart value name; the exact UI layout within the exi
 1. **Secure mode for application teams (§8).** Withholding predictions from viewers without the full read follows D-114, but application teams lose the tester's main feature in secure mode. Accept for Phase 9, with a per-viewer prediction designed later?
 2. **#26 and #27 out (§2).** Agree to place #26 in Phase 11 and #27 in Phase 10?
 3. **HTTPS without verification (§7.2).** Send to HTTPS listeners with certificate checks off and a "TLS not verified" label, or HTTP listeners only in Phase 9?
-4. **E16, M-1 view D and the rule 3 exception (§4.4, §10).** View D cannot be checked against controller output until Phase 12 reads the proxy's route table. Approve proposing E16, view D and an explicit exception to mirror rule 3 until Phase 12 in the program file once the design is approved?
+4. **E17, M-1 view D and the rule 3 exception (§4.4, §10).** View D cannot be checked against controller output until Phase 12 reads the proxy's route table. Approve proposing E17, view D and an explicit exception to mirror rule 3 until Phase 12 in the program file once the design is approved?
 5. **Live responses and D-085 (§8).** A hidden route can change a live test response, as it changes the viewer's own `curl`. Accept that live responses are outside D-085 point 2, because the viewer gets the same bytes through port-forward with the same permission?
+
+- 2026-11-28: The program registered E16 for kgwctl bundle mode (snellius#74, kgateway-tooling `e1d5cc6`; owner: right after Phase 9). The edge proposed here for `kgateway-route-conformance` is renumbered E17 in this design, plan, decisions and status; the Codex review file keeps its original text (E16).

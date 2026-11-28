@@ -1900,7 +1900,7 @@ Measured on the reference machine, 5 runs per world:
 
 **Decision:** Request-level cases (resources, requests, expected listener, route, rule, optional delegation chain and backend, or an outcome) live in https://github.com/DuncanDoyle/kgateway-route-conformance with a versioned schema, a Go loader and a reference runner that proves each case on kind per kgateway minor. Declared rule identity comes from the fixture: an echo backend unique to each declared forwarding rule, or a distinct response for a non-forwarding rule; `route_source` metadata (where the minor has it) is supporting evidence read through xdsview (P-001); a request two rules could explain is "unprovable" (design review #6). The repo holds no predictor. Expectation changes need a reason and runner evidence. Snellius runs the same cases against its strategies in unit tests.
 
-**Consequences:** M-1 rule 2 is met for view C (D-128 item 2) and view D. The corpus is a new program provider (edge E16, proposed). Other consumers (xdsview, kgwctl) and kgateway upstream can reuse it.
+**Consequences:** M-1 rule 2 is met for view C (D-128 item 2) and view D. The corpus is a new program provider (edge E17, proposed). Other consumers (xdsview, kgwctl) and kgateway upstream can reuse it.
 
 **Alternatives:** Cases inside Snellius: harder to reuse and to adopt upstream (user). Envoy's `router_check_tool` on translator output: a secondary check only, it skips listener selection and reconciliation (Codex, 2026-11-28). Formal methods (TLA+, Alloy, Quint): only for narrow invariants.
 
