@@ -7,7 +7,7 @@ import { useNow } from "../../api/clock";
 import { ApiErrorState } from "../../api/errorState";
 import { isStale } from "../../api/hooks";
 import type { Candidate, DetailReason, LinkedRef, Page, RouteConfigSignal, RoutePathSignal } from "../../api/types";
-import { detailCopy, listCopy } from "../../copy/explorer";
+import { detailCopy, listCopy, sectionsCopy } from "../../copy/explorer";
 import { CandidateBanner } from "../../explore/CandidateBanner";
 import { CopyCommandButton } from "../../explore/CopyCommandButton";
 import { DetailTabs } from "../../explore/DetailTabs";
@@ -19,7 +19,12 @@ import { CopyNameButton } from "../../resource/CopyNameButton";
 import { ResourceName } from "../../resource/ResourceName";
 import { ResourceYaml } from "../../resource/ResourceYaml";
 import { TrailRefsProvider, useReportTrailRefs, useTrailRefsCollector } from "../../shell/Breadcrumbs";
-import { Slot, useShownDetailTabs, useSideSectionContributions } from "../../shell/contributions";
+import {
+  type SideSectionContribution,
+  Slot,
+  useShownDetailTabs,
+  useSideSectionContributions,
+} from "../../shell/contributions";
 import { DetailColumns, layout, useTwoColumns } from "../../shell/layout";
 import { OBJECT_HEADER_H, ObjectHeader } from "../../shell/ObjectHeader";
 import { installPath } from "../../shell/paths";
@@ -29,6 +34,7 @@ import { PageNotice } from "../../states/PageNotice";
 import { PageState } from "../../states/PageState";
 import { Shimmer } from "../../states/Shimmer";
 import type { HealthState } from "../../theme/tokens";
+import { type DetailSection, DetailSections, DetailSectionsSkeleton } from "./DetailSections";
 import { useShownPage } from "./listParts";
 
 // region Styles
@@ -78,6 +84,16 @@ const Stack = styled.div`
   display: grid;
   gap: ${(p) => p.theme.space(3)};
 `;
+const Overview = styled.div`
+  display: grid;
+  gap: ${(p) => p.theme.space(4)};
+  min-width: 0;
+`;
+const Nothing = styled.p`
+  margin: 0;
+  color: ${(p) => p.theme.color.textMuted};
+  font-size: ${(p) => p.theme.font.size.md};
+`;
 
 // region Helpers
 const TABS = [
@@ -123,8 +139,10 @@ interface DetailFrameProps {
   problem?: Pick<ProblemStripProps, "condition" | "conditionsId" | "parent" | "gateway">;
   /** The page draws its own strip with id PROBLEM_ID, e.g. the backend status line; the badge still links to it. */
   ownProblem?: boolean;
-  /** The Overview tab's main column; rendered only once data has loaded. */
-  children: ReactNode;
+  /** The Overview tab's sections, nav and cards from one list; contributed sections follow in "Related" (D-148). */
+  sections?: DetailSection[];
+  /** The Overview tab's main column when there are no sections; rendered only once data has loaded. */
+  children?: ReactNode;
   /** The Overview tab's side column, e.g. conditions and related objects from 1600 px. Contributed sections follow it. */
   side?: ReactNode;
   /** The page fills the side column from 1600 px ({@link useTwoColumns}), so the skeleton holds a place for it there. */
@@ -147,6 +165,7 @@ export function DetailFrame({
   error,
   problem,
   ownProblem,
+  sections,
   children,
   side,
   sideWhenWide,
@@ -161,7 +180,7 @@ export function DetailFrame({
   const coreIds = useMemo(() => [...CORE_TAB_IDS, ...(extraTabs ?? []).map((t) => t.id)], [extraTabs]);
   const asked = params.get("tab");
   const contributed = useShownDetailTabs(installId, refValue, data, coreIds, asked);
-  const sections = useSideSectionContributions(refValue);
+  const sideSections = useSideSectionContributions(refValue);
   const tabs = useMemo(
     () => [
       ...TABS.filter((t) => yaml || t.id !== "yaml"),
@@ -205,45 +224,64 @@ export function DetailFrame({
         }
       />
     );
+  const strip =
+    data && problemShown && !ownProblem ? (
+      <ProblemStrip
+        installId={installId}
+        state={deciding?.state ?? data.health ?? "unknown"}
+        reason={stripReason}
+        signal={deciding ? signalLabel[deciding.id] : undefined}
+        incomplete={data.path?.incomplete}
+        pathReason={data.path?.reason}
+        {...problem}
+      />
+    ) : null;
+  // A contribution that throws or renders nothing keeps its card, with this line in it.
+  const nothing = <Nothing>{sectionsCopy.nothingToShow}</Nothing>;
+  const contributedSection = (s: SideSectionContribution) => (
+    <Slot key={s.id} id={`side-section:${s.id}`} resetKey={objectKey} fallback={nothing} render={() => s.render(ctx)} />
+  );
   const overview = data ? (
     extra ? (
       extra.content
     ) : own ? (
       <Slot key={own.id} id={`detail-tab:${own.id}`} resetKey={objectKey} render={() => own.render(ctx)} />
+    ) : sections ? (
+      <Overview>
+        {strip}
+        <DetailSections
+          label={sectionsCopy.nav(refValue.kind)}
+          sections={[
+            ...sections,
+            // Contributions go last in "Related", under ext- ids so none can take a core section's anchor.
+            ...sideSections.map(
+              (s): DetailSection => ({
+                id: `ext-${s.id}`,
+                group: "related",
+                title: s.title,
+                render: () => <div data-slot="side-section">{contributedSection(s)}</div>,
+              }),
+            ),
+          ]}
+        />
+      </Overview>
     ) : (
       <DetailColumns
         main={
           <>
-            {problemShown && !ownProblem ? (
-              <ProblemStrip
-                installId={installId}
-                state={deciding?.state ?? data.health ?? "unknown"}
-                reason={stripReason}
-                signal={deciding ? signalLabel[deciding.id] : undefined}
-                incomplete={data.path?.incomplete}
-                pathReason={data.path?.reason}
-                {...problem}
-              />
-            ) : null}
+            {strip}
             {children}
           </>
         }
         side={
-          side || sections.length ? (
+          side || sideSections.length ? (
             <>
               {side}
-              {sections.map((s) => (
-                <Slot
-                  key={s.id}
-                  id={`side-section:${s.id}`}
-                  resetKey={objectKey}
-                  render={() => (
-                    <Section aria-labelledby={`${sideId}-${s.id}`} data-slot="side-section">
-                      <h2 id={`${sideId}-${s.id}`}>{s.title}</h2>
-                      {s.render(ctx)}
-                    </Section>
-                  )}
-                />
+              {sideSections.map((s) => (
+                <Section key={s.id} aria-labelledby={`${sideId}-${s.id}`} data-slot="side-section">
+                  <h2 id={`${sideId}-${s.id}`}>{s.title}</h2>
+                  {contributedSection(s)}
+                </Section>
               ))}
             </>
           ) : null
@@ -254,16 +292,20 @@ export function DetailFrame({
     <ApiErrorState error={error} title={errorTitle} />
   ) : (
     <div aria-busy="true" data-testid="detail-skeleton">
-      <DetailColumns
-        main={
-          <Stack>
-            <Shimmer h={20} />
-            <Shimmer h={200} />
-          </Stack>
-        }
-        // The same split as the loaded page, so nothing moves when data arrives.
-        side={(sections.length || (wide && sideWhenWide)) && tab === "overview" ? <Shimmer h={120} /> : null}
-      />
+      {sections && tab === "overview" ? (
+        <DetailSectionsSkeleton />
+      ) : (
+        <DetailColumns
+          main={
+            <Stack>
+              <Shimmer h={20} />
+              <Shimmer h={200} />
+            </Stack>
+          }
+          // The same split as the loaded page, so nothing moves when data arrives.
+          side={(sideSections.length || (wide && sideWhenWide)) && tab === "overview" ? <Shimmer h={120} /> : null}
+        />
+      )}
     </div>
   );
   return (

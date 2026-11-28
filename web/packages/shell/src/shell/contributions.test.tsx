@@ -7,6 +7,8 @@ import listenersetsGolden from "../../../../../pkg/api/testdata/golden/listeners
 import metaGolden from "../../../../../pkg/api/testdata/golden/meta.json";
 import routesGolden from "../../../../../pkg/api/testdata/golden/routes.json";
 import type { Finding, GatewayDetail, ListenerSetList, RouteList } from "../api/types";
+import { sectionsCopy } from "../copy/explorer";
+import type { DetailSection } from "../pages/explore/DetailSections";
 import { DetailFrame } from "../pages/explore/detailParts";
 import { GatewayPage } from "../pages/explore/GatewayPage";
 import { FindingPage } from "../pages/findings/FindingPage";
@@ -271,7 +273,7 @@ function quiet() {
     warn.mock.calls.filter((c) => String(c[0]).startsWith(`snellius: hiding contribution "${id}"`)).length;
 }
 
-it("a throwing detail tab or side section leaves the Gateway page up and its slot empty", async () => {
+it("a throwing detail tab leaves its slot empty; a throwing side section keeps its card with a short line", async () => {
   const warned = quiet();
   const first = mountGateway(
     {
@@ -287,9 +289,106 @@ it("a throwing detail tab or side section leaves the Gateway page up and its slo
   first.unmount();
   mountGateway({ sideSections: { [`${GW}/Gateway`]: [{ id: "bad-side", title: "Bad side", render: boom }] } });
   await screen.findByRole("table", { name: "Listeners" });
-  expect(screen.queryByRole("region", { name: "Bad side" })).not.toBeInTheDocument();
-  expect(document.querySelector("[data-slot]")).toBeNull();
+  expect(screen.getByRole("region", { name: "Bad side" })).toHaveTextContent(sectionsCopy.nothingToShow);
   expect(warned("side-section:bad-side")).toBe(1);
+});
+
+// region Sections path
+const GW_REF = { group: GW, kind: "Gateway", namespace: "infra", name: "edge", link: "detail" } as const;
+const coreSections: DetailSection[] = [
+  { id: "gw-summary", group: "status", title: "Summary", render: () => <p>summary body</p> },
+  { id: "gw-listeners", group: "does", title: "Listeners", count: 2, render: () => <p>listeners body</p> },
+];
+
+/** A DetailFrame on the sections path; until "load" is pressed, a frame that starts unloaded shows the skeleton. */
+function Sectioned({ loaded: initial = true }: { loaded?: boolean }) {
+  const [loaded, setLoaded] = useState(initial);
+  return (
+    <>
+      <DetailFrame
+        installId={ID}
+        refValue={GW_REF}
+        noun="Gateway"
+        data={loaded ? { health: "healthy", collectedAt: now() } : undefined}
+        sections={coreSections}
+      />
+      <button type="button" onClick={() => setLoaded(true)}>
+        load
+      </button>
+    </>
+  );
+}
+
+function mountSections(contributions: Contributions, loaded = true) {
+  stubApi({ "/api/v1/meta": metaGolden.body });
+  return renderWithTheme(
+    <With contributions={contributions}>
+      <Sectioned loaded={loaded} />
+    </With>,
+    { path: GW_PATH },
+  );
+}
+
+it("contributed side sections appear in the nav under Related", async () => {
+  mountSections({
+    sideSections: {
+      [`${GW}/Gateway`]: [{ id: "notes", title: "Notes", render: (c) => <p>notes for {c.ref.name}</p> }],
+    },
+  });
+  const nav = screen.getByRole("navigation", { name: "Gateway sections" });
+  const related = within(nav).getByText("Related").parentElement as HTMLElement;
+  expect(within(related).getByRole("link", { name: "Notes" })).toHaveAttribute("href", "#ext-notes");
+  const card = screen.getByRole("region", { name: "Notes" });
+  expect(card).toHaveAttribute("id", "ext-notes");
+  expect(card).toHaveTextContent("notes for edge");
+  // After the core cards, in one column.
+  const listeners = screen.getByRole("region", { name: "Listeners" });
+  expect(listeners.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.queryByTestId("detail-side")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("detail-columns")).not.toBeInTheDocument();
+});
+
+it("a throwing contribution keeps its nav entry and card", async () => {
+  const warned = quiet();
+  mountSections({ sideSections: { [`${GW}/Gateway`]: [{ id: "bad-side", title: "Bad side", render: boom }] } });
+  const nav = screen.getByRole("navigation", { name: "Gateway sections" });
+  expect(within(nav).getByRole("link", { name: "Bad side" })).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Bad side" })).toHaveTextContent(sectionsCopy.nothingToShow);
+  expect(screen.getByRole("region", { name: "Listeners" })).toHaveTextContent("listeners body");
+  expect(screen.getByRole("region", { name: "Summary" })).toHaveTextContent("summary body");
+  expect(warned("side-section:bad-side")).toBe(1);
+});
+
+it("a contribution that renders nothing shows the same short line", async () => {
+  mountSections({ sideSections: { [`${GW}/Gateway`]: [{ id: "blank", title: "Blank", render: () => null }] } });
+  expect(screen.getByRole("region", { name: "Blank" })).toHaveTextContent(sectionsCopy.nothingToShow);
+});
+
+it("a contribution named like a core section does not collide", async () => {
+  mountSections({
+    sideSections: { [`${GW}/Gateway`]: [{ id: "gw-listeners", title: "More listeners", render: () => <p>more</p> }] },
+  });
+  expect(screen.getByRole("region", { name: "More listeners" })).toHaveAttribute("id", "ext-gw-listeners");
+  expect(screen.getByRole("region", { name: "Listeners" })).toHaveAttribute("id", "gw-listeners");
+  const nav = screen.getByRole("navigation", { name: "Gateway sections" });
+  expect(within(nav).getByRole("link", { name: "More listeners" })).toHaveAttribute("href", "#ext-gw-listeners");
+  expect(within(nav).getByRole("link", { name: "Listeners 2" })).toHaveAttribute("href", "#gw-listeners");
+});
+
+it("skeleton reserves one column", async () => {
+  const contributions: Contributions = {
+    sideSections: { [`${GW}/Gateway`]: [{ id: "notes", title: "Notes", render: () => <p>n</p> }] },
+  };
+  mountSections(contributions, false);
+  const skeleton = screen.getByTestId("detail-skeleton");
+  expect(within(skeleton).queryByTestId("detail-side")).not.toBeInTheDocument();
+  // The nav's width and a fixed number of entries are held, so the cards do not move sideways.
+  const reserved = within(skeleton).getByTestId("detail-sections-skeleton");
+  expect(within(reserved).getAllByTestId("nav-placeholder").length).toBeGreaterThan(0);
+  const columns = getComputedStyle(reserved).gridTemplateColumns;
+  expect(columns).toMatch(/^150px /);
+  await userEvent.setup().click(screen.getByRole("button", { name: "load" }));
+  expect(getComputedStyle(await screen.findByTestId("detail-sections")).gridTemplateColumns).toBe(columns);
 });
 
 it("a throwing install panel leaves the install page up and its slot empty", async () => {

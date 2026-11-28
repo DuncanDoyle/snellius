@@ -721,4 +721,8 @@ export const sectionsCopy = {
     related: "Related", // S859
   },
   sections: "Sections", // S860
+  /** The section nav's accessible name. */
+  nav: (kind: string) => `${kind} sections`, // S861
+  /** A contributed section that failed or rendered nothing. */
+  nothingToShow: "Nothing to show here.", // S862
 };

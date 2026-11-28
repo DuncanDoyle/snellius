@@ -1,3 +1,4 @@
+import { css } from "@emotion/react";
 import styled from "@emotion/styled";
 import { ChevronDown } from "lucide-react";
 import { type MouseEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -5,6 +6,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { sectionsCopy } from "../../copy/explorer";
 import { CHIP_PRESSED_ACTIVE_PCT, CHIP_PRESSED_HOVER_PCT, CHIP_PRESSED_PCT } from "../../shell/constants";
 import { useMedia } from "../../shell/useMedia";
+import { Shimmer } from "../../states/Shimmer";
 
 // region Constants
 /** The page's groups, in the order every detail page shows them (design §5). */
@@ -299,6 +301,50 @@ function SectionNav({ label, sections, current, onJump }: NavProps) {
 }
 
 // region Component
+/** Nav entries the skeleton holds while the page's data loads. */
+const SKELETON_ENTRIES = 6;
+const SkeletonEntry = styled.div`
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 ${(p) => p.theme.space(2)};
+  > * {
+    flex: 1 1 auto;
+  }
+`;
+const SkeletonCards = styled.div`
+  display: grid;
+  gap: ${(p) => p.theme.space(3)};
+  min-width: 0;
+`;
+
+/** The loading page: the nav's width (or the narrow bar) and a fixed number of entries, so cards never move sideways. */
+export function DetailSectionsSkeleton() {
+  const narrow = useMedia(`(max-width: ${NARROW_BELOW - 1}px)`);
+  return (
+    <Layout narrow={narrow} data-testid="detail-sections-skeleton">
+      {narrow ? (
+        <Bar>
+          <Shimmer h={36} stylesOverride={css({ width: 140 })} />
+        </Bar>
+      ) : (
+        <div>
+          {Array.from({ length: SKELETON_ENTRIES }, (_, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: fixed placeholders with no identity.
+            <SkeletonEntry key={i} data-testid="nav-placeholder">
+              <Shimmer h={14} />
+            </SkeletonEntry>
+          ))}
+        </div>
+      )}
+      <SkeletonCards>
+        <Shimmer h={20} />
+        <Shimmer h={200} />
+      </SkeletonCards>
+    </Layout>
+  );
+}
+
 interface DetailSectionsProps {
   sections: DetailSection[];
   /** The nav's accessible name, e.g. "HTTPRoute sections". */
