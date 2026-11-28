@@ -173,3 +173,19 @@ Order: Summary (code, severity, since; status) · Details `finding-details` (doe
 - [ ] **Step 3:** Web gates pass; `go test ./...` untouched but run once.
 - [ ] **Step 4:** UI loop: before/after screenshots and a short clip per page kind (route with delegation, Gateway, ListenerSet, policy, Backend, Finding), light and dark, narrow and wide, against the demo cluster (`kgw-25-snellius-demo`) or a local kind install. Evidence stays in `.agents-tmp/`.
 - [ ] **Step 5: Commit** "web: drop the two-column detail paths; 0.9.2 upgrade note".
+
+---
+
+## Revisions after the Codex review
+
+These override the tasks above where they differ. Source: `docs/phases/ui-0.9.2/reviews/design-codex.md`.
+
+- **Task 1, offsets (R1).** The frame that owns the scroll layout defines one `--detail-sticky-top` value: the height of whatever is sticky above the nav when it sticks (the object header and tabs scroll away today, so the value may be just `HEADER_H`). Nav `top` and card `scroll-margin-top` both use it. The Finding page sets its own value. Step 4 adds a browser check in the UI loop that a nav click lands the card's header fully visible.
+- **Task 1, navigation tests (R8).** Add: `jumps to a tall card and to the last, short card` (the last card's nav entry becomes current even if it cannot reach the top); `Back and Forward move between section hashes`. Section clicks use `history.replaceState`-free `pushState` with the hash only, keeping the query string.
+- **Task 2, contribution anchors (R2).** Contributed cards use the id `ext-<contribution id>`. Test `a contribution named like a core section does not collide`: a contribution with id `gw-listeners` gets `#ext-gw-listeners` and the core card keeps `#gw-listeners`.
+- **Task 2, contribution fallback (R3).** Add a side-section-only fallback: `Slot` gets an optional `fallback` prop used only by the side-section path, showing a short line inside the card; empty output shows the same line. The object-change retry (`resetKey`) stays. Update `contributions.test.tsx:274`, which expects a failed side section to disappear, to expect the card with the fallback line. Contributed tabs and finding actions keep `null`.
+- **Task 2, skeleton (R6).** The skeleton reserves the nav's width and a fixed number of placeholder entries, so cards do not shift sideways when the nav appears.
+- **Task 3, inventory (R4, R5, R8).** `UpChain` renders at the top of the "Reached through" card, above the serves list. `ChildRoutes` starts open and fetches with the page (design §10.8). Test `?rule= wins over a section hash`: with both `?rule=2` and `#route-policies`, the page scrolls to rule 2 (the existing rule behaviour), and the nav highlights Rules.
+- **Counts (R6).** Counts come only from totals the detail response already carries (for example `rules.length`, `parentRefs.length`, `policyRelations`, `childCount`). A section whose total exists only inside a `SubList` query shows no count badge; pages never add a second subscription for a count. `count: "loading"` is used only while the detail response itself loads.
+- **Tasks 4–6, inventory (R4).** Finding: "Suggested fix" (`finding-fix`) is its own card in "What it does", between Details and Next steps; existing anchors `#finding-fix`, `#finding-steps` keep working (test). Backend: its status line (`ownProblem`) renders above the sections, where the shared problem strip goes, not as a card.
+- **Tests that must migrate in the same task (R7).** Task 4 updates the Gateway and ListenerSet tests that require `detail-side` (`details.test.tsx:1268` and neighbours). Task 7 updates the direct `DetailFrame` fixtures that pass `children` (`contributions.test.tsx:453`), and keeps `layout.test.tsx` coverage for the exported `DetailColumns`.

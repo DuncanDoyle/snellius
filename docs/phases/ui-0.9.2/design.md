@@ -122,6 +122,10 @@ Wide screens: keeping the 1600 px right-hand column gives three columns and move
 6. **Where the §5 table and the code differ.** The table describes groups, not new content. The builder maps each section a page has today into its group, keeping the page's existing data, and reports any mapping that needed a guess. A section in the table that a page does not have is dropped, never added.
 7. **The Finding page** keeps its own frame (it has no tabs). It gets the same nav and section cards; the problem banner is not added there.
 
+8. **What "everything on the Overview" means for Ctrl+F.** No section is ever hidden or collapsed. Inside a section, row details that expand today (a rule's details in the rule table) stay expandable: opening 200 rules at once would make the page unusable. Child routes, which today start closed and load only when opened, start open and load with the page.
+9. **Contributed anchors** are namespaced as `ext-<contribution id>`, so a contribution can never take a core section's id.
+10. **Runtime is a core placement.** Core sections, such as Phase 12's route evidence, can go in "Runtime". Contributed `sideSections` always land in "Related"; a placement field for extensions is a later, separate API decision.
+
 ## 11. Verification
 
 - The UI loop records each page kind (route with delegation, Gateway, ListenerSet, policy, Backend, Finding) before and after, in light and dark themes, at a narrow and a wide window, against the demo cluster or a local kind install.
