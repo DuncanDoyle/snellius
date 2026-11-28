@@ -82,9 +82,9 @@ export function GatewayPage({ stylesOverride }: GatewayPageProps = {}) {
       if (name) q.set("listener", name);
       else q.delete("listener");
       const s = q.toString();
-      navigate({ search: s ? `?${s}` : "" });
+      navigate({ search: s ? `?${s}` : "", hash: location.hash });
     },
-    [location.search, navigate],
+    [location.search, location.hash, navigate],
   );
   // An older server rejects listener= (strict params), so it gets no selector and the URL value is ignored.
   // While /meta loads the selector keeps its place (ready false), so the route sections never move.
@@ -179,10 +179,11 @@ export function GatewayPage({ stylesOverride }: GatewayPageProps = {}) {
       {
         id: "attached-routes",
         group: "does",
-        title: attachedRoutesTitle(selected),
+        // The selection the body uses: none where the server has no listener filter.
+        title: attachedRoutesTitle(pick?.selected),
         // A listener selection lists other rows than the response's total counts.
-        count: selected ? undefined : data.routeCounts.accepted,
-        muted: !selected && data.routeCounts.accepted === 0,
+        count: pick?.selected ? undefined : data.routeCounts.accepted,
+        muted: !pick?.selected && data.routeCounts.accepted === 0,
         render: () => <AttachedRoutesBody installId={id} parent={ref} counts={data.routeCounts} pick={pick} />,
       },
       {
@@ -233,7 +234,7 @@ export function GatewayPage({ stylesOverride }: GatewayPageProps = {}) {
       });
     }
     return out;
-  }, [data, id, ns, name, ref, lsQuery, lsCols, selected, pick, dataPlane, processes]);
+  }, [data, id, ns, name, ref, lsQuery, lsCols, pick, dataPlane, processes]);
   return (
     <DetailFrame
       installId={id}

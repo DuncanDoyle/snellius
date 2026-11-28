@@ -270,3 +270,18 @@ it("a navigation to another path, with the hook still mounted, does not carry th
   await userEvent.type(screen.getByRole("textbox", { name: "q" }), "z");
   expect(screen.getByTestId("path")).toHaveTextContent(/^\/i\/b\.two\?q=z$/);
 });
+
+it("a write keeps the URL hash", async () => {
+  function Hash() {
+    return <output data-testid="hash">{useLocation().hash}</output>;
+  }
+  render(
+    <MemoryRouter initialEntries={["/?kind=Gateway#route-rules"]}>
+      <Probe />
+      <Hash />
+    </MemoryRouter>,
+  );
+  await userEvent.type(screen.getByRole("textbox", { name: "q" }), "a");
+  expect(screen.getByTestId("location")).toHaveTextContent("?kind=Gateway&q=a");
+  expect(screen.getByTestId("hash")).toHaveTextContent("#route-rules");
+});

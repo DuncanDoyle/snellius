@@ -80,6 +80,7 @@ function Where() {
   return (
     <>
       <output data-testid="location">{loc.pathname + loc.search}</output>
+      <output data-testid="hash">{loc.hash}</output>
       <button type="button" data-testid="back" onClick={() => navigate(-1)} />
     </>
   );
@@ -1002,6 +1003,23 @@ it("an older server without the listener filter gets no selector and no listener
   await within(t).findByText("cart");
   expect(screen.queryByRole("group", { name: "Routes by listener" })).toBeNull();
   for (const u of listCalls("routes")) expect(u.searchParams.has("listener")).toBe(false);
+  // The card's title and count follow the same selection as its table: none.
+  const card = screen.getByRole("region", { name: "Attached routes" });
+  expect(card).toContainElement(t);
+  const nav = screen.getByRole("navigation", { name: "Gateway sections" });
+  expect(within(nav).getByRole("link", { name: /^Attached routes\s*\d+$/ })).toHaveAttribute(
+    "href",
+    "#attached-routes",
+  );
+});
+
+it("selecting a listener keeps the section hash", async () => {
+  serve(viewA());
+  mount(`${GW_PATH}#attached-routes`);
+  await screen.findByRole("table", { name: "Attached routes" });
+  await pick("drift");
+  await waitFor(() => expect(location()).toBe(`${GW_PATH}?listener=drift`));
+  expect(screen.getByTestId("hash")).toHaveTextContent("#attached-routes");
 });
 
 it("failed-route rows show the computed explanation", async () => {
