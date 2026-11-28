@@ -141,6 +141,8 @@ interface DetailFrameProps {
   ownProblem?: boolean;
   /** The Overview tab's sections, nav and cards from one list; contributed sections follow in "Related" (D-148). */
   sections?: DetailSection[];
+  /** A section that a deeper link scrolls into itself, such as a route's ?rule=: it is current, the hash is not used. */
+  sectionFocus?: string;
   /** The Overview tab's main column when there are no sections; rendered only once data has loaded. */
   children?: ReactNode;
   /** The Overview tab's side column, e.g. conditions and related objects from 1600 px. Contributed sections follow it. */
@@ -166,6 +168,7 @@ export function DetailFrame({
   problem,
   ownProblem,
   sections,
+  sectionFocus,
   children,
   side,
   sideWhenWide,
@@ -251,6 +254,7 @@ export function DetailFrame({
         {strip}
         <DetailSections
           label={sectionsCopy.nav(refValue.kind)}
+          focus={sectionFocus}
           sections={[
             ...sections,
             // Contributions go last in "Related", under ext- ids so none can take a core section's anchor.

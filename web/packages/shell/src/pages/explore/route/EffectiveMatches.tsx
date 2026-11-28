@@ -7,7 +7,6 @@ import { ComputedBadge } from "../../../explore/ComputedBadge";
 import { DelegationNotChecked } from "../../../explore/DelegationNotChecked";
 import { LinkedName } from "../../../explore/LinkedName";
 import { HealthIcon } from "../../../health/HealthIcon";
-import { Section } from "../detailParts";
 import { Muted, OneLine } from "../listParts";
 import { MatchLine } from "./MatchLine";
 
@@ -169,20 +168,11 @@ interface EffectiveMatchesProps {
   stylesOverride?: SerializedStyles;
 }
 
-/** View C: this route's rules under each parent route's match, one card per parent edge (design §8.5). */
+/** View C: this route's rules under each parent route's match, one card per parent edge (design §8.5); a section card's body. */
 export function EffectiveMatches({ installId, edges, truncated, notChecked, stylesOverride }: EffectiveMatchesProps) {
-  if (notChecked)
-    return (
-      <Section aria-labelledby="route-effective">
-        <h2 id="route-effective">{effectiveCopy.title}</h2>
-        <DelegationNotChecked />
-      </Section>
-    );
+  if (notChecked) return <DelegationNotChecked />;
   return (
-    <Section aria-labelledby="route-effective">
-      <h2 id="route-effective">
-        {effectiveCopy.title} <span className="note">{edges.length}</span>
-      </h2>
+    <>
       <Cards stylesOverride={stylesOverride}>
         {edges.map((e) => (
           <Card
@@ -211,6 +201,6 @@ export function EffectiveMatches({ installId, edges, truncated, notChecked, styl
         ))}
       </Cards>
       {truncated ? <Muted>{effectiveCopy.moreParents}</Muted> : null}
-    </Section>
+    </>
   );
 }

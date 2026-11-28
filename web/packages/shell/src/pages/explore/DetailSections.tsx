@@ -349,10 +349,12 @@ interface DetailSectionsProps {
   sections: DetailSection[];
   /** The nav's accessible name, e.g. "HTTPRoute sections". */
   label: string;
+  /** A section that scrolls itself to a deeper target (a route's ?rule=): it becomes current and the hash is skipped. */
+  focus?: string;
 }
 
 /** A detail page's section cards with a sticky section nav, both from one list (design §6, D-148). */
-export function DetailSections({ sections, label }: DetailSectionsProps) {
+export function DetailSections({ sections, label, focus }: DetailSectionsProps) {
   const ordered = useMemo(() => inGroupOrder(sections), [sections]);
   const narrow = useMedia(`(max-width: ${NARROW_BELOW - 1}px)`);
   const { pathname, search, hash } = useLocation();
@@ -369,6 +371,8 @@ export function DetailSections({ sections, label }: DetailSectionsProps) {
   const pinned = useRef<string | undefined>(undefined);
   // The hash already scrolled to or pushed by a click, so each hash scrolls once.
   const resolved = useRef<string | undefined>(undefined);
+  // The focus already applied, so a later hash (a nav click, Back) is handled as usual.
+  const focused = useRef<string | undefined>(undefined);
   const ids = ordered.map((s) => s.id).join("\n");
 
   const jump = (id: string) => {
@@ -389,14 +393,22 @@ export function DetailSections({ sections, label }: DetailSectionsProps) {
   };
 
   // A hash from a link, Back or Forward scrolls to its section once; a section that appears later is scrolled to then.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on hash or section id changes; jump reads refs and state setters.
+  // A focus wins over the hash present when it applies: its section does the scrolling, so only the nav follows.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on hash, focus or section id changes; jump reads refs and state setters.
   useEffect(() => {
+    if (focus && focused.current !== focus && latest.current.some((s) => s.id === focus)) {
+      focused.current = focus;
+      resolved.current = hash || undefined;
+      pinned.current = focus;
+      setCurrent(focus);
+      return;
+    }
     if (!hash || resolved.current === hash) return;
     const id = decodeHash(hash);
     if (!latest.current.some((s) => s.id === id)) return;
     resolved.current = hash;
     jump(id);
-  }, [hash, ids]);
+  }, [hash, ids, focus]);
 
   // Scroll-spy: the first card in a band below the sticky offset is current; at the page end, the last card.
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-observes only when the section ids change.

@@ -69,7 +69,6 @@ test("Gateway, failed route, its parent and back up the chain", async ({ page })
   const attached = page.getByRole("table", { name: gatewayCopy.attachedRoutes });
   await (await dataRows(attached)).getByRole("link", { name: "shop/store" }).click();
   await expect(page).toHaveURL(/\/HTTPRoute\/shop\/store(\?|$)/);
-  await page.getByRole("button", { name: routeCopy.toggleChildren(false) }).click();
   const children = page.getByRole("table", { name: routeCopy.childRoutes });
   await (await dataRows(children)).getByRole("link", { name: "shop/c-host" }).click();
   await expect(page).toHaveURL(/\/HTTPRoute\/shop\/c-host(\?|$)/);
@@ -457,7 +456,6 @@ for (const width of [1280, 720]) {
     test("child routes do not move when their rows load", async ({ page }) => {
       const release = await holdLists(page);
       await page.goto(`${install}/routes/gateway.networking.k8s.io/HTTPRoute/shop/store`);
-      await page.getByRole("button", { name: routeCopy.toggleChildren(false) }).click();
       await expectStableLayout(page, release, [routeCopy.childRoutes]);
     });
 

@@ -43,7 +43,6 @@ test("Gateway, attached route, child route, then each crumb back", async ({ page
   await expect(page).toHaveURL(path(routePage("shop", "store")));
   await expect(crumbs(page)).toHaveText([/kgw-a/, "Gateway infra/edge", "HTTPRoute shop/store"]);
 
-  await page.getByRole("button", { name: routeCopy.toggleChildren(false) }).click();
   const children = page.getByRole("table", { name: routeCopy.childRoutes });
   await (await dataRows(children)).getByRole("link", { name: "shop/c-host", exact: true }).click();
   await expect(page).toHaveURL(path(routePage("shop", "c-host")));

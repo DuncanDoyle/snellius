@@ -167,24 +167,22 @@ export function PolicyRelationGroup({ installId, id, title, note, items, hideSec
 }
 
 // region Component
-interface PolicyRelationsSectionProps {
+/** The number of policy relations listed, over every group the response sends. */
+export function policyRelationsCount(r: PolicyRelations): number {
+  return r.targeting.length + (r.targetingParent?.length ?? 0) + (r.attachedHere?.length ?? 0);
+}
+
+interface PolicyRelationsBodyProps {
   installId: string;
   /** The page's object, for the parent note's noun. */
   subject: LinkedRef;
-  relations?: PolicyRelations;
-  stylesOverride?: SerializedStyles;
+  relations: PolicyRelations;
 }
 
-/**
- * The policies related to a Gateway, ListenerSet, route or backend (design §6.5): those targeting it, those naming
- * a parent it declares, and those kgateway reports attached here. Groups the response leaves out are not shown.
- */
-export function PolicyRelationsSection({ installId, subject, relations, stylesOverride }: PolicyRelationsSectionProps) {
-  // An older server sends no relations.
-  if (!relations) return null;
+/** The relation groups and the selector note, without a section or heading: a section card's body. */
+export function PolicyRelationsBody({ installId, subject, relations }: PolicyRelationsBodyProps) {
   return (
-    <Block aria-labelledby="policy-relations" data-testid="policy-relations" stylesOverride={stylesOverride}>
-      <h2 id="policy-relations">{relationsCopy.title}</h2>
+    <div data-testid="policy-relations">
       <PolicyRelationGroup
         installId={installId}
         id="targeting"
@@ -214,6 +212,29 @@ export function PolicyRelationsSection({ installId, subject, relations, stylesOv
           {relationsCopy.selectorLink(relations.selectors.namespace)}
         </NoteLink>
       </SelectorNote>
+    </div>
+  );
+}
+
+interface PolicyRelationsSectionProps {
+  installId: string;
+  /** The page's object, for the parent note's noun. */
+  subject: LinkedRef;
+  relations?: PolicyRelations;
+  stylesOverride?: SerializedStyles;
+}
+
+/**
+ * The policies related to a Gateway, ListenerSet, route or backend (design §6.5): those targeting it, those naming
+ * a parent it declares, and those kgateway reports attached here. Groups the response leaves out are not shown.
+ */
+export function PolicyRelationsSection({ installId, subject, relations, stylesOverride }: PolicyRelationsSectionProps) {
+  // An older server sends no relations.
+  if (!relations) return null;
+  return (
+    <Block aria-labelledby="policy-relations" stylesOverride={stylesOverride}>
+      <h2 id="policy-relations">{relationsCopy.title}</h2>
+      <PolicyRelationsBody installId={installId} subject={subject} relations={relations} />
     </Block>
   );
 }

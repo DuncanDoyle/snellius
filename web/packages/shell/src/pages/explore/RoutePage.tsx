@@ -1,25 +1,26 @@
 import type { SerializedStyles } from "@emotion/react";
 import styled from "@emotion/styled";
 import { useMemo } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { useRouteDetail } from "../../api/exploreHooks";
 import { useInstallFeature } from "../../api/hooks";
 import type { LinkedRef, ParentRef, RouteDetail } from "../../api/types";
-import { detailCopy, routeCopy, traceCopy } from "../../copy/explorer";
+import { detailCopy, effectiveCopy, routeCopy, traceCopy } from "../../copy/explorer";
+import { relationsCopy } from "../../copy/policies";
 import { trafficCopy } from "../../copy/traffic";
 import { DelegationNotCheckedView } from "../../explore/DelegationNotChecked";
 import { firstFailing } from "../../explore/ProblemStrip";
 import { useInstallId } from "../../shell/extension";
-import { useTwoColumns } from "../../shell/layout";
 import { installPath } from "../../shell/paths";
 import { InlineLink } from "../../states/controls";
-import { PolicyRelationsSection } from "../policies/PolicyRelationsSection";
-import { DetailFrame, Facts, refParam, Section } from "./detailParts";
+import { PolicyRelationsBody, policyRelationsCount } from "../policies/PolicyRelationsSection";
+import type { DetailSection } from "./DetailSections";
+import { DetailFrame, Facts, refParam } from "./detailParts";
 import { Muted } from "./listParts";
 import { ChildRoutes } from "./route/ChildRoutes";
 import { EffectiveMatches } from "./route/EffectiveMatches";
 import { ParentCard } from "./route/ParentCard";
-import { RuleList } from "./route/RuleList";
+import { linkedRule, RuleList } from "./route/RuleList";
 import { RuleTable } from "./route/RuleTable";
 import { isRouteRef, sameParentRef } from "./route/refs";
 import { Serves } from "./route/Serves";
@@ -81,10 +82,11 @@ function linkedRefs(d: RouteDetail): LinkedRef[] {
   return out;
 }
 
-/** One route of any kind: up-chain, parents, the route trace and, for an HTTPRoute, its child routes (design §8.5, Phase 6 §7). */
+/** One route of any kind, in the D-148 section order: where it sits, summary, rules, policies and child routes. */
 export function RoutePage({ stylesOverride }: RoutePageProps = {}) {
   const id = useInstallId();
   const { group = "", kind = "", ns = "", name = "" } = useParams();
+  const [params] = useSearchParams();
   const ref = useMemo<LinkedRef>(() => ({ group, kind, namespace: ns, name, link: "detail" }), [group, kind, ns, name]);
   const { data, error } = useRouteDetail(id, ref);
   const hasDelegation = !!data?.rules.some((r) => r.backendRefs.some((b) => b.delegation));
@@ -96,60 +98,155 @@ export function RoutePage({ stylesOverride }: RoutePageProps = {}) {
   const unlisted = useMemo(() => (data ? unlistedRefs(data) : []), [data]);
   // The parents and up-chain this page links decide the links of the same objects in the trail.
   const trailRefs = useMemo(() => (data ? linkedRefs(data) : undefined), [data]);
-  // From 1600 px the up-chain and parents sit beside the structure; below, where they always were.
-  const wide = useTwoColumns();
-  const upChain = data ? (
-    <UpChain installId={id} self={ref} paths={data.ancestors} truncated={data.ancestorsTruncated} />
-  ) : null;
-  const parentsBlock = data ? (
-    <Section aria-labelledby="route-parents">
-      <h2 id="route-parents">
-        {routeCopy.parents} <span className="note">{data.parentRefs.length + unlisted.length}</span>
-      </h2>
-      {data.parentRefs.length || unlisted.length ? (
-        <Cards>
-          {data.parentRefs.map((p, i) => (
-            <ParentCard
-              key={refKey(p)}
-              installId={id}
-              parentRef={p}
-              entries={data.parents.filter((s) => sameParentRef(s.parentRef, p))}
-              generation={data.generation}
-              hasDelegation={hasDelegation}
-              attachment={data.attachments?.find((a) => a.index === i)?.result}
-            />
-          ))}
-          {unlisted.map((p) => (
-            <ParentCard
-              key={`status/${refKey(p)}`}
-              installId={id}
-              parentRef={p}
-              entries={data.parents.filter((s) => sameParentRef(s.parentRef, p))}
-              generation={data.generation}
-              hasDelegation={hasDelegation}
-              origin={data.parentRefs.length ? "unlisted" : "implicit"}
-            />
-          ))}
-        </Cards>
-      ) : (
-        <Muted>{routeCopy.noParentRefs}</Muted>
-      )}
-    </Section>
-  ) : null;
+  // ?rule= scrolls to its rule, so the Rules section is current and a section hash is not scrolled to.
+  const ruleFocus = data && linkedRule(params, data.rules) !== undefined ? "route-rules" : undefined;
+
+  const sections = useMemo<DetailSection[] | undefined>(() => {
+    if (!data) return undefined;
+    const parentCount = data.parentRefs.length + unlisted.length;
+    const relations = data.policyRelations;
+    const out: DetailSection[] = [
+      {
+        id: "route-serves",
+        group: "where",
+        title: traceCopy.serves,
+        // No count while the viewer cannot see delegation and nothing is listed; none from an older server.
+        count: !data.serves || (notChecked && !data.serves.length) ? undefined : data.serves.length,
+        muted: !!data.serves && !data.serves.length && !notChecked,
+        render: () => (
+          <>
+            <UpChain installId={id} self={ref} paths={data.ancestors} truncated={data.ancestorsTruncated} />
+            {data.serves ? (
+              <Serves installId={id} serves={data.serves} hostnames={kind !== "TCPRoute"} notChecked={notChecked} />
+            ) : null}
+          </>
+        ),
+      },
+      {
+        id: "route-parents",
+        group: "where",
+        title: routeCopy.parents,
+        count: parentCount,
+        muted: parentCount === 0,
+        render: () =>
+          parentCount ? (
+            <Cards>
+              {data.parentRefs.map((p, i) => (
+                <ParentCard
+                  key={refKey(p)}
+                  installId={id}
+                  parentRef={p}
+                  entries={data.parents.filter((s) => sameParentRef(s.parentRef, p))}
+                  generation={data.generation}
+                  hasDelegation={hasDelegation}
+                  attachment={data.attachments?.find((a) => a.index === i)?.result}
+                />
+              ))}
+              {unlisted.map((p) => (
+                <ParentCard
+                  key={`status/${refKey(p)}`}
+                  installId={id}
+                  parentRef={p}
+                  entries={data.parents.filter((s) => sameParentRef(s.parentRef, p))}
+                  generation={data.generation}
+                  hasDelegation={hasDelegation}
+                  origin={data.parentRefs.length ? "unlisted" : "implicit"}
+                />
+              ))}
+            </Cards>
+          ) : (
+            <Muted>{routeCopy.noParentRefs}</Muted>
+          ),
+      },
+      {
+        id: "route-summary",
+        group: "status",
+        title: detailCopy.summary,
+        render: () => (
+          <Facts>
+            {/* A TCPRoute has no hostnames. */}
+            {kind === "TCPRoute" ? null : (
+              <>
+                <dt>{routeCopy.hostnames}</dt>
+                <dd>{hostnameText(data)}</dd>
+              </>
+            )}
+            {delegation ? (
+              <>
+                <dt>{routeCopy.parentRoutes}</dt>
+                <dd>{permissionText(data)}</dd>
+              </>
+            ) : null}
+            <dt>{trafficCopy.title}</dt>
+            <dd>
+              <InlineLink to={`${installPath(id, "traffic")}?${new URLSearchParams({ route: refParam(ref) })}`}>
+                {trafficCopy.routeEntry}
+              </InlineLink>
+            </dd>
+          </Facts>
+        ),
+      },
+      {
+        id: "route-rules",
+        group: "does",
+        title: routeCopy.rules,
+        count: data.rules.length,
+        muted: !data.rules.length,
+        render: () => (
+          <DelegationNotCheckedView.Provider value={withheld}>
+            {data.rules.length ? (
+              <RuleTable installId={id} kind={kind} rules={data.rules} serves={data.serves} />
+            ) : (
+              <RuleList installId={id} kind={kind} rules={data.rules} serves={data.serves} />
+            )}
+          </DelegationNotCheckedView.Provider>
+        ),
+      },
+    ];
+    if (delegation && (data.effective?.length || notChecked))
+      out.push({
+        id: "route-effective",
+        group: "does",
+        title: effectiveCopy.title,
+        count: notChecked ? undefined : (data.effective?.length ?? 0),
+        render: () => (
+          <EffectiveMatches
+            installId={id}
+            edges={data.effective ?? []}
+            truncated={data.effectiveTruncated}
+            notChecked={notChecked}
+          />
+        ),
+      });
+    // An older server sends no relations: no Policies section.
+    if (relations) {
+      const n = policyRelationsCount(relations);
+      out.push({
+        id: "policy-relations",
+        group: "actsOn",
+        title: relationsCopy.title,
+        count: n,
+        muted: n === 0,
+        render: () => <PolicyRelationsBody installId={id} subject={ref} relations={relations} />,
+      });
+    }
+    if (delegation)
+      out.push({
+        id: "child-routes",
+        group: "related",
+        title: routeCopy.childRoutes,
+        count: data.childCount,
+        muted: data.childCount === 0,
+        render: () => <ChildRoutes installId={id} route={data.ref} expected={data.childCount} />,
+      });
+    return out;
+  }, [data, unlisted, notChecked, withheld, delegation, hasDelegation, id, ref, kind]);
+
   return (
     <DetailFrame
       installId={id}
       refValue={ref}
       noun={kind}
-      side={
-        wide ? (
-          <>
-            {upChain}
-            {parentsBlock}
-          </>
-        ) : null
-      }
-      sideWhenWide
       data={data}
       error={error}
       // Conditions live per parent; only this install's controller's entries count.
@@ -160,69 +257,10 @@ export function RoutePage({ stylesOverride }: RoutePageProps = {}) {
           gateway: soleGateway(data),
         }
       }
+      sections={sections ?? []}
+      sectionFocus={ruleFocus}
       trailRefs={trailRefs}
       stylesOverride={stylesOverride}
-    >
-      {data ? (
-        <>
-          {wide ? null : upChain}
-          <Section aria-label={detailCopy.summary}>
-            <Facts>
-              {/* A TCPRoute has no hostnames. */}
-              {kind === "TCPRoute" ? null : (
-                <>
-                  <dt>{routeCopy.hostnames}</dt>
-                  <dd>{hostnameText(data)}</dd>
-                </>
-              )}
-              {delegation ? (
-                <>
-                  <dt>{routeCopy.parentRoutes}</dt>
-                  <dd>{permissionText(data)}</dd>
-                </>
-              ) : null}
-              <dt>{trafficCopy.title}</dt>
-              <dd>
-                <InlineLink to={`${installPath(id, "traffic")}?${new URLSearchParams({ route: refParam(ref) })}`}>
-                  {trafficCopy.routeEntry}
-                </InlineLink>
-              </dd>
-            </Facts>
-          </Section>
-          {wide ? null : parentsBlock}
-          <PolicyRelationsSection installId={id} subject={ref} relations={data.policyRelations} />
-          {data.serves ? (
-            <Section aria-labelledby="route-serves">
-              <h2 id="route-serves">
-                {traceCopy.serves}{" "}
-                {notChecked && !data.serves.length ? null : <span className="note">{data.serves.length}</span>}
-              </h2>
-              <Serves installId={id} serves={data.serves} hostnames={kind !== "TCPRoute"} notChecked={notChecked} />
-            </Section>
-          ) : null}
-          <Section aria-labelledby="route-rules">
-            <h2 id="route-rules">
-              {routeCopy.rules} <span className="note">{data.rules.length}</span>
-            </h2>
-            <DelegationNotCheckedView.Provider value={withheld}>
-              {data.rules.length ? (
-                <RuleTable installId={id} kind={kind} rules={data.rules} serves={data.serves} />
-              ) : (
-                <RuleList installId={id} kind={kind} rules={data.rules} serves={data.serves} />
-              )}
-            </DelegationNotCheckedView.Provider>
-          </Section>
-          {delegation && (data.effective?.length || notChecked) ? (
-            <EffectiveMatches
-              installId={id}
-              edges={data.effective ?? []}
-              truncated={data.effectiveTruncated}
-              notChecked={notChecked}
-            />
-          ) : null}
-          {delegation ? <ChildRoutes installId={id} route={data.ref} expected={data.childCount} /> : null}
-        </>
-      ) : null}
-    </DetailFrame>
+    />
   );
 }

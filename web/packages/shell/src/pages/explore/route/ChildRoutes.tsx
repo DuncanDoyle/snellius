@@ -1,18 +1,11 @@
-import styled from "@emotion/styled";
-import { useId, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useRoutes } from "../../../api/exploreHooks";
 import type { LinkedRef, RouteRow } from "../../../api/types";
 import { columnCopy, routeCopy } from "../../../copy/explorer";
 import type { ObjectColumn } from "../../../explore/ObjectTable";
 import { HealthBadge } from "../../../health/HealthBadge";
-import { TextButton } from "../../../states/controls";
-import { expectedRows, refParam, Section, SubList } from "../detailParts";
+import { expectedRows, refParam, SubList } from "../detailParts";
 import { Muted, NameCell, OneLine } from "../listParts";
-
-// region Styles
-const Toggle = styled(TextButton)`
-  margin-bottom: ${(p) => p.theme.space(2)};
-`;
 
 // region Helpers
 const NOUN = ["route", "routes"] as const;
@@ -41,46 +34,22 @@ interface ChildRoutesProps {
   expected: number;
 }
 
-/** Routes under this one, fetched only when opened so a wide delegation does not load the subtree (design §5.3). */
+/** Routes under this one, paged and loaded with the page (design §5.3, §10.8); a section card's body. */
 export function ChildRoutes({ installId, route, expected }: ChildRoutesProps) {
-  const [open, setOpen] = useState(false);
-  const bodyId = useId();
   const query = useMemo(() => ({ parent: refParam(route) }), [route]);
   const cols = useMemo(() => columns(installId), [installId]);
+  if (expected === 0) return <Muted>{routeCopy.noChildRoutes}</Muted>;
   return (
-    <Section aria-labelledby="child-routes">
-      <h2 id="child-routes">
-        {routeCopy.childRoutes} <span className="note">{expected}</span>
-      </h2>
-      {expected === 0 ? (
-        <Muted>{routeCopy.noChildRoutes}</Muted>
-      ) : (
-        <>
-          <Toggle
-            type="button"
-            aria-expanded={open}
-            aria-controls={open ? bodyId : undefined}
-            onClick={() => setOpen((o) => !o)}
-          >
-            {routeCopy.toggleChildren(open)}
-          </Toggle>
-          {open ? (
-            <div id={bodyId}>
-              <SubList
-                installId={installId}
-                label={routeCopy.childRoutes}
-                noun={NOUN}
-                useList={useRoutes}
-                query={query}
-                columns={cols}
-                rowRef={rowRef}
-                emptyTitle={routeCopy.noChildRoutes}
-                skeletonRows={expectedRows(expected)}
-              />
-            </div>
-          ) : null}
-        </>
-      )}
-    </Section>
+    <SubList
+      installId={installId}
+      label={routeCopy.childRoutes}
+      noun={NOUN}
+      useList={useRoutes}
+      query={query}
+      columns={cols}
+      rowRef={rowRef}
+      emptyTitle={routeCopy.noChildRoutes}
+      skeletonRows={expectedRows(expected)}
+    />
   );
 }
