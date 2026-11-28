@@ -1,6 +1,15 @@
 import { type Browser, expect, type Locator, type Page, test } from "@playwright/test";
 import type { FindingList } from "../packages/shell/src/api/diagTypes";
-import { gatewayCopy, listCopy, navCopy, routeCopy, routeStateCopy } from "../packages/shell/src/copy/explorer";
+import {
+  columnCopy,
+  gatewayCopy,
+  listCopy,
+  navCopy,
+  routeCopy,
+  routeStateCopy,
+  sectionsCopy,
+  viewACopy,
+} from "../packages/shell/src/copy/explorer";
 import { breadcrumbsCopy } from "../packages/shell/src/copy/navigation";
 
 // The shell's navigation over test/e2e/fixtures/explorer.yaml: the `via` trail (D-035), the object header and the
@@ -191,9 +200,13 @@ for (const p of CORE_PAGES) {
   });
 }
 
-// Layout (design §8.7, §17.6, D-035): fluid up to 2400 px and no page scroll. Core detail pages are two columns
-// from 1600 px (conditions and related objects beside the structure) and one column below.
-const WIDTHS = [720, 1280, 1600, 3008];
+// Layout (design §8.7, §17.6, D-035, D-148): fluid up to 2400 px and no page scroll. Core detail pages are one
+// column of section cards beside a section nav, or under the Sections control below 960 px.
+// 1000 and 1100 px: section cards beside the nav are narrower than the window suggests (D-148).
+const WIDTHS = [720, 1000, 1100, 1280, 1600, 3008];
+const LONG_ROUTE = "shop/a-route-with-a-deliberately-long-name-that-must-not-wrap-or-shift-the-table";
+/** ObjectTable's NAME_MIN_W: the least width of a Route column. */
+const NAME_MIN_W = 120;
 
 /** The page frame's width, the width its parent gives it, whether the page scrolls sideways, and where the
  * header's content box ends against the right edge of its controls outside the scrolling install nav. */
@@ -236,43 +249,106 @@ for (const width of WIDTHS) {
       expectFluid(await frame(page));
     });
 
-    // The resource page has no Overview columns, so only the three explorer detail pages.
+    // The resource page has no section nav, so only the three explorer detail pages.
     for (const p of CORE_PAGES.slice(0, 3)) {
-      const two = width >= 1600;
-      test(`${p.name} page is ${two ? "two columns" : "one column"} and fills the width up to 2400 px`, async ({
+      // Below 960 px the section nav folds into the "Sections" control (D-148).
+      const narrow = width < 960;
+      test(`${p.name} page has one column of sections ${narrow ? "under the Sections control" : "beside the section nav"} and fills the width up to 2400 px`, async ({
         page,
       }) => {
         await page.goto(p.url);
         await expect(page.getByTestId("detail-skeleton")).toHaveCount(0);
-        await expect(page.getByTestId("detail-columns")).toBeVisible();
-        await expect(page.getByTestId("detail-side")).toHaveCount(two ? 1 : 0);
-        const [cols, main, side] = await Promise.all([
-          page.getByTestId("detail-columns").boundingBox(),
-          page.getByTestId("detail-main").boundingBox(),
-          two ? page.getByTestId("detail-side").boundingBox() : Promise.resolve(null),
-        ]);
-        if (two) {
-          // The side sits to the right of the main column, 320-400 px wide, so short identifiers never truncate.
-          expect(side && main && side.x >= main.x + main.width, "the side is beside the main").toBe(true);
-          expect(side?.width ?? 0).toBeGreaterThanOrEqual(320);
-          expect(side?.width ?? 0).toBeLessThanOrEqual(400);
-          if (p.name === "Gateway") {
-            // Beside a side column the Listeners table keeps its short identifiers whole: name, port, protocol.
-            const cut = await page
-              .getByRole("table", { name: gatewayCopy.listeners })
-              .locator(
-                "tr[data-row] > td:is(:nth-child(3), :nth-child(4), :nth-child(5)), tr[data-row] > td:is(:nth-child(3), :nth-child(5)) *",
-              )
-              .evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent));
-            expect(cut).toEqual([]);
-          }
-        } else
+        const sections = page.getByTestId("detail-sections");
+        await expect(sections).toBeVisible();
+        // No right-hand column at any width.
+        await expect(page.getByTestId("detail-side")).toHaveCount(0);
+        const nav = sections.getByRole("navigation", { name: sectionsCopy.nav(p.name) });
+        const toggle = sections.getByRole("button", { name: sectionsCopy.sections });
+        const box = await sections.boundingBox();
+        const cards = await sections
+          .locator(":scope > div > section")
+          .evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => ({ x: r.x, width: r.width })));
+        expect(cards.length, "section cards").toBeGreaterThan(1);
+        if (!box) throw new Error("no layout box for the sections");
+        // One column: every card starts at the same x and runs to the right edge of the sections.
+        for (const c of cards) {
+          expect(Math.abs(c.x - (cards[0]?.x ?? -2)), "cards share one column").toBeLessThanOrEqual(1);
+          expect(Math.abs(c.x + c.width - (box.x + box.width)), "cards fill the row").toBeLessThanOrEqual(1);
+        }
+        if (narrow) {
+          await expect(toggle).toBeVisible();
+          await expect(nav).toHaveCount(0);
+        } else {
+          await expect(nav).toBeVisible();
+          await expect(toggle).toHaveCount(0);
+          const n = await nav.boundingBox();
+          expect(n && n.x + n.width <= (cards[0]?.x ?? 0), "the nav is left of the cards").toBe(true);
+        }
+        if (p.name === "Gateway") {
+          // The Listeners table keeps its short identifiers whole: name, port, protocol.
+          const cut = await page
+            .getByRole("table", { name: gatewayCopy.listeners })
+            .locator(
+              "tr[data-row] > td:is(:nth-child(3), :nth-child(4), :nth-child(5)), tr[data-row] > td:is(:nth-child(3), :nth-child(5)) *",
+            )
+            .evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent));
+          expect(cut).toEqual([]);
+        }
+        // Route tables keep the Route column at least NAME_MIN_W wide, with a visible link in every row.
+        // The Gateway fixture fills both tables; the other pages check the rows they have.
+        for (const name of [gatewayCopy.attachedRoutes, gatewayCopy.notAttached]) {
+          const t = page.getByRole("table", { name, exact: true });
+          if (p.name === "Gateway") await expect(t, name).toHaveCount(1);
+          else if ((await t.count()) === 0) continue;
+          const rows = await dataRows(t);
+          const heads = await t.getByRole("columnheader").allTextContents();
+          const col = heads.indexOf(columnCopy.route) + 1;
+          expect(col, `${name}: Route column`).toBeGreaterThan(0);
+          const cells = await rows.locator(`> td:nth-child(${col})`).evaluateAll((tds) =>
+            tds.map((td) => ({
+              text: td.textContent,
+              cell: td.getBoundingClientRect().width,
+              link: td.querySelector("a")?.getBoundingClientRect().width ?? 0,
+            })),
+          );
+          if (p.name === "Gateway") expect(cells.length, `${name}: rows`).toBeGreaterThan(0);
           expect(
-            Math.abs((main?.width ?? 0) - (cols?.width ?? -2)),
-            "the main column takes the whole row",
-          ).toBeLessThanOrEqual(1);
+            cells.filter((c) => c.cell < NAME_MIN_W - 1 || c.link < 1),
+            `${name}: Route cells too narrow or without a visible link`,
+          ).toEqual([]);
+        }
+        // At 1280 px and below the fixture's long route name is cut, and its full text shows on hover.
+        if (p.name === "Gateway" && width <= 1280) {
+          const long = page
+            .getByRole("table", { name: gatewayCopy.attachedRoutes, exact: true })
+            .getByRole("link", { name: LONG_ROUTE });
+          await expect(long).toBeVisible();
+          const cut = await long.evaluate((a) =>
+            [a, ...a.querySelectorAll("*")].some((e) => e.scrollWidth > e.clientWidth + 1),
+          );
+          expect(cut, "the long route name is cut").toBe(true);
+          await long.hover();
+          await expect(page.getByRole("tooltip")).toHaveText(LONG_ROUTE);
+          await page.mouse.move(0, 0);
+        }
         expectFluid(await frame(page));
       });
     }
+
+    test("Gateway page with a listener selected fills the width without page scroll", async ({ page }) => {
+      // The listener view adds the Effective hostnames column, whose header carries the Computed chip.
+      await page.goto(`${install}/gateways/infra/edge?listener=https`);
+      const t = page.getByRole("table", { name: viewACopy.routesOnListener("https"), exact: true });
+      expect(await (await dataRows(t)).count(), "https routes").toBeGreaterThan(0);
+      // The header's content box stays inside its cell (it clips the chip); the label is cut first.
+      const past = await t
+        .getByRole("columnheader", { name: new RegExp(viewACopy.effectiveHostnames) })
+        .evaluate((th) => {
+          const end = th.getBoundingClientRect().right;
+          return [...th.children].filter((e) => e.getBoundingClientRect().right > end + 1).length;
+        });
+      expect(past, "header content past its cell").toBe(0);
+      expectFluid(await frame(page));
+    });
   });
 }

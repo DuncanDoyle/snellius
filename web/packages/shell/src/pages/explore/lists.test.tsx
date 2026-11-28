@@ -794,3 +794,20 @@ describe("a row's Error or Warning explains itself in a tooltip (D-063)", () => 
     }
   });
 });
+
+it("the Routes list above 900 px keeps Kind and its sort, however narrow its frame measures", async () => {
+  // A 1024 px window leaves the list about 960 px; detail cards may move columns out there, the list does not.
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(960);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  serve((u) => (u.pathname.endsWith("/routes") ? routes() : undefined));
+  mount(`/i/${ID}/routes`);
+  await screen.findByText("rejected");
+  expect(screen.getByRole("button", { name: /^Kind/ })).toBeInTheDocument();
+  expect(within(rowOf("rejected")).queryByRole("button", { name: /Show details/ })).toBeNull();
+});

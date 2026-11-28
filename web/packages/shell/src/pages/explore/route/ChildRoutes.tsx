@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useRoutes } from "../../../api/exploreHooks";
 import type { LinkedRef, RouteRow } from "../../../api/types";
 import { columnCopy, routeCopy } from "../../../copy/explorer";
-import type { ObjectColumn } from "../../../explore/ObjectTable";
+import { NAME_MIN_W, type ObjectColumn } from "../../../explore/ObjectTable";
 import { HealthBadge } from "../../../health/HealthBadge";
 import { expectedRows, refParam, SubList } from "../detailParts";
 import { Muted, NameCell, OneLine } from "../listParts";
@@ -14,7 +14,12 @@ const rowRef = (r: RouteRow) => r.ref;
 function columns(installId: string): ObjectColumn<RouteRow>[] {
   return [
     { id: "health", header: columnCopy.status, width: "120px", cell: (r) => <HealthBadge state={r.health} /> },
-    { id: "name", header: columnCopy.route, cell: (r) => <NameCell r={r.ref} installId={installId} /> },
+    {
+      id: "name",
+      header: columnCopy.route,
+      minWidth: NAME_MIN_W,
+      cell: (r) => <NameCell r={r.ref} installId={installId} />,
+    },
     {
       id: "hostnames",
       header: columnCopy.hostnames,

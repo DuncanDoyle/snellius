@@ -408,7 +408,8 @@ async function expectStableHead(page: Page, path: string, detailApi: string) {
 }
 
 const LONG = "shop/a-route-with-a-deliberately-long-name-that-must-not-wrap-or-shift-the-table";
-for (const width of [1280, 720]) {
+// 1000 px: beside the section nav, the route tables switch to their narrow columns there (D-148).
+for (const width of [1280, 1000, 720]) {
   test.describe(`layout at ${width} px`, () => {
     test.use({ viewport: { width, height: 900 } });
 

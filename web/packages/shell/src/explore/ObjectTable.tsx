@@ -5,6 +5,7 @@ import {
   createColumnHelper,
   flexRender,
   getCoreRowModel,
+  type SortDirection,
   type SortingState,
   useReactTable,
   type VisibilityState,
@@ -16,7 +17,7 @@ import type { LinkedRef, Page } from "../api/types";
 import { isSecureMode } from "../auth/mode";
 import { listCopy } from "../copy/explorer";
 import { useLinkVia } from "../shell/trail";
-import { useMedia } from "../shell/useMedia";
+import { useMedia, useWidth } from "../shell/useMedia";
 import { QuietButton } from "../states/controls";
 import { Shimmer } from "../states/Shimmer";
 import { VisuallyHidden } from "../states/VisuallyHidden";
@@ -30,8 +31,11 @@ export const ROW_H = 44;
 /** Height of the footer that holds the denied-objects line and the pager, reserved while loading. */
 export const FOOTER_H = 44;
 const SKELETON_ROWS = 8;
-/** Below 900 px secondary columns move into an expandable row (design §8.7). */
+/** Below 900 px secondary columns move into an expandable row (design §8.7); so does a table too narrow for its names. */
 const NARROW = "(max-width: 899px)";
+/** The least width of a name column, e.g. Route; the name is cut with an ellipsis and shown in full on hover. */
+export const NAME_MIN_W = 120;
+const EXPAND_W = 40;
 
 const Frame = styled.div<{ stylesOverride?: SerializedStyles }>`
   position: relative;
@@ -90,6 +94,24 @@ const Table = styled.table`
     text-transform: none;
     letter-spacing: normal;
     font-weight: ${(p) => p.theme.font.weight.regular};
+  }
+  /* A narrow cell puts the chip under the label and cuts the label; nothing reaches past the cell. */
+  th .head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 8px;
+    padding: 4px 0;
+    overflow: clip;
+    overflow-clip-margin: 4px;
+  }
+  th .head > .label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  th .head > .extra {
+    margin-left: 0;
   }
   td {
     padding: 6px 12px;
@@ -218,7 +240,7 @@ const Footer = styled.div`
 `;
 
 // region Helpers
-/** One column; secondary columns move into the expandable row below 900 px. */
+/** One column; secondary columns move into the expandable row below 900 px or when names would not fit. */
 export interface ObjectColumn<T> {
   id: string;
   header: string;
@@ -230,6 +252,32 @@ export interface ObjectColumn<T> {
   /** The server sort key (design §7.2); absent means the column does not sort. */
   sortKey?: string;
   secondary?: boolean;
+  /** An unsized column's least width in px: below it secondary columns move out, then the column keeps this width. */
+  minWidth?: number;
+}
+
+/** Each unsized column's share of a fixed-layout table width px wide, plus extra px of other columns. */
+function autoShare<T>(cols: ObjectColumn<T>[], width: number, extra = 0): number {
+  let taken = extra;
+  let n = 0;
+  for (const c of cols) {
+    if (!c.width) n++;
+    else taken += c.width.endsWith("%") ? (Number.parseFloat(c.width) / 100) * width : Number.parseFloat(c.width);
+  }
+  return n ? (width - taken) / n : Number.POSITIVE_INFINITY;
+}
+
+/** A header's label: its sort button when it sorts, else its text, or a hidden label for the expand column. */
+function headerLabel<T>(col: ObjectColumn<T> | undefined, s: false | SortDirection, onSort: (key: string) => void) {
+  return col?.sortKey ? (
+    <button type="button" onClick={() => col.sortKey && onSort(col.sortKey)}>
+      {col.header}
+      {s === "asc" ? <ArrowUp size={12} aria-hidden="true" /> : null}
+      {s === "desc" ? <ArrowDown size={12} aria-hidden="true" /> : null}
+    </button>
+  ) : (
+    (col?.header ?? <VisuallyHidden>{listCopy.details}</VisuallyHidden>)
+  );
 }
 
 const refKey = (r: LinkedRef) => [r.group, r.kind, r.namespace ?? "", r.name].join("/");
@@ -310,7 +358,12 @@ export function ObjectTable<T>({
   const [active, setActive] = useState(0);
   const rowEls = useRef<(HTMLTableRowElement | null)[]>([]);
   const secondary = columns.filter((c) => c.secondary);
-  const collapse = narrow && secondary.length > 0;
+  const least = Math.max(0, ...columns.filter((c) => !c.width).map((c) => c.minWidth ?? 0));
+  // The room the frame gives the table decides too (a card beside the nav); measured only when a column needs it.
+  const frameEl = useRef<HTMLDivElement>(null);
+  const width = useWidth(frameEl, least > 0);
+  const tight = least > 0 && width !== undefined && autoShare(columns, width) < least;
+  const collapse = (narrow || tight) && secondary.length > 0;
   const keyOf = useCallback((r: T) => (rowKey ? rowKey(r) : refKey(rowRef(r))), [rowKey, rowRef]);
   const via = useLinkVia(installId);
   const pathOf = (r: T) => {
@@ -373,8 +426,12 @@ export function ObjectTable<T>({
     autoResetAll: false,
     getCoreRowModel: getCoreRowModel(),
   });
-  const widths: Record<string, string | undefined> = { expand: "40px" };
+  const widths: Record<string, string | undefined> = { expand: `${EXPAND_W}px` };
   for (const c of columns) widths[c.id] = c.width;
+  // Still too narrow with secondary columns out: a name column keeps its least width, the others share the rest.
+  const inRow = collapse ? columns.filter((c) => !c.secondary) : columns;
+  if (width !== undefined && autoShare(inRow, width, collapse ? EXPAND_W : 0) < least)
+    for (const c of inRow) if (!c.width && c.minWidth) widths[c.id] = `${c.minWidth}px`;
   const shown = table.getVisibleLeafColumns();
   const rows = table.getRowModel().rows;
   const open = (r: T) => {
@@ -395,7 +452,7 @@ export function ObjectTable<T>({
   };
   const focusable = Math.min(active, Math.max(0, rows.length - 1));
   return (
-    <Frame stylesOverride={stylesOverride}>
+    <Frame ref={frameEl} stylesOverride={stylesOverride}>
       {busy ? <BusyBar data-testid="table-busy" aria-hidden="true" /> : null}
       <Table aria-label={label} aria-busy={loading || busy}>
         <colgroup>
@@ -415,16 +472,16 @@ export function ObjectTable<T>({
                   className={col?.headerExtra ? "has-extra" : undefined}
                   aria-sort={s === "asc" ? "ascending" : s === "desc" ? "descending" : undefined}
                 >
-                  {col?.sortKey ? (
-                    <button type="button" onClick={() => col.sortKey && onSort(col.sortKey)}>
-                      {col.header}
-                      {s === "asc" ? <ArrowUp size={12} aria-hidden="true" /> : null}
-                      {s === "desc" ? <ArrowDown size={12} aria-hidden="true" /> : null}
-                    </button>
+                  {col?.headerExtra ? (
+                    <span className="head">
+                      <span className="label" title={col.header}>
+                        {headerLabel(col, s, onSort)}
+                      </span>
+                      <span className="extra">{col.headerExtra}</span>
+                    </span>
                   ) : (
-                    (col?.header ?? <VisuallyHidden>{listCopy.details}</VisuallyHidden>)
+                    headerLabel(col, s, onSort)
                   )}
-                  {col?.headerExtra ? <span className="extra">{col.headerExtra}</span> : null}
                 </th>
               );
             })}
